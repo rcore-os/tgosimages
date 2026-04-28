@@ -1,0 +1,41 @@
+diff --git a/os/arceos/examples/helloworld-myplat/Cargo.toml b/os/arceos/examples/helloworld-myplat/Cargo.toml
+index 6c19dadbf..d09d5caf6 100644
+--- a/os/arceos/examples/helloworld-myplat/Cargo.toml
++++ b/os/arceos/examples/helloworld-myplat/Cargo.toml
+@@ -8,6 +8,7 @@ license.workspace = true
+ publish = false
+ 
+ [features]
++ax-std = ["dep:ax-std", "dep:axplat-dyn"]
+ x86-pc = ["dep:ax-plat-x86-pc"]
+ aarch64-raspi4 = ["dep:ax-plat-aarch64-raspi"]
+ aarch64-qemu-virt = ["dep:ax-plat-aarch64-qemu-virt"]
+@@ -19,10 +20,11 @@ loongarch64-qemu-virt = ["dep:ax-plat-loongarch64-qemu-virt"]
+ [dependencies]
+ cfg-if.workspace = true
+ ax-std = { workspace = true, features = ["myplat"], optional = true }
+ 
+ [target.'cfg(target_arch = "x86_64")'.dependencies]
+ ax-plat-x86-pc = { workspace = true, features = ["smp", "irq"], optional = true }
+ 
+ [target.'cfg(target_arch = "aarch64")'.dependencies]
++axplat-dyn = { workspace = true, optional = true }
+ ax-plat-aarch64-qemu-virt = { workspace = true, features = ["smp", "irq"], optional = true }
+ ax-plat-aarch64-raspi = { workspace = true, features = ["smp", "irq"], optional = true }
+diff --git a/os/arceos/examples/helloworld-myplat/src/main.rs b/os/arceos/examples/helloworld-myplat/src/main.rs
+index eb025d869..8cee5afc8 100644
+--- a/os/arceos/examples/helloworld-myplat/src/main.rs
++++ b/os/arceos/examples/helloworld-myplat/src/main.rs
+@@ -31,8 +31,9 @@ cfg_if::cfg_if! {
+     } else if #[cfg(all(target_arch = "loongarch64", feature = "loongarch64-qemu-virt"))] {
+         extern crate ax_plat_loongarch64_qemu_virt;
+-    } else {
+-        #[cfg(target_os = "none")] // ignore in rust-analyzer & cargo test
+-        compile_error!("No platform crate linked!\n\nPlease add `extern crate <platform>` in your code.");
++    } else if #[cfg(target_arch = "aarch64")] {
++        extern crate axplat_dyn;
++    } else {
++        // Defplat builds link the platform through ax-hal.
+     }
+ }
+ 

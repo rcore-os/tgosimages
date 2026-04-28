@@ -83,8 +83,8 @@ BOOTFS_TYPE=fat
 BOOTSIZE=1024
 EOF
 
-            info "Starting compilation: ./build.sh BOARD=orangepi5plus BRANCH=current BUILD_OPT=image RELEASE=jammy BUILD_MINIMAL=no BUILD_DESKTOP=no KERNEL_CONFIGURE=no"
-            ./build.sh BOARD=orangepi5plus BRANCH=current BUILD_OPT=image RELEASE=jammy BUILD_MINIMAL=no BUILD_DESKTOP=no KERNEL_CONFIGURE=no
+            info "Starting compilation: ./build.sh BOARD=orangepi5plus BRANCH=current BUILD_OPT=image RELEASE=jammy BUILD_MINIMAL=yes BUILD_DESKTOP=no KERNEL_CONFIGURE=no"
+            ./build.sh BOARD=orangepi5plus BRANCH=current BUILD_OPT=image RELEASE=jammy BUILD_MINIMAL=yes BUILD_DESKTOP=no KERNEL_CONFIGURE=no
             
             info "Copying build artifacts: $LINUX_SRC_DIR/* -> $linux_images_dir/*"
             mkdir -p "$linux_images_dir"
@@ -112,7 +112,13 @@ EOF
             # Build U-Boot after Linux
             build_uboot
 
-            mv "$LINUX_SRC_DIR/output/images/Orangepi5plus_1.2.2_ubuntu_jammy_server_linux6.1.99/Orangepi5plus_1.2.2_ubuntu_jammy_server_linux6.1.99.img" "$PLATFORM_ROOTFS_DIR/orangepi-5-plus.img"
+            local img_path
+            img_path=$(find "$LINUX_SRC_DIR/output/images" -name "*.img" -type f | head -1)
+            if [[ -n "$img_path" ]]; then
+                mv "$img_path" "$PLATFORM_ROOTFS_DIR/orangepi-5-plus.img"
+            else
+                warn "No .img file found in $LINUX_SRC_DIR/output/images/"
+            fi
         else
             local uboot_images_dir="${PLATFORM_IMAGES_DIR}/u-boot"
             info "Cleaning: nothing to do for Orange Pi Linux, just removing ${linux_images_dir}/*"
