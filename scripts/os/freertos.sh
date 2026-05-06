@@ -9,10 +9,10 @@ BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
 source "${SCRIPT_DIR}/../lib/utils.sh"
 
 # Repository and directory configuration
-FREERTOS_REPO_URL="${FREERTOS_REPO_URL:-https://github.com/arceos-hypervisor/rtos-benchmark.git}"
-FREERTOS_REF="${FREERTOS_REF:-84e312503abb59f562623e769d3e97108bc32c28}"
+FREERTOS_REPO_URL="${FREERTOS_REPO_URL:-https://github.com/zephyrproject-rtos/rtos-benchmark.git}"
+FREERTOS_REF="${FREERTOS_REF:-3458360e7e038ca84a28c678e9bb7e967c565d87}"
 FREERTOS_KERNEL_REPO_URL="${FREERTOS_KERNEL_REPO_URL:-https://github.com/FreeRTOS/FreeRTOS-Kernel.git}"
-FREERTOS_KERNEL_REF="${FREERTOS_KERNEL_REF:-2624889925fe5be610245dd0f1bc12ecf162a1a1}"
+FREERTOS_KERNEL_REF="${FREERTOS_KERNEL_REF:-d1f551e2539ef7324013aebf22cd430a690e0d42}"
 FREERTOS_KERNEL_SRC_DIR="${BUILD_DIR}/FreeRTOS-Kernel"
 FREERTOS_PATCH_DIR="${ROOT_DIR}/patches/freertos"
 if [[ -x "/code/rtos/zephyr-sdk-0.16.5-1/aarch64-zephyr-elf/bin/aarch64-zephyr-elf-gcc" ]]; then
@@ -116,17 +116,25 @@ apply_single_patch() {
     fi
 
     # Try git apply --3way for conflicting patches
-    if [[ $applied -eq 0 ]] && [[ $can_use_git_apply -eq 1 ]] && git apply --3way "${exclude_args[@]}" "$patch_file" >>"${LOG_FILE}" 2>&1; then
-        applied=1
-        echo > "$stamp"
-        info "[APPLY] $base (git apply --3way)"
+    if [[ $applied -eq 0 ]] && [[ $can_use_git_apply -eq 1 ]]; then
+        if git apply --3way "${exclude_args[@]}" "$patch_file" >>"${LOG_FILE}" 2>&1; then
+            applied=1
+            echo > "$stamp"
+            info "[APPLY] $base (git apply --3way)"
+        else
+            # 3way merge left unmerged files; clean up before falling back
+            info "[WARN] git apply --3way left conflicts, cleaning working tree for fallback"
+            git reset HEAD 2>>"${LOG_FILE}" || true
+            git checkout -- . 2>>"${LOG_FILE}" || true
+            git clean -fd 2>>"${LOG_FILE}" || true
+        fi
     fi
 
     # Fallback to patch command
     if [[ $applied -eq 0 ]]; then
         for plevel in 1 0; do
-            if patch -p${plevel} --dry-run < "$patch_file" >/dev/null 2>&1; then
-                if patch -p${plevel} < "$patch_file" >>"${LOG_FILE}" 2>&1; then
+            if patch -p${plevel} --dry-run -f < "$patch_file" >/dev/null 2>&1; then
+                if patch -p${plevel} -f < "$patch_file" >>"${LOG_FILE}" 2>&1; then
                     applied=1
                     echo > "$stamp"
                     info "[APPLY] $base (patch -p${plevel})"
@@ -165,6 +173,7 @@ prepare_target_source() {
     if [[ -d "${FREERTOS_SRC_DIR}/.git" ]]; then
         info "Restoring source to clean state"
         pushd "${FREERTOS_SRC_DIR}" >/dev/null
+        git reset HEAD 2>>"${LOG_FILE}" || true
         git checkout -- . 2>>"${LOG_FILE}" || true
         git clean -fd 2>>"${LOG_FILE}" || true
         rm -rf .patch_stamps build-* */build

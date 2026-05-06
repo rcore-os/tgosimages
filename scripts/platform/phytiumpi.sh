@@ -11,6 +11,7 @@ source "${SCRIPT_DIR}/../lib/rootfs.sh"
 
 # Repository and directory configuration
 LINUX_REPO_URL="https://gitee.com/phytium_embedded/phytium-pi-os.git"
+LINUX_REF="2841c3d939f32c8ac1ca57e3f4d2a8c5ed6ebd63"
 LINUX_SRC_DIR="${BUILD_DIR}/phytium-pi-os"
 LINUX_PATCH_DIR="${ROOT_DIR}/patches/phytiumpi"
 PLATFORM_IMAGES_DIR="${ROOT_DIR}/IMAGES/phytiumpi"
@@ -47,6 +48,8 @@ linux() {
     if [[ "$@" != *"clean"* ]]; then
         info "Cloning Linux source repository $LINUX_REPO_URL -> $LINUX_SRC_DIR"
         clone_repository "$LINUX_REPO_URL" "$LINUX_SRC_DIR"
+        info "Checking out Linux ref ${LINUX_REF}"
+        checkout_ref "$LINUX_SRC_DIR" "$LINUX_REF"
         
         if [[ -d "$LINUX_PATCH_DIR" ]]; then
             info "Applying patches..."
@@ -73,10 +76,14 @@ linux() {
             "$LINUX_SRC_DIR/output/images/kernel.its" \
             "$LINUX_SRC_DIR/output/images/Image" \
             "$LINUX_SRC_DIR/output/images/phytiumpi_firefly.dtb" \
+            "$LINUX_SRC_DIR/output/images/sdcard.img" \
+            "$LINUX_SRC_DIR/output/images/rootfs.ext2" \
             "$linux_images_dir/"
-            mv "$linux_images_dir/phytiumpi_firefly.dtb" "$linux_images_dir/phytiumpi.dtb"
-            gzip -dc "$LINUX_SRC_DIR/output/images/Image.gz" > "$linux_images_dir/phytiumpi"
-            mv "$linux_images_dir/sdcard.img" "$PLATFORM_ROOTFS_DIR/phytiumpi.img"
+            [[ -f "$linux_images_dir/phytiumpi_firefly.dtb" ]] && mv "$linux_images_dir/phytiumpi_firefly.dtb" "$linux_images_dir/phytiumpi.dtb"
+            [[ -f "$LINUX_SRC_DIR/output/images/Image.gz" ]] && gzip -dc "$LINUX_SRC_DIR/output/images/Image.gz" > "$linux_images_dir/phytiumpi"
+            mkdir -p "$PLATFORM_ROOTFS_DIR"
+            [[ -f "$linux_images_dir/sdcard.img" ]] && cp -f "$linux_images_dir/sdcard.img" "$PLATFORM_ROOTFS_DIR/phytiumpi.img"
+            [[ -f "$linux_images_dir/rootfs.ext2" ]] && cp -f "$linux_images_dir/rootfs.ext2" "$PLATFORM_ROOTFS_DIR/phytiumpi.rootfs.ext2"
         else
             info "Cleaning: make $@"
             make $@
@@ -185,6 +192,6 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             ;;
     esac
     if [[ "$cmd" != "clean" ]]; then
-        rootfs_inject_guest_stage "$PLATFORM_ROOTFS_DIR/phytiumpi.img" "${PLATFORM_IMAGES_DIR}"
+        rootfs_inject_guest_stage "$PLATFORM_ROOTFS_DIR/phytiumpi.rootfs.ext2" "${PLATFORM_IMAGES_DIR}" || true
     fi
 fi

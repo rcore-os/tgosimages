@@ -11,6 +11,7 @@ source "${SCRIPT_DIR}/../lib/rootfs.sh"
 
 # Repository and directory configuration
 LINUX_REPO_URL="git@github.com:arceos-hypervisor/tac-e400-plc.git"
+LINUX_REF="34b97418d663621b2c5d87e3c2faaa8c48dc2756"
 LINUX_SRC_DIR="${BUILD_DIR}/tac-e400-plc"
 LINUX_PATCH_DIR="${ROOT_DIR}/patches/tac-e400-plc"
 PLATFORM_IMAGES_DIR="${ROOT_DIR}/IMAGES/tac-e400-plc"
@@ -46,6 +47,8 @@ linux() {
     if [[ "$@" != *"clean"* ]]; then
         info "Cloning Linux source repository $LINUX_REPO_URL -> $LINUX_SRC_DIR"
         clone_repository "$LINUX_REPO_URL" "$LINUX_SRC_DIR"
+        info "Checking out Linux ref ${LINUX_REF}"
+        checkout_ref "$LINUX_SRC_DIR" "$LINUX_REF"
         
         if [[ -d "$LINUX_PATCH_DIR" ]]; then
             info "Applying patches..."

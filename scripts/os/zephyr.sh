@@ -9,7 +9,7 @@ BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
 source "${SCRIPT_DIR}/../lib/utils.sh"
 
 ZEPHYR_REPO_URL="${ZEPHYR_REPO_URL:-https://github.com/zephyrproject-rtos/zephyr.git}"
-ZEPHYR_REF="${ZEPHYR_REF:-}"
+ZEPHYR_REF="${ZEPHYR_REF:-e71ff182603865f59e2e25f05655d6affda4f288}"
 ZEPHYR_SRC_DIR="${ZEPHYR_SRC_DIR:-${BUILD_DIR}/zephyr}"
 ZEPHYR_PATCH_DIR="${ZEPHYR_PATCH_DIR:-${ROOT_DIR}/patches/zephyr}"
 ZEPHYR_PYENV="${ZEPHYR_PYENV:-/tmp/zephyr-pyenv}"

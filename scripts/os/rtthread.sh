@@ -10,6 +10,7 @@ source "${SCRIPT_DIR}/../lib/utils.sh"
 
 # Default values
 RTTHREAD_REPO_URL="${RTTHREAD_REPO_URL:-https://github.com/RT-Thread/rt-thread.git}"
+RTTHREAD_REF="${RTTHREAD_REF:-ddf52e2cdd977f14fc04035c88672ac204aec713}"
 RTTHREAD_SRC_DIR="${RTTHREAD_SRC_DIR:-${BUILD_DIR}/rtthread}"
 RTTHREAD_PATCH_DIR="${RTTHREAD_PATCH_DIR:-${ROOT_DIR}/patches/rtthread}"
 
@@ -45,6 +46,7 @@ rtthread_usage() {
     printf '\n'
     printf 'Environment Variables:\n'
     printf '  RTTHREAD_REPO_URL             RT-Thread repository URL\n'
+    printf '  RTTHREAD_REF                  RT-Thread git commit/ref\n'
     printf '  RTTHREAD_SRC_DIR              RT-Thread source directory\n'
     printf '  RTTHREAD_PATCH_DIR            RT-Thread patch directory\n'
     printf '\n'
@@ -108,8 +110,8 @@ rtthread() {
         info "Cloning RT-Thread source repository $RTTHREAD_REPO_URL -> $RTTHREAD_SRC_DIR"
         clone_repository "$RTTHREAD_REPO_URL" "$RTTHREAD_SRC_DIR"
 
-        info "checkout_ref "v5.2.2""
-        checkout_ref "$RTTHREAD_SRC_DIR" "v5.2.2"
+        info "Checking out RT-Thread ref ${RTTHREAD_REF}"
+        checkout_ref "$RTTHREAD_SRC_DIR" "$RTTHREAD_REF"
 
         if [[ -d "$RTTHREAD_PATCH_DIR" ]]; then
             info "Applying patches..."

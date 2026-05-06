@@ -10,6 +10,7 @@ source "${SCRIPT_DIR}/../lib/utils.sh"
 
 # Default values
 ARCEOS_REPO_URL="${ARCEOS_REPO_URL:-https://github.com/rcore-os/tgoskits.git}"
+ARCEOS_REF="${ARCEOS_REF:-4927ff8ad4c156ef06bc9b5cc4e1ab547fe1a425}"
 ARCEOS_SRC_DIR="${ARCEOS_SRC_DIR:-${BUILD_DIR}/tgoskits}"
 ARCEOS_PATCH_DIR="${ARCEOS_PATCH_DIR:-${ROOT_DIR}/patches/arceos}"
 
@@ -73,6 +74,7 @@ arceos_usage() {
     printf '\n'
     printf 'Environment Variables:\n'
     printf '  ARCEOS_REPO_URL               tgoskits repository URL\n'
+    printf '  ARCEOS_REF                    tgoskits git commit/ref\n'
     printf '  ARCEOS_SRC_DIR                tgoskits source directory\n'
     printf '  ARCEOS_PATCH_DIR              ArceOS patch directory\n'
     printf '\n'
@@ -146,6 +148,8 @@ arceos() {
     if [[ "${ARCEOS_ARGS}" != *"clean"* ]]; then
         info "Cloning tgoskits source repository $ARCEOS_REPO_URL -> $ARCEOS_SRC_DIR"
         clone_repository "$ARCEOS_REPO_URL" "$ARCEOS_SRC_DIR"
+        info "Checking out tgoskits ref ${ARCEOS_REF}"
+        checkout_ref "$ARCEOS_SRC_DIR" "$ARCEOS_REF"
 
         if [[ -d "$ARCEOS_PATCH_DIR" ]]; then
             info "Applying patches..."

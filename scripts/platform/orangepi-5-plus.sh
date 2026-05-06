@@ -11,6 +11,7 @@ source "${SCRIPT_DIR}/../lib/rootfs.sh"
 
 # Repository and directory configuration
 LINUX_REPO_URL="https://github.com/orangepi-xunlong/orangepi-build.git"
+LINUX_REF="a616d6f7cf06fcc2e708191930f5aa9eb2193115"
 LINUX_SRC_DIR="${BUILD_DIR}/orangepi"
 LINUX_PATCH_DIR="${ROOT_DIR}/patches/orangepi"
 PLATFORM_IMAGES_DIR="${ROOT_DIR}/IMAGES/orangepi"
@@ -60,6 +61,8 @@ linux() {
     if [[ "$@" != *"clean"* ]]; then
         info "Cloning Linux source repository $LINUX_REPO_URL -> $LINUX_SRC_DIR"
         clone_repository "$LINUX_REPO_URL" "$LINUX_SRC_DIR"
+        info "Checking out Linux ref ${LINUX_REF}"
+        checkout_ref "$LINUX_SRC_DIR" "$LINUX_REF"
         
         if [[ -d "$LINUX_PATCH_DIR" ]]; then
             info "Applying patches..."

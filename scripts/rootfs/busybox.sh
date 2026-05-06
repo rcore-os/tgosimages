@@ -10,6 +10,7 @@ source "${SCRIPT_DIR}/../lib/utils.sh"
 
 # Default values
 BUSYBOX_REPO_URL="${BUSYBOX_REPO_URL:-https://github.com/mirror/busybox.git}"
+BUSYBOX_REF="${BUSYBOX_REF:-371fe9f71d445d18be28c82a2a6d82115c8af19d}"
 BUSYBOX_SRC_DIR="${BUSYBOX_SRC_DIR:-${BUILD_DIR}/busybox}"
 BUSYBOX_PATCH_DIR="${BUSYBOX_PATCH_DIR:-${ROOT_DIR}/patches/busybox}"
 MKFS_ARCHES=("aarch64" "loongarch64" "riscv64" "x86_64")
@@ -41,6 +42,7 @@ mkfs_usage() {
     printf '\n'
     printf 'Environment Variables:\n'
     printf '  BUSYBOX_REPO_URL              BusyBox repository URL\n'
+    printf '  BUSYBOX_REF                   BusyBox git commit/ref\n'
     printf '  BUSYBOX_SRC_DIR               BusyBox source directory\n'
     printf '  BUSYBOX_PATCH_DIR             BusyBox patch directory\n'
     printf '\n'
@@ -261,6 +263,8 @@ mkfs_pack_fs() {
 mkfs() {
     info "Cloning busybox source repository $BUSYBOX_REPO_URL -> $BUSYBOX_SRC_DIR"
     clone_repository "$BUSYBOX_REPO_URL" "$BUSYBOX_SRC_DIR"
+    info "Checking out busybox ref ${BUSYBOX_REF}"
+    checkout_ref "$BUSYBOX_SRC_DIR" "$BUSYBOX_REF"
 
     if [[ -d "$BUSYBOX_PATCH_DIR" ]]; then
         info "Applying patches..."

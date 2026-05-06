@@ -9,8 +9,10 @@ source "${SCRIPT_DIR}/../lib/utils.sh"
 
 # Default values
 NIMBOS_REPO_URL="${NIMBOS_REPO_URL:-https://github.com/arceos-hypervisor/nimbos.git}"
+NIMBOS_REF="${NIMBOS_REF:-8621b11dae9d90de985758358396ff3844c9c513}"
 NIMBOS_SRC_DIR="${NIMBOS_SRC_DIR:-${BUILD_DIR}/nimbos}"
 AXVM_BIOS_X86_REPO_URL="${AXVM_BIOS_X86_REPO_URL:-https://github.com/arceos-hypervisor/axvm-bios-x86.git}"
+AXVM_BIOS_X86_REF="${AXVM_BIOS_X86_REF:-667c70808be2307f99523e81491d255a1844c703}"
 AXVM_BIOS_X86_SRC_DIR="${AXVM_BIOS_X86_SRC_DIR:-${BUILD_DIR}/axvm-bios-x86}"
 
 # Global variables for parsed arguments
@@ -45,8 +47,10 @@ nimbos_usage() {
     printf '\n'
     printf 'Environment Variables:\n'
     printf '  NIMBOS_REPO_URL                   NimbOS repository URL\n'
+    printf '  NIMBOS_REF                        NimbOS git commit/ref\n'
     printf '  NIMBOS_SRC_DIR                    NimbOS source directory\n'
     printf '  AXVM_BIOS_X86_REPO_URL            AXVM BIOS repository URL\n'
+    printf '  AXVM_BIOS_X86_REF                 AXVM BIOS git commit/ref\n'
     printf '  AXVM_BIOS_X86_SRC_DIR             AXVM BIOS source directory\n'
     printf '\n'
     printf 'Examples:\n'
@@ -212,6 +216,8 @@ build_nimbos() {
 axvm_bios_x86() {
     info "Cloning axvm-bios-x86 source repository $AXVM_BIOS_X86_REPO_URL -> $AXVM_BIOS_X86_SRC_DIR"
     clone_repository "$AXVM_BIOS_X86_REPO_URL" "$AXVM_BIOS_X86_SRC_DIR"
+    info "Checking out axvm-bios-x86 ref ${AXVM_BIOS_X86_REF}"
+    checkout_ref "$AXVM_BIOS_X86_SRC_DIR" "$AXVM_BIOS_X86_REF"
 
     info "Starting to build axvm-bios-x86..."
     build_axvm_bios_x86 ${NIMBOS_ARGS}
@@ -293,6 +299,8 @@ nimbos() {
     if [[ "${NIMBOS_ARGS}" != *"clean"* ]]; then
         info "Cloning NimbOS source repository $NIMBOS_REPO_URL -> $NIMBOS_SRC_DIR"
         clone_repository "$NIMBOS_REPO_URL" "$NIMBOS_SRC_DIR"
+        info "Checking out NimbOS ref ${NIMBOS_REF}"
+        checkout_ref "$NIMBOS_SRC_DIR" "$NIMBOS_REF"
     fi
 
     info "Starting to build NimbOS system..."

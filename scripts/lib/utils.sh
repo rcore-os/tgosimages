@@ -154,10 +154,15 @@ checkout_ref() {
         return 1
     fi
     pushd "$repo_path" >/dev/null || return 1
-    # Attempt fetch to ensure tag/commit is available
+    # Attempt fetch to ensure tag/commit is available. Most repositories are
+    # cloned with --depth=1, so a pinned commit may not exist locally yet.
+    if ! git rev-parse --verify "$ref" >/dev/null 2>&1; then
+        git fetch --quiet --depth=1 origin "$ref" 2>/dev/null || true
+    fi
     git fetch --all --tags --quiet
     if git rev-parse --verify "$ref" >/dev/null 2>&1; then
-        git checkout --quiet "$ref"
+        git checkout --quiet --force "$ref"
+        git clean -fd --quiet
         echo "Switched to $ref"
         popd >/dev/null
         return 0

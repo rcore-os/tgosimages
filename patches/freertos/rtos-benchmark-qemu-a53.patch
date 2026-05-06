@@ -44,6 +44,270 @@ index f3b21967756c0856f86acaa5d4ee7cc60d131f5c..3f670e64dc2f2c0275dc7643de44f668
  
      return()
  endif()
+diff --git a/docs/freertos-benchmark-build.md b/docs/freertos-benchmark-build.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..340d3830381cf61faec8961c5c89e955925f3acb
+--- /dev/null
++++ b/docs/freertos-benchmark-build.md
+@@ -0,0 +1,258 @@
++# 编译 FreeRTOS Benchmark（AArch64 Guest）
++
++本文描述如何在 `rtos-benchmark` 中编译用于 AxVisor 的 FreeRTOS benchmark，重点覆盖当前使用的 `freertos_aarch64_guest` 路径。
++
++## 1. 目录关系
++
++本次构建涉及以下目录：
++
++- `rtos-benchmark`
++  - FreeRTOS benchmark 工程
++- `FreeRTOS-Kernel`
++  - FreeRTOS 内核
++- `tgoskits`
++  - AxVisor VM 配置和最终镜像使用方
++
++关键源码路径：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest`
++- `/code/rtos/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE`
++
++## 2. 工具链
++
++当前工程使用 Zephyr SDK 里的 AArch64 交叉工具链：
++
++- `/code/rtos/zephyr-sdk-0.16.5-1/aarch64-zephyr-elf/bin/aarch64-zephyr-elf-gcc`
++
++对应配置位于：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest/freertos_aarch64_guest.cmake`
++
++这个 `.cmake` 文件里同时定义了：
++
++- `CMAKE_C_COMPILER`
++- `CMAKE_ASM_COMPILER`
++- `CMAKE_OBJCOPY`
++- guest 链接脚本
++- guest 相关编译宏
++
++## 3. 当前 guest 构建路径
++
++`rtos-benchmark` 顶层支持多个 RTOS/平台组合。当前 AxVisor 在 `phytiumpi` 上用的是：
++
++- `RTOS=freertos_aarch64_guest`
++
++相关入口在：
++
++- `/code/rtos/rtos-benchmark/CMakeLists.txt`
++
++它会自动包含：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest/freertos_aarch64_guest.cmake`
++
++## 4. 编译命令
++
++推荐在独立构建目录中编译：
++
++```bash
++cd /code/rtos
++
++cmake -S /code/rtos/rtos-benchmark \
++  -B /tmp/rtos-bench-phytium \
++  -DRTOS=freertos_aarch64_guest
++
++cmake --build /tmp/rtos-bench-phytium -j4
++```
++
++如果只想编译一个特定 benchmark，也可以额外指定 `TEST`，例如：
++
++```bash
++cmake -S /code/rtos/rtos-benchmark \
++  -B /tmp/rtos-bench-phytium-thread \
++  -DRTOS=freertos_aarch64_guest \
++  -DTEST=thread
++
++cmake --build /tmp/rtos-bench-phytium-thread -j4
++```
++
++## 5. 构建产物
++
++默认会生成：
++
++- ELF：
++  - `/tmp/rtos-bench-phytium/app`
++- BIN：
++  - `/tmp/rtos-bench-phytium/freertos-aarch64-guest.bin`
++
++在当前工作流里，通常还会把产物复制到：
++
++- `/code/rtos/tgoskits/tmp/phytiumpi_freertos_benchmark.bin`
++- `/code/rtos/tgoskits/tmp/phytiumpi_freertos_benchmark.elf`
++
++这样 AxVisor 的 VM 配置就可以直接引用。
++
++## 6. 关键配置文件说明
++
++### 6.1 guest 构建规则
++
++文件：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest/freertos_aarch64_guest.cmake`
++
++作用：
++
++- 指定交叉工具链
++- 指定 guest 链接脚本
++- 选择 FreeRTOS 内核和 AArch64 port
++- 生成最终 `.bin`
++
++### 6.2 guest 链接脚本
++
++文件：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest/linker.ld`
++
++作用：
++
++- 把 guest RAM 基址固定到 AxVisor 暴露给 `phytiumpi` guest 的窗口
++- 确保 `.vectors`、`.text`、`.data`、`.bss`、boot stack 的布局满足当前 guest 启动方式
++
++### 6.3 guest 平台实现
++
++文件：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest/platform.c`
++
++作用：
++
++- UART 输出
++- DTB 解析
++- GIC/timer 初始化
++- benchmark 打印输出实现
++
++### 6.4 FreeRTOS guest port 适配层
++
++文件：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest/bench_porting_layer_freertos.c`
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest/bench_porting_layer_freertos.h`
++
++作用：
++
++- 把 benchmark 公共 API 映射到 FreeRTOS
++- 定义当前 FreeRTOS guest 支持哪些 benchmark 语义
++
++例如当前已经恢复为：
++
++- `RTOS_HAS_THREAD_CREATE_START = 0`
++- `RTOS_HAS_MESSAGE_QUEUE = 0`
++
++这意味着某些项目会自然显示为 `n/a`，这是符合当前 FreeRTOS guest 原始语义的。
++
++### 6.5 FreeRTOS AArch64 port
++
++文件：
++
++- `/code/rtos/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE/port.c`
++- `/code/rtos/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE/portASM.S`
++
++作用：
++
++- scheduler 启动
++- 临界区
++- 上下文切换
++- IRQ 入口
++
++这部分对 `phytiumpi` guest 非常关键，因为 `qemu` 能跑不代表板子路径就完全等价。
++
++## 7. 当前产物为什么能在 phytiumpi 上工作
++
++这条路径之所以最终能工作，核心点有这些：
++
++1. guest 镜像布局对齐 AxVisor 的 guest RAM
++2. guest UART 输出不再依赖容易卡住的阻塞式状态轮询
++3. guest 打印不再依赖 `vsnprintf`
++4. FreeRTOS `ARM_AARCH64_SRE` port 在 guest 模式下绕开了不稳定的 `ICC_PMR_EL1` 路径
++5. benchmark 结果采用“全部测试结束后统一打印”的方式，减少运行期串口干扰
++
++## 8. 与 qemu 版本的区别
++
++`qemu` 路径使用的是：
++
++- `RTOS=freertos_aarch64_qemu`
++
++对应文件：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_qemu/freertos_aarch64_qemu.cmake`
++
++主要差异在于：
++
++- UART 基址不同
++- GICR 基址不同
++- UART 时钟不同
++- `qemu` 上 system register / vGIC 行为更接近标准虚拟平台
++
++因此 `qemu` 能跑不代表 `phytiumpi` guest 不需要额外适配。
++
++## 9. 编译后如何给 AxVisor 使用
++
++如果你只关心构建产物给 AxVisor 用，通常流程是：
++
++1. 在 `rtos-benchmark` 编译 guest：
++
++```bash
++cmake -S /code/rtos/rtos-benchmark \
++  -B /tmp/rtos-bench-phytium \
++  -DRTOS=freertos_aarch64_guest
++
++cmake --build /tmp/rtos-bench-phytium -j4
++```
++
++2. 复制产物到 `tgoskits/tmp`：
++
++```bash
++cp /tmp/rtos-bench-phytium/freertos-aarch64-guest.bin \
++  /code/rtos/tgoskits/tmp/phytiumpi_freertos_benchmark.bin
++
++cp /tmp/rtos-bench-phytium/app \
++  /code/rtos/tgoskits/tmp/phytiumpi_freertos_benchmark.elf
++```
++
++3. 让 AxVisor VM 配置引用该镜像：
++
++- `/code/rtos/tgoskits/os/axvisor/configs/vms/freertos-benchmark-aarch64-e2000-smp1.toml`
++
++## 10. 输出格式说明
++
++当前版本的 benchmark 输出策略是：
++
++- 所有测试先执行完
++- 统计结果先缓存在内存中
++- 最后统一打印
++
++这样做的目的：
++
++- 减少测试执行过程中串口输出对时序的干扰
++- 避免边测边打印导致的混行和字段残缺
++
++输出样式仍保持为原来的可读表格格式，而不是 CSV。
++
++## 11. 常见检查点
++
++如果编出来的镜像在板上跑不起来，优先检查：
++
++1. `RTOS` 是否为 `freertos_aarch64_guest`
++2. `phytiumpi_freertos_benchmark.bin` 是否已更新
++3. AxVisor VM 配置是否引用了正确的镜像路径
++4. 板级运行配置里的串口和 DTB 路径是否正确
++5. 是否误用了旧构建目录里的产物
++
++## 12. 推荐搭配文档
++
++AxVisor 侧的快速运行文档：
++
++- `/code/rtos/tgoskits/os/axvisor/doc/freertos-phytiumpi-quickstart.md`
++
++排障记录：
++
++- `/code/rtos/tgoskits/docs/freertos-phytiumpi-debug-session.md`
 diff --git a/h/bench_api.h b/h/bench_api.h
 index 4bd770e5f40f3da894f19e589e923e66c6766728..d334e57e1f837934486a43fcd6383822c3611c42 100644
 --- a/h/bench_api.h
@@ -772,17 +1036,45 @@ index 0000000000000000000000000000000000000000..d44f12e18badeb98b64404791c5a71b9
 +#endif
 diff --git a/src/freertos_aarch64_guest/boot.S b/src/freertos_aarch64_guest/boot.S
 new file mode 100644
-index 0000000000000000000000000000000000000000..b5eb287a47bad4877484987c42653e5209bc284b
+index 0000000000000000000000000000000000000000..a24e82594ef89b2863831601c9080020afdcfd43
 --- /dev/null
 +++ b/src/freertos_aarch64_guest/boot.S
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,62 @@
 +    .section .text.boot, "ax"
 +    .globl _boot
 +    .type _boot, %function
 +
++    .type freertos_enter_el1, %function
++
++freertos_enter_el1:
++    mrs x1, CurrentEL
++    cmp x1, #0x8
++    b.ne 1f
++
++    mrs x1, hcr_el2
++    orr x1, x1, #(1 << 31)
++    msr hcr_el2, x1
++    isb
++
++    ldr x0, =__boot_stack_top
++    msr sp_el1, x0
++
++    mov x0, #0x3c5
++    msr spsr_el2, x0
++    adr x0, 2f
++    msr elr_el2, x0
++    eret
++
++2:
++    ret
++
++1:
++    ret
++
 +_boot:
 +    ldr x20, =0x2800d000
 +    mov x19, x0
++    bl freertos_enter_el1
 +    strb w21, [x20]
 +    ldr x0, =_vector_table
 +    msr VBAR_EL1, x0
@@ -812,10 +1104,10 @@ index 0000000000000000000000000000000000000000..b5eb287a47bad4877484987c42653e52
 +    b 3b
 diff --git a/src/freertos_aarch64_guest/fdt.c b/src/freertos_aarch64_guest/fdt.c
 new file mode 100644
-index 0000000000000000000000000000000000000000..446151fa842164a8e1f6d39e8759c562cb60090c
+index 0000000000000000000000000000000000000000..394ff8afaac4ee3442e9f91d265ba6ed6f2d3218
 --- /dev/null
 +++ b/src/freertos_aarch64_guest/fdt.c
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,247 @@
 +#include "fdt.h"
 +
 +#include <stddef.h>
@@ -843,6 +1135,30 @@ index 0000000000000000000000000000000000000000..446151fa842164a8e1f6d39e8759c562
 +};
 +
 +static const void *boot_fdt_ptr;
++
++static bool fdt_pointer_looks_valid(const void *fdt)
++{
++	uintptr_t addr = (uintptr_t)fdt;
++
++	if (addr == 0U) {
++		return false;
++	}
++
++	/*
++	 * U-Boot `go` passes argc in x0 on AArch64 instead of a DTB pointer.
++	 * Reject tiny/alignment-broken values here so we don't fault trying to
++	 * read a header from addresses like 0x1.
++	 */
++	if (addr < 0x10000U) {
++		return false;
++	}
++
++	if ((addr & 0x3U) != 0U) {
++		return false;
++	}
++
++	return true;
++}
 +
 +static uint32_t fdt32_to_cpu(uint32_t value)
 +{
@@ -902,7 +1218,7 @@ index 0000000000000000000000000000000000000000..446151fa842164a8e1f6d39e8759c562
 +	bool in_aliases = false;
 +	bool in_chosen = false;
 +
-+	if (hdr == NULL) {
++	if (!fdt_pointer_looks_valid(hdr)) {
 +		return false;
 +	}
 +

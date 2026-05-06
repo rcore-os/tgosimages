@@ -1,103 +1,5 @@
-diff --git a/freertos/src/freertos_aarch64_guest/bench_porting_layer_freertos.c b/freertos/src/freertos_aarch64_guest/bench_porting_layer_freertos.c
-index ede3124..9870922 100644
---- a/freertos/src/freertos_aarch64_guest/bench_porting_layer_freertos.c
-+++ b/freertos/src/freertos_aarch64_guest/bench_porting_layer_freertos.c
-@@ -57,7 +57,6 @@ void bench_test_init(void (*test_init_function)(void *))
- 	}
- 
- 	vTaskStartScheduler();
--	PRINTF("[freertos] bench_test_init: scheduler returned unexpectedly\r\n");
- 
- 	for (;;) {
- 	}
-diff --git a/freertos/src/freertos_aarch64_guest/boot.S b/freertos/src/freertos_aarch64_guest/boot.S
-index b5eb287..a24e825 100644
---- a/freertos/src/freertos_aarch64_guest/boot.S
-+++ b/freertos/src/freertos_aarch64_guest/boot.S
-@@ -2,9 +2,37 @@
-     .globl _boot
-     .type _boot, %function
- 
-+    .type freertos_enter_el1, %function
-+
-+freertos_enter_el1:
-+    mrs x1, CurrentEL
-+    cmp x1, #0x8
-+    b.ne 1f
-+
-+    mrs x1, hcr_el2
-+    orr x1, x1, #(1 << 31)
-+    msr hcr_el2, x1
-+    isb
-+
-+    ldr x0, =__boot_stack_top
-+    msr sp_el1, x0
-+
-+    mov x0, #0x3c5
-+    msr spsr_el2, x0
-+    adr x0, 2f
-+    msr elr_el2, x0
-+    eret
-+
-+2:
-+    ret
-+
-+1:
-+    ret
-+
- _boot:
-     ldr x20, =0x2800d000
-     mov x19, x0
-+    bl freertos_enter_el1
-     strb w21, [x20]
-     ldr x0, =_vector_table
-     msr VBAR_EL1, x0
-diff --git a/freertos/src/freertos_aarch64_guest/fdt.c b/freertos/src/freertos_aarch64_guest/fdt.c
-index 446151f..394ff8a 100644
---- a/freertos/src/freertos_aarch64_guest/fdt.c
-+++ b/freertos/src/freertos_aarch64_guest/fdt.c
-@@ -26,6 +26,30 @@ struct fdt_header {
- 
- static const void *boot_fdt_ptr;
- 
-+static bool fdt_pointer_looks_valid(const void *fdt)
-+{
-+	uintptr_t addr = (uintptr_t)fdt;
-+
-+	if (addr == 0U) {
-+		return false;
-+	}
-+
-+	/*
-+	 * U-Boot `go` passes argc in x0 on AArch64 instead of a DTB pointer.
-+	 * Reject tiny/alignment-broken values here so we don't fault trying to
-+	 * read a header from addresses like 0x1.
-+	 */
-+	if (addr < 0x10000U) {
-+		return false;
-+	}
-+
-+	if ((addr & 0x3U) != 0U) {
-+		return false;
-+	}
-+
-+	return true;
-+}
-+
- static uint32_t fdt32_to_cpu(uint32_t value)
- {
- 	return __builtin_bswap32(value);
-@@ -84,7 +108,7 @@ bool freertos_fdt_probe(struct fdt_resource_info *info)
- 	bool in_aliases = false;
- 	bool in_chosen = false;
- 
--	if (hdr == NULL) {
-+	if (!fdt_pointer_looks_valid(hdr)) {
- 		return false;
- 	}
- 
 diff --git a/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE/port.c b/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE/port.c
-index ab9290d43..950612403 100644
+index ab9290d4327057450e773e169de4d670ee1613f5..950612403b12d113d3073487af6c892c15bf6b37 100644
 --- a/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE/port.c
 +++ b/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE/port.c
 @@ -174,6 +174,10 @@ uint64_t ullPortYieldRequired = pdFALSE;
@@ -192,3 +94,2359 @@ index ab9290d43..950612403 100644
  
      return ulReturn;
  }
+diff --git a/freertos/CMakeLists.txt b/freertos/CMakeLists.txt
+index f3b21967756c0856f86acaa5d4ee7cc60d131f5c..3f670e64dc2f2c0275dc7643de44f668956a580c 100644
+--- a/freertos/CMakeLists.txt
++++ b/freertos/CMakeLists.txt
+@@ -12,7 +12,9 @@ set(AVAILABLE_TESTS
+ 
+ set(AVAILABLE_RTOSES
+     zephyr
+-    freertos)
++    freertos
++    freertos_aarch64_guest
++    freertos_aarch64_qemu)
+ 
+ set(ITERATIONS 10000 CACHE STRING "Number of iterations for each test")
+ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DITERATIONS=${ITERATIONS}")
+@@ -35,11 +37,28 @@ project(bench)
+ 
+ list(LENGTH TEST tests_to_run)
+ if (${tests_to_run} EQUAL 0)
+-    list(TRANSFORM AVAILABLE_TESTS REPLACE "(.+)" "src/common/bench_\\1_test.c" OUTPUT_VARIABLE sources)
++    if(RTOS STREQUAL "freertos_aarch64_guest" OR RTOS STREQUAL "freertos_aarch64_qemu")
++        set(sources
++            src/common/bench_thread_test.c
++            src/common/bench_mutex_lock_unlock_test.c
++            src/common/bench_sem_context_switch_test.c
++            src/common/bench_sem_signal_release_test.c
++            src/common/bench_thread_switch_yield_test.c
++            src/common/bench_malloc_free_test.c
++            src/common/bench_message_queue_test.c
++        )
++    else()
++        list(TRANSFORM AVAILABLE_TESTS REPLACE "(.+)" "src/common/bench_\\1_test.c" OUTPUT_VARIABLE sources)
++    endif()
+ 
+     target_sources(app PRIVATE ${sources})
+     target_sources(app PRIVATE src/common/bench_utils.c)
+-    target_sources(app PRIVATE src/common/bench_all.c)
++
++    if(RTOS STREQUAL "freertos_aarch64_guest" OR RTOS STREQUAL "freertos_aarch64_qemu")
++        target_sources(app PRIVATE src/freertos_aarch64_guest/bench_all_basic.c)
++    else()
++        target_sources(app PRIVATE src/common/bench_all.c)
++    endif()
+ 
+     return()
+ endif()
+diff --git a/freertos/docs/freertos-benchmark-build.md b/freertos/docs/freertos-benchmark-build.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..340d3830381cf61faec8961c5c89e955925f3acb
+--- /dev/null
++++ b/freertos/docs/freertos-benchmark-build.md
+@@ -0,0 +1,258 @@
++# 编译 FreeRTOS Benchmark（AArch64 Guest）
++
++本文描述如何在 `rtos-benchmark` 中编译用于 AxVisor 的 FreeRTOS benchmark，重点覆盖当前使用的 `freertos_aarch64_guest` 路径。
++
++## 1. 目录关系
++
++本次构建涉及以下目录：
++
++- `rtos-benchmark`
++  - FreeRTOS benchmark 工程
++- `FreeRTOS-Kernel`
++  - FreeRTOS 内核
++- `tgoskits`
++  - AxVisor VM 配置和最终镜像使用方
++
++关键源码路径：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest`
++- `/code/rtos/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE`
++
++## 2. 工具链
++
++当前工程使用 Zephyr SDK 里的 AArch64 交叉工具链：
++
++- `/code/rtos/zephyr-sdk-0.16.5-1/aarch64-zephyr-elf/bin/aarch64-zephyr-elf-gcc`
++
++对应配置位于：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest/freertos_aarch64_guest.cmake`
++
++这个 `.cmake` 文件里同时定义了：
++
++- `CMAKE_C_COMPILER`
++- `CMAKE_ASM_COMPILER`
++- `CMAKE_OBJCOPY`
++- guest 链接脚本
++- guest 相关编译宏
++
++## 3. 当前 guest 构建路径
++
++`rtos-benchmark` 顶层支持多个 RTOS/平台组合。当前 AxVisor 在 `phytiumpi` 上用的是：
++
++- `RTOS=freertos_aarch64_guest`
++
++相关入口在：
++
++- `/code/rtos/rtos-benchmark/CMakeLists.txt`
++
++它会自动包含：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest/freertos_aarch64_guest.cmake`
++
++## 4. 编译命令
++
++推荐在独立构建目录中编译：
++
++```bash
++cd /code/rtos
++
++cmake -S /code/rtos/rtos-benchmark \
++  -B /tmp/rtos-bench-phytium \
++  -DRTOS=freertos_aarch64_guest
++
++cmake --build /tmp/rtos-bench-phytium -j4
++```
++
++如果只想编译一个特定 benchmark，也可以额外指定 `TEST`，例如：
++
++```bash
++cmake -S /code/rtos/rtos-benchmark \
++  -B /tmp/rtos-bench-phytium-thread \
++  -DRTOS=freertos_aarch64_guest \
++  -DTEST=thread
++
++cmake --build /tmp/rtos-bench-phytium-thread -j4
++```
++
++## 5. 构建产物
++
++默认会生成：
++
++- ELF：
++  - `/tmp/rtos-bench-phytium/app`
++- BIN：
++  - `/tmp/rtos-bench-phytium/freertos-aarch64-guest.bin`
++
++在当前工作流里，通常还会把产物复制到：
++
++- `/code/rtos/tgoskits/tmp/phytiumpi_freertos_benchmark.bin`
++- `/code/rtos/tgoskits/tmp/phytiumpi_freertos_benchmark.elf`
++
++这样 AxVisor 的 VM 配置就可以直接引用。
++
++## 6. 关键配置文件说明
++
++### 6.1 guest 构建规则
++
++文件：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest/freertos_aarch64_guest.cmake`
++
++作用：
++
++- 指定交叉工具链
++- 指定 guest 链接脚本
++- 选择 FreeRTOS 内核和 AArch64 port
++- 生成最终 `.bin`
++
++### 6.2 guest 链接脚本
++
++文件：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest/linker.ld`
++
++作用：
++
++- 把 guest RAM 基址固定到 AxVisor 暴露给 `phytiumpi` guest 的窗口
++- 确保 `.vectors`、`.text`、`.data`、`.bss`、boot stack 的布局满足当前 guest 启动方式
++
++### 6.3 guest 平台实现
++
++文件：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest/platform.c`
++
++作用：
++
++- UART 输出
++- DTB 解析
++- GIC/timer 初始化
++- benchmark 打印输出实现
++
++### 6.4 FreeRTOS guest port 适配层
++
++文件：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest/bench_porting_layer_freertos.c`
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_guest/bench_porting_layer_freertos.h`
++
++作用：
++
++- 把 benchmark 公共 API 映射到 FreeRTOS
++- 定义当前 FreeRTOS guest 支持哪些 benchmark 语义
++
++例如当前已经恢复为：
++
++- `RTOS_HAS_THREAD_CREATE_START = 0`
++- `RTOS_HAS_MESSAGE_QUEUE = 0`
++
++这意味着某些项目会自然显示为 `n/a`，这是符合当前 FreeRTOS guest 原始语义的。
++
++### 6.5 FreeRTOS AArch64 port
++
++文件：
++
++- `/code/rtos/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE/port.c`
++- `/code/rtos/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE/portASM.S`
++
++作用：
++
++- scheduler 启动
++- 临界区
++- 上下文切换
++- IRQ 入口
++
++这部分对 `phytiumpi` guest 非常关键，因为 `qemu` 能跑不代表板子路径就完全等价。
++
++## 7. 当前产物为什么能在 phytiumpi 上工作
++
++这条路径之所以最终能工作，核心点有这些：
++
++1. guest 镜像布局对齐 AxVisor 的 guest RAM
++2. guest UART 输出不再依赖容易卡住的阻塞式状态轮询
++3. guest 打印不再依赖 `vsnprintf`
++4. FreeRTOS `ARM_AARCH64_SRE` port 在 guest 模式下绕开了不稳定的 `ICC_PMR_EL1` 路径
++5. benchmark 结果采用“全部测试结束后统一打印”的方式，减少运行期串口干扰
++
++## 8. 与 qemu 版本的区别
++
++`qemu` 路径使用的是：
++
++- `RTOS=freertos_aarch64_qemu`
++
++对应文件：
++
++- `/code/rtos/rtos-benchmark/src/freertos_aarch64_qemu/freertos_aarch64_qemu.cmake`
++
++主要差异在于：
++
++- UART 基址不同
++- GICR 基址不同
++- UART 时钟不同
++- `qemu` 上 system register / vGIC 行为更接近标准虚拟平台
++
++因此 `qemu` 能跑不代表 `phytiumpi` guest 不需要额外适配。
++
++## 9. 编译后如何给 AxVisor 使用
++
++如果你只关心构建产物给 AxVisor 用，通常流程是：
++
++1. 在 `rtos-benchmark` 编译 guest：
++
++```bash
++cmake -S /code/rtos/rtos-benchmark \
++  -B /tmp/rtos-bench-phytium \
++  -DRTOS=freertos_aarch64_guest
++
++cmake --build /tmp/rtos-bench-phytium -j4
++```
++
++2. 复制产物到 `tgoskits/tmp`：
++
++```bash
++cp /tmp/rtos-bench-phytium/freertos-aarch64-guest.bin \
++  /code/rtos/tgoskits/tmp/phytiumpi_freertos_benchmark.bin
++
++cp /tmp/rtos-bench-phytium/app \
++  /code/rtos/tgoskits/tmp/phytiumpi_freertos_benchmark.elf
++```
++
++3. 让 AxVisor VM 配置引用该镜像：
++
++- `/code/rtos/tgoskits/os/axvisor/configs/vms/freertos-benchmark-aarch64-e2000-smp1.toml`
++
++## 10. 输出格式说明
++
++当前版本的 benchmark 输出策略是：
++
++- 所有测试先执行完
++- 统计结果先缓存在内存中
++- 最后统一打印
++
++这样做的目的：
++
++- 减少测试执行过程中串口输出对时序的干扰
++- 避免边测边打印导致的混行和字段残缺
++
++输出样式仍保持为原来的可读表格格式，而不是 CSV。
++
++## 11. 常见检查点
++
++如果编出来的镜像在板上跑不起来，优先检查：
++
++1. `RTOS` 是否为 `freertos_aarch64_guest`
++2. `phytiumpi_freertos_benchmark.bin` 是否已更新
++3. AxVisor VM 配置是否引用了正确的镜像路径
++4. 板级运行配置里的串口和 DTB 路径是否正确
++5. 是否误用了旧构建目录里的产物
++
++## 12. 推荐搭配文档
++
++AxVisor 侧的快速运行文档：
++
++- `/code/rtos/tgoskits/os/axvisor/doc/freertos-phytiumpi-quickstart.md`
++
++排障记录：
++
++- `/code/rtos/tgoskits/docs/freertos-phytiumpi-debug-session.md`
+diff --git a/freertos/h/bench_api.h b/freertos/h/bench_api.h
+index 4bd770e5f40f3da894f19e589e923e66c6766728..d334e57e1f837934486a43fcd6383822c3611c42 100644
+--- a/freertos/h/bench_api.h
++++ b/freertos/h/bench_api.h
+@@ -12,6 +12,12 @@
+ #ifdef FREERTOS
+ #include "../src/freertos/bench_porting_layer_freertos.h"
+ #endif /* FREERTOS */
++#ifdef FREERTOS_AARCH64_GUEST
++#include "../src/freertos_aarch64_guest/bench_porting_layer_freertos.h"
++#endif /* FREERTOS_AARCH64_GUEST */
++#ifdef FREERTOS_AARCH64_QEMU
++#include "../src/freertos_aarch64_guest/bench_porting_layer_freertos.h"
++#endif /* FREERTOS_AARCH64_QEMU */
+ #ifdef RTEMS
+ #include "../src/rtems/bench_porting_layer_rtems.h"
+ #endif
+diff --git a/freertos/h/bench_utils.h b/freertos/h/bench_utils.h
+index 7020f2d17e019f3d9d76bc775512ca644a03fa08..e81aeaf769707f9487eb35ac76ec737ddc0b32cc 100644
+--- a/freertos/h/bench_utils.h
++++ b/freertos/h/bench_utils.h
+@@ -17,6 +17,12 @@
+ #ifdef FREERTOS
+ #include "../freertos/bench_porting_layer_freertos.h"
+ #endif /* FREERTOS */
++#ifdef FREERTOS_AARCH64_GUEST
++#include "../src/freertos_aarch64_guest/bench_porting_layer_freertos.h"
++#endif /* FREERTOS_AARCH64_GUEST */
++#ifdef FREERTOS_AARCH64_QEMU
++#include "../src/freertos_aarch64_guest/bench_porting_layer_freertos.h"
++#endif /* FREERTOS_AARCH64_QEMU */
+ #ifdef RTEMS
+ #include "../src/rtems/bench_porting_layer_rtems.h"
+ #endif /* RTEMS */
+@@ -54,4 +60,14 @@ void bench_stats_report_line(const char *summary, const struct bench_stats *stat
+  */
+ void bench_stats_report_na(const char *summary);
+ 
++/**
++ * @brief Reset buffered report entries before a benchmark run
++ */
++void bench_stats_begin_report(void);
++
++/**
++ * @brief Flush buffered report entries as CSV lines
++ */
++void bench_stats_flush_report(void);
++
+ #endif
+diff --git a/freertos/src/common/bench_interrupt_latency_test.c b/freertos/src/common/bench_interrupt_latency_test.c
+index 64e3f75563ba5ab9d11614ed4e981d726694f3b5..3c7e1ba4793938297f98c47cc33ee515eb9731d6 100644
+--- a/freertos/src/common/bench_interrupt_latency_test.c
++++ b/freertos/src/common/bench_interrupt_latency_test.c
+@@ -10,6 +10,7 @@
+ 
+ #include "bench_api.h"
+ #include "bench_utils.h"
++#include <stdbool.h>
+ 
+ #define SEM_ID      0
+ 
+diff --git a/freertos/src/common/bench_utils.c b/freertos/src/common/bench_utils.c
+index d8181cfd6eb891f19521643572089dbf3c9adc8a..3a208a4ed80a713fcf3b54be4b84c5e6d11e37a1 100644
+--- a/freertos/src/common/bench_utils.c
++++ b/freertos/src/common/bench_utils.c
+@@ -3,7 +3,67 @@
+ #include "bench_api.h"
+ 
+ #include <assert.h>
++#include <inttypes.h>
+ #include <stdint.h>
++#include <string.h>
++
++#define BENCH_MAX_REPORT_ITEMS 64
++#define BENCH_TITLE_LEN 64
++#define BENCH_SUMMARY_LEN 64
++
++struct bench_report_entry {
++	char title[BENCH_TITLE_LEN];
++	char summary[BENCH_SUMMARY_LEN];
++	uint64_t avg_ns;
++	uint64_t min_ns;
++	uint64_t max_ns;
++	int has_value;
++};
++
++static struct bench_report_entry g_report_entries[BENCH_MAX_REPORT_ITEMS];
++static uint32_t g_report_count;
++static char g_current_title[BENCH_TITLE_LEN];
++
++static void copy_text(char *dst, size_t dst_len, const char *src)
++{
++	if (dst_len == 0U) {
++		return;
++	}
++
++	if (src == NULL) {
++		dst[0] = '\0';
++		return;
++	}
++
++	size_t i;
++	for (i = 0; i + 1U < dst_len && src[i] != '\0'; i++) {
++		dst[i] = src[i];
++	}
++	dst[i] = '\0';
++}
++
++static void append_report_entry(const char *summary, uint64_t avg_ns,
++				uint64_t min_ns, uint64_t max_ns, int has_value)
++{
++	if (g_report_count >= BENCH_MAX_REPORT_ITEMS) {
++		return;
++	}
++
++	struct bench_report_entry *entry = &g_report_entries[g_report_count++];
++	copy_text(entry->title, sizeof(entry->title), g_current_title);
++	copy_text(entry->summary, sizeof(entry->summary), summary);
++	entry->avg_ns = avg_ns;
++	entry->min_ns = min_ns;
++	entry->max_ns = max_ns;
++	entry->has_value = has_value;
++}
++
++void bench_stats_begin_report(void)
++{
++	g_report_count = 0;
++	g_current_title[0] = '\0';
++	memset(g_report_entries, 0, sizeof(g_report_entries));
++}
+ 
+ void bench_stats_reset(struct bench_stats *stats)
+ {
+@@ -30,20 +90,47 @@ void bench_stats_update(struct bench_stats *stats, bench_time_t value,
+ 
+ void bench_stats_report_title(const char *title)
+ {
+-	PRINTF("** %s [avg, min, max] in nanoseconds **\n\r", title);
++	copy_text(g_current_title, sizeof(g_current_title), title);
+ }
+ 
+ void bench_stats_report_line(const char *summary, const struct bench_stats *stats)
+ {
+-	PRINTF(" %-40s: %6llu, %6llu, %6llu\n\r", summary,
+-	       bench_timing_cycles_to_ns(stats->avg),
+-	       bench_timing_cycles_to_ns(stats->min),
+-	       bench_timing_cycles_to_ns(stats->max));
++	append_report_entry(summary,
++			    (uint64_t) bench_timing_cycles_to_ns(stats->avg),
++			    (uint64_t) bench_timing_cycles_to_ns(stats->min),
++			    (uint64_t) bench_timing_cycles_to_ns(stats->max),
++			    1);
+ }
+ 
+ void bench_stats_report_na(const char *summary)
+ {
+-	PRINTF(" %-40s: %6s, %6s, %6s\n\r", summary, "n/a", "n/a", "n/a");
++	append_report_entry(summary, 0, 0, 0, 0);
++}
++
++void bench_stats_flush_report(void)
++{
++	const char *current_title = NULL;
++	for (uint32_t i = 0; i < g_report_count; i++) {
++		const struct bench_report_entry *entry = &g_report_entries[i];
++		if (current_title == NULL || strcmp(current_title, entry->title) != 0) {
++			current_title = entry->title;
++			PRINTF("** %s [avg, min, max] in nanoseconds **\r\n", current_title);
++		}
++
++		if (entry->has_value) {
++			PRINTF(" %-40s: %6" PRIu64 ", %6" PRIu64 ", %6" PRIu64 "\r\n",
++			       entry->summary,
++			       entry->avg_ns,
++			       entry->min_ns,
++			       entry->max_ns);
++		} else {
++			PRINTF(" %-40s: %6s, %6s, %6s\r\n",
++			       entry->summary,
++			       "n/a",
++			       "n/a",
++			       "n/a");
++		}
++	}
+ }
+ 
+ __weak void bench_collect_resources(void)
+diff --git a/freertos/src/freertos_aarch64_guest/CMakeLists.txt b/freertos/src/freertos_aarch64_guest/CMakeLists.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..478e57500d5d230399ba120d026f0c565dad54bd
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_guest/CMakeLists.txt
+@@ -0,0 +1,8 @@
++add_subdirectory(arch)
++
++target_sources(app PRIVATE
++    fdt.c
++    platform.c
++    vectors.S
++    boot.S
++)
+diff --git a/freertos/src/freertos_aarch64_guest/FreeRTOSConfig.h b/freertos/src/freertos_aarch64_guest/FreeRTOSConfig.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..419854d5406983f5996575f789d6784fd3e38ca8
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_guest/FreeRTOSConfig.h
+@@ -0,0 +1,70 @@
++#ifndef FREERTOS_CONFIG_H
++#define FREERTOS_CONFIG_H
++
++#include <stdint.h>
++
++#define configMAX_API_CALL_INTERRUPT_PRIORITY    18
++
++#define configCPU_CLOCK_HZ                       ( ( unsigned long ) 50000000 )
++#define configUSE_PORT_OPTIMISED_TASK_SELECTION  1
++#define configUSE_TICKLESS_IDLE                  0
++#define configTICK_RATE_HZ                       ( ( TickType_t ) 1000 )
++#define configUSE_PREEMPTION                     1
++#define configUSE_IDLE_HOOK                      0
++#define configUSE_TICK_HOOK                      0
++#define configMAX_PRIORITIES                     8
++#define configMINIMAL_STACK_SIZE                 256
++#define configTOTAL_HEAP_SIZE                    ( 256 * 1024 )
++#define configMAX_TASK_NAME_LEN                  20
++#define configUSE_16_BIT_TICKS                   0
++#define configIDLE_SHOULD_YIELD                  1
++#define configUSE_MUTEXES                        1
++#define configQUEUE_REGISTRY_SIZE                8
++#define configCHECK_FOR_STACK_OVERFLOW           0
++#define configUSE_RECURSIVE_MUTEXES              1
++#define configUSE_MALLOC_FAILED_HOOK             1
++#define configUSE_APPLICATION_TASK_TAG           0
++#define configUSE_COUNTING_SEMAPHORES            1
++#define configUSE_QUEUE_SETS                     0
++#define configSUPPORT_STATIC_ALLOCATION          1
++#define configSUPPORT_DYNAMIC_ALLOCATION         1
++#define configUSE_CO_ROUTINES                    0
++#define configMAX_CO_ROUTINE_PRIORITIES          2
++#define configUSE_TIMERS                         0
++#define configUSE_STATS_FORMATTING_FUNCTIONS     0
++#define configGENERATE_RUN_TIME_STATS            0
++#define configTASK_RETURN_ADDRESS                NULL
++#define configUNIQUE_INTERRUPT_PRIORITIES        32
++#define configUSE_TRACE_FACILITY                 0
++#define configENABLE_BACKWARD_COMPATIBILITY      0
++#define configUSE_NEWLIB_REENTRANT               0
++#define configUSE_TASK_NOTIFICATIONS             1
++#define configNUM_THREAD_LOCAL_STORAGE_POINTERS  2
++#define configUSE_TIME_SLICING                   0
++#define configUSE_TASK_FPU_SUPPORT               1
++
++#define INCLUDE_vTaskPrioritySet                 1
++#define INCLUDE_uxTaskPriorityGet                1
++#define INCLUDE_vTaskDelete                      1
++#define INCLUDE_vTaskSuspend                     1
++#define INCLUDE_vTaskDelayUntil                  1
++#define INCLUDE_vTaskDelay                       1
++#define INCLUDE_xTaskAbortDelay                  0
++#define INCLUDE_xTaskGetHandle                   1
++#define INCLUDE_xTaskGetCurrentTaskHandle        1
++#define INCLUDE_eTaskGetState                    0
++#define INCLUDE_vTaskCleanUpResources            0
++#define INCLUDE_xSemaphoreGetMutexHolder         1
++
++void vConfigureTickInterrupt(void);
++#define configSETUP_TICK_INTERRUPT() vConfigureTickInterrupt()
++
++void vClearTickInterrupt(void);
++#define configCLEAR_TICK_INTERRUPT() vClearTickInterrupt()
++
++void vMainAssertCalled(const char *pcFileName, uint32_t ulLineNumber);
++#define configASSERT(x) if( ( x ) == 0 ) { vMainAssertCalled( __FILE__, __LINE__ ); }
++
++#define fabs(x) __builtin_fabs(x)
++
++#endif
+diff --git a/freertos/src/freertos_aarch64_guest/arch/CMakeLists.txt b/freertos/src/freertos_aarch64_guest/arch/CMakeLists.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..3688388107078850096b4d289b69bcfe790e4611
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_guest/arch/CMakeLists.txt
+@@ -0,0 +1 @@
++target_sources(app PRIVATE ../arch_util.c)
+diff --git a/freertos/src/freertos_aarch64_guest/arch_util.c b/freertos/src/freertos_aarch64_guest/arch_util.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..72dde1b48621fb8b4707c3a1352ba153705e9670
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_guest/arch_util.c
+@@ -0,0 +1,45 @@
++#include "arch_api.h"
++
++#define NSEC_PER_SEC 1000000000ULL
++
++static inline unsigned long long read_cntvct(void)
++{
++	unsigned long long value;
++	__asm volatile("mrs %0, cntvct_el0" : "=r"(value));
++	return value;
++}
++
++static inline unsigned long long read_cntfrq(void)
++{
++	unsigned long long value;
++	__asm volatile("mrs %0, cntfrq_el0" : "=r"(value));
++	return value;
++}
++
++void arch_timing_init(void)
++{
++}
++
++void arch_timing_start(void)
++{
++}
++
++void arch_timing_stop(void)
++{
++}
++
++bench_time_t arch_timing_counter_get(void)
++{
++	return read_cntvct();
++}
++
++bench_time_t arch_timing_cycles_get(volatile bench_time_t *const start,
++				    volatile bench_time_t *const end)
++{
++	return *end - *start;
++}
++
++bench_time_t arch_timing_cycles_to_ns(bench_time_t cycles)
++{
++	return (cycles * NSEC_PER_SEC) / read_cntfrq();
++}
+diff --git a/freertos/src/freertos_aarch64_guest/bench_all_basic.c b/freertos/src/freertos_aarch64_guest/bench_all_basic.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..b5858de5e3d17d0de90dde1af6b4b223c4bcfa37
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_guest/bench_all_basic.c
+@@ -0,0 +1,32 @@
++#include "bench_api.h"
++#include "bench_utils.h"
++extern void bench_basic_thread_ops(void *arg);
++extern void bench_mutex_lock_unlock_test(void *arg);
++extern void bench_sem_context_switch_init(void *arg);
++extern void bench_sem_signal_release_init(void *arg);
++extern void bench_thread_yield(void *arg);
++extern void bench_malloc_free(void *arg);
++extern void bench_message_queue_init(void *arg);
++
++void bench_all_basic(void *arg)
++{
++	PRINTF("freeRTOS benchmark started\r\n");
++	bench_stats_begin_report();
++
++	bench_basic_thread_ops(arg);
++	bench_mutex_lock_unlock_test(arg);
++	bench_sem_context_switch_init(arg);
++	bench_sem_signal_release_init(arg);
++	bench_thread_yield(arg);
++	bench_malloc_free(arg);
++	bench_message_queue_init(arg);
++
++	bench_stats_flush_report();
++	PRINTF("freeRTOS benchmark done\r\n");
++}
++
++int main(void)
++{
++	bench_test_init(bench_all_basic);
++	return 0;
++}
+diff --git a/freertos/src/freertos_aarch64_guest/bench_porting_layer_freertos.c b/freertos/src/freertos_aarch64_guest/bench_porting_layer_freertos.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..98709225052385136d0f62e7a52654d3b6364cdb
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_guest/bench_porting_layer_freertos.c
+@@ -0,0 +1,308 @@
++#include "bench_api.h"
++#include "bench_porting_layer_freertos.h"
++
++#include "FreeRTOS.h"
++#include "queue.h"
++#include "semphr.h"
++#include "task.h"
++
++#include "arch_api.h"
++#include "platform.h"
++
++#include <assert.h>
++
++#define MAX_SEMAPHORES 5
++#define MAX_THREADS 10
++#define STACK_SIZE (configMINIMAL_STACK_SIZE + 512)
++#define MAX_MUTEXES 5
++#define MAX_QUEUES 1
++#define QUEUE_SIZE 1
++
++static SemaphoreHandle_t semaphores[MAX_SEMAPHORES];
++static StaticSemaphore_t semaphore_buffer[MAX_SEMAPHORES];
++
++static TaskHandle_t threads[MAX_THREADS];
++static StackType_t stack_buffer[MAX_THREADS][STACK_SIZE];
++static StackType_t init_stack_buffer[STACK_SIZE];
++static StaticTask_t task_buffer[MAX_THREADS];
++static StaticTask_t init_task_buffer;
++
++static SemaphoreHandle_t mutexes[MAX_MUTEXES];
++static StaticSemaphore_t mutex_buffers[MAX_MUTEXES];
++
++static TaskHandle_t threads_to_remove[MAX_THREADS];
++static int threads_to_remove_idx;
++static SemaphoreHandle_t to_remove_sem;
++static StaticSemaphore_t to_remove_sem_buf;
++
++static QueueHandle_t queues[MAX_QUEUES];
++static uint8_t queue_storage[MAX_QUEUES][QUEUE_SIZE];
++static StaticQueue_t queue_buffer[MAX_QUEUES];
++
++#define benchmark_task_PRIORITY ( configMAX_PRIORITIES - 1 )
++
++void bench_test_init(void (*test_init_function)(void *))
++{
++	TaskHandle_t handle;
++
++	freertos_platform_init();
++
++	to_remove_sem = xSemaphoreCreateCountingStatic(1, 0, &to_remove_sem_buf);
++	handle = xTaskCreateStatic(test_init_function, "benchmark", STACK_SIZE, NULL,
++				   benchmark_task_PRIORITY, init_stack_buffer,
++				   &init_task_buffer);
++	if (handle == NULL) {
++		for (;;) {
++		}
++	}
++
++	vTaskStartScheduler();
++
++	for (;;) {
++	}
++}
++
++void bench_timing_init(void)
++{
++	arch_timing_init();
++}
++
++void bench_timing_start(void)
++{
++	arch_timing_start();
++}
++
++void bench_timing_stop(void)
++{
++	arch_timing_stop();
++}
++
++bench_time_t bench_timing_counter_get(void)
++{
++	return arch_timing_counter_get();
++}
++
++bench_time_t bench_timing_cycles_get(bench_time_t *time_start, bench_time_t *time_end)
++{
++	return arch_timing_cycles_get(time_start, time_end);
++}
++
++bench_time_t bench_timing_cycles_to_ns(bench_time_t cycles)
++{
++	return arch_timing_cycles_to_ns(cycles);
++}
++
++int bench_sem_create(int sem_id, int initial_count, int maximum_count)
++{
++	SemaphoreHandle_t handle;
++
++	handle = xSemaphoreCreateCountingStatic(maximum_count, initial_count,
++						&semaphore_buffer[sem_id]);
++	semaphores[sem_id] = handle;
++
++	return BENCH_SUCCESS;
++}
++
++void bench_sem_give(int sem_id)
++{
++	xSemaphoreGive(semaphores[sem_id]);
++}
++
++void bench_sem_give_from_isr(int sem_id)
++{
++	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
++
++	xSemaphoreGiveFromISR(semaphores[sem_id], &xHigherPriorityTaskWoken);
++	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
++}
++
++int bench_sem_take(int sem_id)
++{
++	xSemaphoreTake(semaphores[sem_id], portMAX_DELAY);
++	return BENCH_SUCCESS;
++}
++
++void *bench_malloc(size_t size)
++{
++	return pvPortMalloc(size);
++}
++
++void bench_free(void *ptr)
++{
++	vPortFree(ptr);
++}
++
++static UBaseType_t map_prio(int prio)
++{
++	assert(prio >= 0);
++	return configMAX_PRIORITIES - prio;
++}
++
++void bench_thread_start(int thread_id)
++{
++	ARG_UNUSED(thread_id);
++}
++
++void bench_thread_set_priority(int priority)
++{
++	vTaskPrioritySet(NULL, map_prio(priority));
++}
++
++int bench_thread_create(int thread_id, const char *thread_name, int priority,
++			void (*entry_function)(void *), void *args)
++{
++	TaskHandle_t handle;
++
++	if (thread_id < 0 || thread_id >= MAX_THREADS) {
++		return BENCH_ERROR;
++	}
++
++	vTaskSuspendAll();
++	handle = xTaskCreateStatic(entry_function, thread_name, STACK_SIZE, args,
++				   map_prio(priority), stack_buffer[thread_id],
++				   &task_buffer[thread_id]);
++	threads[thread_id] = handle;
++
++	if (handle == NULL) {
++		(void) xTaskResumeAll();
++		return BENCH_ERROR;
++	}
++
++	(void) xTaskResumeAll();
++
++	return BENCH_SUCCESS;
++}
++
++int bench_thread_spawn(int thread_id, const char *thread_name, int priority,
++		       void (*entry_function)(void *), void *args)
++{
++	int ret = bench_thread_create(thread_id, thread_name, priority, entry_function, args);
++
++	if (ret == BENCH_SUCCESS) {
++		bench_thread_start(thread_id);
++	}
++
++	return ret;
++}
++
++void bench_thread_resume(int thread_id)
++{
++	vTaskResume(threads[thread_id]);
++}
++
++void bench_thread_suspend(int thread_id)
++{
++	vTaskSuspend(threads[thread_id]);
++}
++
++void bench_thread_abort(int thread_id)
++{
++	vTaskDelete(threads[thread_id]);
++	threads[thread_id] = NULL;
++}
++
++void bench_yield(void)
++{
++	taskYIELD();
++}
++
++void bench_sync_ticks(void)
++{
++	vTaskDelay(1);
++}
++
++void bench_thread_exit(void)
++{
++	threads_to_remove[threads_to_remove_idx++] = xTaskGetCurrentTaskHandle();
++	xSemaphoreTake(to_remove_sem, portMAX_DELAY);
++}
++
++void bench_collect_resources(void)
++{
++	while (threads_to_remove_idx) {
++		vTaskDelete(threads_to_remove[--threads_to_remove_idx]);
++	}
++}
++
++int bench_mutex_create(int mutex_id)
++{
++	mutexes[mutex_id] = xSemaphoreCreateMutexStatic(&mutex_buffers[mutex_id]);
++	return mutexes[mutex_id] ? BENCH_SUCCESS : BENCH_ERROR;
++}
++
++int bench_mutex_lock(int mutex_id)
++{
++	return xSemaphoreTakeRecursive(mutexes[mutex_id], portMAX_DELAY) == pdPASS ? BENCH_SUCCESS
++										    : BENCH_ERROR;
++}
++
++int bench_mutex_unlock(int mutex_id)
++{
++	return xSemaphoreGiveRecursive(mutexes[mutex_id]) == pdPASS ? BENCH_SUCCESS : BENCH_ERROR;
++}
++
++int bench_message_queue_create(int mq_id, const char *mq_name,
++			       size_t msg_max_num, size_t msg_max_len)
++{
++	ARG_UNUSED(mq_name);
++	configASSERT(msg_max_len <= QUEUE_SIZE);
++	queues[mq_id] = xQueueCreateStatic(msg_max_num, msg_max_len,
++					   queue_storage[mq_id], &queue_buffer[mq_id]);
++	return queues[mq_id] ? BENCH_SUCCESS : BENCH_ERROR;
++}
++
++int bench_message_queue_send(int mq_id, char *msg_ptr, size_t msg_len)
++{
++	ARG_UNUSED(msg_len);
++	return xQueueSend(queues[mq_id], msg_ptr, portMAX_DELAY) == pdPASS ? BENCH_SUCCESS
++									   : BENCH_ERROR;
++}
++
++int bench_message_queue_receive(int mq_id, char *msg_ptr, size_t msg_len)
++{
++	ARG_UNUSED(msg_len);
++	return xQueueReceive(queues[mq_id], msg_ptr, portMAX_DELAY) == pdPASS ? BENCH_SUCCESS
++									      : BENCH_ERROR;
++}
++
++int bench_message_queue_delete(int mq_id, const char *mq_name)
++{
++	ARG_UNUSED(mq_name);
++	vQueueDelete(queues[mq_id]);
++	return BENCH_SUCCESS;
++}
++
++static StaticTask_t xIdleTaskTCBBuffer;
++static StackType_t xIdleStack[STACK_SIZE];
++
++void vApplicationGetIdleTaskMemory(StaticTask_t **ppxIdleTaskTCBBuffer,
++				   StackType_t **ppxIdleTaskStackBuffer,
++				   StackType_t *pulIdleTaskStackSize)
++{
++	*ppxIdleTaskTCBBuffer = &xIdleTaskTCBBuffer;
++	*ppxIdleTaskStackBuffer = xIdleStack;
++	*pulIdleTaskStackSize = STACK_SIZE;
++}
++
++void vMainAssertCalled(const char *pcFileName, uint32_t ulLineNumber)
++{
++	ARG_UNUSED(pcFileName);
++	ARG_UNUSED(ulLineNumber);
++	taskDISABLE_INTERRUPTS();
++	for (;;) {
++	}
++}
++
++void vApplicationMallocFailedHook(void)
++{
++	vMainAssertCalled(__FILE__, __LINE__);
++}
++
++void vApplicationStackOverflowHook(TaskHandle_t pxTask, char *pcTaskName)
++{
++	ARG_UNUSED(pxTask);
++	ARG_UNUSED(pcTaskName);
++	taskDISABLE_INTERRUPTS();
++	for (;;) {
++	}
++}
+diff --git a/freertos/src/freertos_aarch64_guest/bench_porting_layer_freertos.h b/freertos/src/freertos_aarch64_guest/bench_porting_layer_freertos.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..d44f12e18badeb98b64404791c5a71b95ad0506c
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_guest/bench_porting_layer_freertos.h
+@@ -0,0 +1,32 @@
++/* SPDX-License-Identifier: Apache-2.0 */
++
++#ifndef PORTING_LAYER_FREERTOS_AARCH64_GUEST_H_
++#define PORTING_LAYER_FREERTOS_AARCH64_GUEST_H_
++
++#include "FreeRTOS.h"
++
++#include <stddef.h>
++#include <stdint.h>
++
++typedef uint64_t bench_time_t;
++typedef void * bench_work;
++
++int freertos_uart_printf(const char *fmt, ...);
++#define PRINTF freertos_uart_printf
++
++#define TICK_SYNCH() bench_sync_ticks()
++
++#define BENCH_LAST_PRIORITY ( configMAX_PRIORITIES - 1 )
++#define BENCH_IDLE_TIME     5
++
++#define __weak __attribute__((__weak__))
++
++#define ARG_UNUSED(x) (void)(x)
++
++#define RTOS_HAS_THREAD_SPAWN         1
++#define RTOS_HAS_THREAD_CREATE_START  0
++#define RTOS_HAS_SUSPEND_RESUME       1
++#define RTOS_HAS_MAIN_ENTRY_POINT     1
++#define RTOS_HAS_MESSAGE_QUEUE        0
++
++#endif
+diff --git a/freertos/src/freertos_aarch64_guest/boot.S b/freertos/src/freertos_aarch64_guest/boot.S
+new file mode 100644
+index 0000000000000000000000000000000000000000..a24e82594ef89b2863831601c9080020afdcfd43
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_guest/boot.S
+@@ -0,0 +1,62 @@
++    .section .text.boot, "ax"
++    .globl _boot
++    .type _boot, %function
++
++    .type freertos_enter_el1, %function
++
++freertos_enter_el1:
++    mrs x1, CurrentEL
++    cmp x1, #0x8
++    b.ne 1f
++
++    mrs x1, hcr_el2
++    orr x1, x1, #(1 << 31)
++    msr hcr_el2, x1
++    isb
++
++    ldr x0, =__boot_stack_top
++    msr sp_el1, x0
++
++    mov x0, #0x3c5
++    msr spsr_el2, x0
++    adr x0, 2f
++    msr elr_el2, x0
++    eret
++
++2:
++    ret
++
++1:
++    ret
++
++_boot:
++    ldr x20, =0x2800d000
++    mov x19, x0
++    bl freertos_enter_el1
++    strb w21, [x20]
++    ldr x0, =_vector_table
++    msr VBAR_EL1, x0
++    isb
++
++    ldr x0, =__boot_stack_top
++    mov sp, x0
++
++    ldr x0, =__bss_start__
++    ldr x1, =__bss_end__
++    mov x2, #0
++1:
++    cmp x0, x1
++    b.hs 2f
++    str x2, [x0], #8
++    b 1b
++2:
++    strb w21, [x20]
++    mov x0, x19
++    bl freertos_set_boot_fdt_ptr
++    strb w21, [x20]
++    bl main
++3:
++    mov w21, #'X'
++    strb w21, [x20]
++    wfi
++    b 3b
+diff --git a/freertos/src/freertos_aarch64_guest/fdt.c b/freertos/src/freertos_aarch64_guest/fdt.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..394ff8afaac4ee3442e9f91d265ba6ed6f2d3218
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_guest/fdt.c
+@@ -0,0 +1,247 @@
++#include "fdt.h"
++
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++
++#define FDT_MAGIC 0xd00dfeedU
++#define FDT_BEGIN_NODE 0x1U
++#define FDT_END_NODE 0x2U
++#define FDT_PROP 0x3U
++#define FDT_NOP 0x4U
++#define FDT_END 0x9U
++
++struct fdt_header {
++	uint32_t magic;
++	uint32_t totalsize;
++	uint32_t off_dt_struct;
++	uint32_t off_dt_strings;
++	uint32_t off_mem_rsvmap;
++	uint32_t version;
++	uint32_t last_comp_version;
++	uint32_t boot_cpuid_phys;
++	uint32_t size_dt_strings;
++	uint32_t size_dt_struct;
++};
++
++static const void *boot_fdt_ptr;
++
++static bool fdt_pointer_looks_valid(const void *fdt)
++{
++	uintptr_t addr = (uintptr_t)fdt;
++
++	if (addr == 0U) {
++		return false;
++	}
++
++	/*
++	 * U-Boot `go` passes argc in x0 on AArch64 instead of a DTB pointer.
++	 * Reject tiny/alignment-broken values here so we don't fault trying to
++	 * read a header from addresses like 0x1.
++	 */
++	if (addr < 0x10000U) {
++		return false;
++	}
++
++	if ((addr & 0x3U) != 0U) {
++		return false;
++	}
++
++	return true;
++}
++
++static uint32_t fdt32_to_cpu(uint32_t value)
++{
++	return __builtin_bswap32(value);
++}
++
++static uint64_t read_be_u64(const uint32_t *cells)
++{
++	uint64_t hi = fdt32_to_cpu(cells[0]);
++	uint64_t lo = fdt32_to_cpu(cells[1]);
++	return (hi << 32) | lo;
++}
++
++static size_t align4(size_t value)
++{
++	return (value + 3U) & ~3U;
++}
++
++void freertos_set_boot_fdt(const void *fdt)
++{
++	boot_fdt_ptr = fdt;
++}
++
++const void *freertos_get_boot_fdt(void)
++{
++	return boot_fdt_ptr;
++}
++
++static bool path_has_prefix(const char *path, const char *prefix)
++{
++	size_t len = strlen(prefix);
++	return strncmp(path, prefix, len) == 0;
++}
++
++static bool extract_reg64_pair(const uint8_t *value, uint32_t len, uint64_t *base, uint64_t *size)
++{
++	if (len < 16U) {
++		return false;
++	}
++
++	const uint32_t *cells = (const uint32_t *)value;
++	*base = read_be_u64(&cells[0]);
++	*size = read_be_u64(&cells[2]);
++	return true;
++}
++
++bool freertos_fdt_probe(struct fdt_resource_info *info)
++{
++	const struct fdt_header *hdr = (const struct fdt_header *)boot_fdt_ptr;
++	const uint8_t *blob;
++	const uint8_t *struct_block;
++	const char *strings;
++	const uint8_t *p;
++	char current_path[256] = "/";
++	char alias_serial1[128] = "";
++	char stdout_path[128] = "";
++	bool in_aliases = false;
++	bool in_chosen = false;
++
++	if (!fdt_pointer_looks_valid(hdr)) {
++		return false;
++	}
++
++	if (fdt32_to_cpu(hdr->magic) != FDT_MAGIC) {
++		return false;
++	}
++
++	memset(info, 0, sizeof(*info));
++
++	blob = (const uint8_t *)hdr;
++	struct_block = blob + fdt32_to_cpu(hdr->off_dt_struct);
++	strings = (const char *)(blob + fdt32_to_cpu(hdr->off_dt_strings));
++	p = struct_block;
++
++	while (1) {
++		uint32_t token = fdt32_to_cpu(*(const uint32_t *)p);
++		p += 4;
++
++		if (token == FDT_BEGIN_NODE) {
++			const char *name = (const char *)p;
++			size_t name_len = strlen(name);
++			size_t path_len = strlen(current_path);
++
++			if (strcmp(current_path, "/") == 0) {
++				if (name_len == 0) {
++					current_path[0] = '/';
++					current_path[1] = '\0';
++				} else {
++					current_path[0] = '/';
++					memcpy(&current_path[1], name, name_len + 1);
++				}
++			} else if (name_len != 0 && path_len + 1 + name_len < sizeof(current_path)) {
++				current_path[path_len] = '/';
++				memcpy(&current_path[path_len + 1], name, name_len + 1);
++			}
++
++			in_aliases = strcmp(current_path, "/aliases") == 0;
++			in_chosen = strcmp(current_path, "/chosen") == 0;
++			p += align4(name_len + 1U);
++		} else if (token == FDT_END_NODE) {
++			char *last_slash = strrchr(current_path, '/');
++			if (last_slash == current_path) {
++				current_path[1] = '\0';
++			} else if (last_slash != NULL) {
++				*last_slash = '\0';
++			}
++			in_aliases = strcmp(current_path, "/aliases") == 0;
++			in_chosen = strcmp(current_path, "/chosen") == 0;
++		} else if (token == FDT_PROP) {
++			uint32_t len = fdt32_to_cpu(*(const uint32_t *)p);
++			p += 4;
++			uint32_t nameoff = fdt32_to_cpu(*(const uint32_t *)p);
++			p += 4;
++			const char *prop_name = strings + nameoff;
++			const uint8_t *value = p;
++
++			if (in_aliases && strcmp(prop_name, "serial1") == 0) {
++				size_t copy_len = len < sizeof(alias_serial1) - 1 ? len : sizeof(alias_serial1) - 1;
++				memcpy(alias_serial1, value, copy_len);
++				alias_serial1[copy_len] = '\0';
++			}
++
++			if (in_chosen && strcmp(prop_name, "stdout-path") == 0) {
++				size_t copy_len = len < sizeof(stdout_path) - 1 ? len : sizeof(stdout_path) - 1;
++				memcpy(stdout_path, value, copy_len);
++				stdout_path[copy_len] = '\0';
++			}
++
++			if (strcmp(prop_name, "clock-frequency") == 0 && path_has_prefix(current_path, "/uartclk")) {
++				info->uart_clock_hz = fdt32_to_cpu(*(const uint32_t *)value);
++			}
++
++			if (strcmp(prop_name, "interrupts") == 0 && strstr(current_path, "uart@") != NULL) {
++				if (len >= 8U) {
++					const uint32_t *cells = (const uint32_t *)value;
++					info->timer_irq = info->timer_irq;
++					(void)cells;
++				}
++			}
++
++			if (strcmp(prop_name, "reg") == 0) {
++				bool stdout_uses_serial1 =
++					(strlen(stdout_path) > 0 && strncmp(stdout_path, "serial1", 7) == 0);
++				if ((strlen(alias_serial1) > 0 && strcmp(current_path, alias_serial1) == 0) ||
++				    (strlen(stdout_path) > 0 && stdout_path[0] == '/' &&
++				     strcmp(current_path, stdout_path) == 0) ||
++				    (stdout_uses_serial1 && strlen(alias_serial1) > 0 &&
++				     strcmp(current_path, alias_serial1) == 0)) {
++					uint64_t base, size;
++					if (extract_reg64_pair(value, len, &base, &size)) {
++						info->uart_base = base;
++					}
++				}
++
++				if (strstr(current_path, "interrupt-controller@") != NULL) {
++					uint64_t base, size;
++					if (extract_reg64_pair(value, len, &base, &size)) {
++						info->gicd_base = base;
++						if (len >= 32U) {
++							const uint32_t *cells = (const uint32_t *)value;
++							info->gicr_base = read_be_u64(&cells[4]);
++							info->gicr_size = read_be_u64(&cells[6]);
++						}
++					}
++				}
++
++				if ((strcmp(prop_name, "reg") == 0) &&
++				    (strstr(current_path, "memory@") != NULL || strstr(current_path, "sram0") != NULL ||
++				     strstr(current_path, "memory@2020000000") != NULL)) {
++					uint64_t base, size;
++					if (extract_reg64_pair(value, len, &base, &size)) {
++						info->memory_base = base;
++						info->memory_size = size;
++					}
++				}
++			}
++
++			if (strcmp(prop_name, "interrupts") == 0 && strcmp(current_path, "/timer") == 0) {
++				if (len >= 16U) {
++					const uint32_t *cells = (const uint32_t *)value;
++					info->timer_irq = fdt32_to_cpu(cells[1]);
++				}
++			}
++
++			p += align4(len);
++		} else if (token == FDT_NOP) {
++			continue;
++		} else if (token == FDT_END) {
++			break;
++		} else {
++			return false;
++		}
++	}
++
++	return info->uart_base != 0U;
++}
+diff --git a/freertos/src/freertos_aarch64_guest/fdt.h b/freertos/src/freertos_aarch64_guest/fdt.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..3ee95d2a8dbb8a87a30bf7db55cbe857fc29c453
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_guest/fdt.h
+@@ -0,0 +1,23 @@
++#ifndef FREERTOS_AARCH64_GUEST_FDT_H_
++#define FREERTOS_AARCH64_GUEST_FDT_H_
++
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++
++struct fdt_resource_info {
++	uint64_t uart_base;
++	uint64_t uart_clock_hz;
++	uint32_t timer_irq;
++	uint64_t gicd_base;
++	uint64_t gicr_base;
++	uint64_t gicr_size;
++	uint64_t memory_base;
++	uint64_t memory_size;
++};
++
++void freertos_set_boot_fdt(const void *fdt);
++const void *freertos_get_boot_fdt(void);
++bool freertos_fdt_probe(struct fdt_resource_info *info);
++
++#endif
+diff --git a/freertos/src/freertos_aarch64_guest/freertos_aarch64_guest.cmake b/freertos/src/freertos_aarch64_guest/freertos_aarch64_guest.cmake
+new file mode 100644
+index 0000000000000000000000000000000000000000..b77c7e710e9615cb9a200a8e0e6381c76556135d
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_guest/freertos_aarch64_guest.cmake
+@@ -0,0 +1,41 @@
++# Recall that this fragment is included by "../../CMakeLists.txt".
++
++set(AARCH64_GCC_DIR "/code/rtos/zephyr-sdk-0.16.5-1/aarch64-zephyr-elf/bin" CACHE PATH "AArch64 GCC toolchain bin dir")
++
++set(CMAKE_SYSTEM_NAME Generic)
++set(CMAKE_C_COMPILER ${AARCH64_GCC_DIR}/aarch64-zephyr-elf-gcc CACHE FILEPATH "" FORCE)
++set(CMAKE_ASM_COMPILER ${AARCH64_GCC_DIR}/aarch64-zephyr-elf-gcc CACHE FILEPATH "" FORCE)
++set(CMAKE_OBJCOPY ${AARCH64_GCC_DIR}/aarch64-zephyr-elf-objcopy CACHE FILEPATH "" FORCE)
++
++set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DFREERTOS_AARCH64_GUEST -DGUEST -ffreestanding -fno-common -fno-pic -fno-pie -mcmodel=large -mgeneral-regs-only -march=armv8-a")
++set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DFREERTOS_BENCH_SKIP_UART_INIT=1")
++set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -DGUEST -ffreestanding -fno-pic -fno-pie -mcmodel=large -mgeneral-regs-only -march=armv8-a")
++set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -nostartfiles -static -Wl,-no-pie -Wl,--build-id=none -Wl,-T${CMAKE_CURRENT_SOURCE_DIR}/src/freertos_aarch64_guest/linker.ld")
++
++enable_language(ASM)
++
++include_directories(h)
++include_directories(src/freertos_aarch64_guest)
++include_directories(src/freertos)
++include_directories(/code/rtos/FreeRTOS-Kernel/include)
++include_directories(/code/rtos/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE)
++
++add_executable(app
++    src/freertos_aarch64_guest/bench_porting_layer_freertos.c
++    /code/rtos/FreeRTOS-Kernel/list.c
++    /code/rtos/FreeRTOS-Kernel/queue.c
++    /code/rtos/FreeRTOS-Kernel/tasks.c
++    /code/rtos/FreeRTOS-Kernel/timers.c
++    /code/rtos/FreeRTOS-Kernel/portable/MemMang/heap_4.c
++    /code/rtos/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE/port.c
++    /code/rtos/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE/portASM.S
++)
++
++target_compile_options(app PRIVATE --specs=nano.specs --specs=nosys.specs)
++target_link_options(app PRIVATE --specs=nano.specs --specs=nosys.specs)
++
++add_custom_command(
++    TARGET app POST_BUILD
++    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:app> ${CMAKE_BINARY_DIR}/freertos-aarch64-guest.bin
++    BYPRODUCTS ${CMAKE_BINARY_DIR}/freertos-aarch64-guest.bin
++)
+diff --git a/freertos/src/freertos_aarch64_guest/linker.ld b/freertos/src/freertos_aarch64_guest/linker.ld
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ba221e132896a6bb5a008f35d600ff1024b6598
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_guest/linker.ld
+@@ -0,0 +1,56 @@
++ENTRY(_boot)
++
++MEMORY
++{
++  ram (rwx) : ORIGIN = 0x2020000000, LENGTH = 0x20000000
++}
++
++SECTIONS
++{
++  . = ORIGIN(ram);
++
++  .vectors : ALIGN(2048) {
++    KEEP(*(.vectors))
++  } > ram
++
++  .text : ALIGN(16) {
++    *(.text.boot)
++    *(.text)
++    *(.text.*)
++    *(.rodata)
++    *(.rodata.*)
++    *(.gnu.linkonce.t*)
++    *(.gnu.linkonce.r*)
++  } > ram
++
++  .data : ALIGN(16) {
++    __data_start__ = .;
++    *(.data)
++    *(.data.*)
++    __data_end__ = .;
++  } > ram
++
++  .bss (NOLOAD) : ALIGN(16) {
++    __bss_start__ = .;
++    *(.bss)
++    *(.bss.*)
++    *(COMMON)
++    __bss_end__ = .;
++  } > ram
++
++  .boot_stack (NOLOAD) : ALIGN(16) {
++    __boot_stack_bottom = .;
++    . = . + 0x8000;
++    __boot_stack_top = .;
++  } > ram
++
++  end = .;
++  _end = .;
++  __end__ = .;
++
++  /DISCARD/ : {
++    *(.comment)
++    *(.note*)
++    *(.eh_frame*)
++  }
++}
+diff --git a/freertos/src/freertos_aarch64_guest/platform.c b/freertos/src/freertos_aarch64_guest/platform.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..4b2d48a8f56b1fbfae372b1d81ac68f8a8f3e3b2
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_guest/platform.c
+@@ -0,0 +1,625 @@
++#include "platform.h"
++
++#include "FreeRTOS.h"
++#include "fdt.h"
++#include "portmacro.h"
++#include "task.h"
++
++#include <stdarg.h>
++#include <stdbool.h>
++#include <stdint.h>
++
++#ifndef FREERTOS_BENCH_PL011_BASE
++#define FREERTOS_BENCH_PL011_BASE 0x2800d000UL
++#endif
++
++#ifndef FREERTOS_BENCH_GICR_BASE
++#define FREERTOS_BENCH_GICR_BASE 0x30880000UL
++#endif
++
++#ifndef FREERTOS_BENCH_GICR_REGION_SIZE
++#define FREERTOS_BENCH_GICR_REGION_SIZE 0x00080000UL
++#endif
++
++#ifndef FREERTOS_BENCH_GICR_STRIDE
++#define FREERTOS_BENCH_GICR_STRIDE 0x00020000UL
++#endif
++
++#ifndef FREERTOS_BENCH_TIMER_IRQ_ID
++#define FREERTOS_BENCH_TIMER_IRQ_ID 27U
++#endif
++
++#ifndef FREERTOS_BENCH_UART_CLK_HZ
++#define FREERTOS_BENCH_UART_CLK_HZ 100000000UL
++#endif
++
++#define PL011_BASE            FREERTOS_BENCH_PL011_BASE
++#define PL011_DR              0x000
++#define PL011_FR              0x018
++#define PL011_IBRD            0x024
++#define PL011_FBRD            0x028
++#define PL011_LCRH            0x02c
++#define PL011_CR              0x030
++#define PL011_IMSC            0x038
++#define PL011_ICR             0x044
++#define PL011_FR_TXFF         ( 1U << 5 )
++#define PL011_CR_UARTEN       ( 1U << 0 )
++#define PL011_CR_TXE          ( 1U << 8 )
++#define PL011_CR_RXE          ( 1U << 9 )
++#define PL011_LCRH_WLEN_8     ( 3U << 5 )
++#define PL011_LCRH_FEN        ( 1U << 4 )
++
++#define GICR_BASE             FREERTOS_BENCH_GICR_BASE
++#define GICR_REGION_SIZE      FREERTOS_BENCH_GICR_REGION_SIZE
++#define GICR_STRIDE           FREERTOS_BENCH_GICR_STRIDE
++#define GICR_SGI_BASE_OFF     0x10000UL
++#define GICR_TYPER            0x0008UL
++#define GICR_TYPER_LAST_BIT   ( 1UL << 4 )
++#define GIC_DIST_IGROUPR      0x0080UL
++#define GIC_DIST_ISENABLER    0x0100UL
++#define GIC_DIST_ICENABLER    0x0180UL
++#define GIC_DIST_ICPENDR      0x0280UL
++#define GIC_DIST_IPRIORITYR   0x0400UL
++#define GIC_DIST_ICFGR        0x0c00UL
++#define GIC_DIST_IGROUPMODR   0x0d00UL
++
++#define TIMER_IRQ_ID          FREERTOS_BENCH_TIMER_IRQ_ID
++
++static uintptr_t uart_base = PL011_BASE;
++static uint64_t uart_next_tx_cycle;
++
++static uint64_t tick_cycles;
++static bench_isr_handler_t current_timer_handler;
++static uintptr_t current_gicr_base;
++static struct fdt_resource_info hw;
++
++extern void FreeRTOS_Tick_Handler( void );
++
++static inline void mmio_write32(uintptr_t addr, uint32_t value)
++{
++	*(volatile uint32_t *) addr = value;
++}
++
++static inline uint32_t mmio_read32(uintptr_t addr)
++{
++	return *(volatile uint32_t *) addr;
++}
++
++static inline uint64_t read_cntfrq(void)
++{
++	uint64_t value;
++	__asm volatile("mrs %0, cntfrq_el0" : "=r"(value));
++	return value;
++}
++
++void freertos_set_boot_fdt_ptr(const void *fdt)
++{
++	freertos_set_boot_fdt(fdt);
++}
++
++static inline uint64_t read_mpidr(void)
++{
++	uint64_t value;
++	__asm volatile("mrs %0, mpidr_el1" : "=r"(value));
++	return value;
++}
++
++static inline uint64_t read_cntvct(void)
++{
++	uint64_t value;
++	__asm volatile("mrs %0, cntvct_el0" : "=r"(value));
++	return value;
++}
++
++static inline void write_cntv_tval(uint32_t value)
++{
++	__asm volatile("msr cntv_tval_el0, %0" ::"r"((uint64_t)value));
++}
++
++static inline void write_cntv_ctl(uint32_t value)
++{
++	__asm volatile("msr cntv_ctl_el0, %0" ::"r"((uint64_t)value));
++}
++
++static inline void uart_wait_tx_slot(void)
++{
++#if defined( GUEST )
++	uint64_t now = read_cntvct();
++	uint64_t target = uart_next_tx_cycle;
++
++	if (target > now) {
++		while (read_cntvct() < target) {
++		}
++		now = target;
++	}
++
++	uint64_t cycles_per_char = (read_cntfrq() * 20ULL) / 115200ULL;
++	if (cycles_per_char == 0ULL) {
++		cycles_per_char = 1ULL;
++	}
++	uart_next_tx_cycle = now + cycles_per_char;
++#endif
++}
++
++static inline uint64_t read_icc_sre_el1(void)
++{
++	uint64_t value;
++	__asm volatile("mrs %0, S3_0_C12_C12_5" : "=r"(value));
++	return value;
++}
++
++static inline void write_icc_sre_el1(uint64_t value)
++{
++	__asm volatile("msr S3_0_C12_C12_5, %0" ::"r"(value));
++}
++
++static inline void write_icc_pmr_el1(uint64_t value)
++{
++	__asm volatile("msr S3_0_C4_C6_0, %0" ::"r"(value));
++}
++
++static inline void write_icc_igrpen1_el1(uint64_t value)
++{
++	__asm volatile("msr S3_0_C12_C12_7, %0" ::"r"(value));
++}
++
++static inline uint64_t mmio_read64(uintptr_t addr)
++{
++	return *(volatile uint64_t *) addr;
++}
++
++static uint64_t mpidr_to_affinity(uint64_t mpidr)
++{
++	uint64_t aff3 = ( mpidr >> 32 ) & 0xffU;
++	uint64_t aff2 = ( mpidr >> 16 ) & 0xffU;
++	uint64_t aff1 = ( mpidr >> 8 ) & 0xffU;
++	uint64_t aff0 = mpidr & 0xffU;
++
++	return ( aff3 << 24 ) | ( aff2 << 16 ) | ( aff1 << 8 ) | aff0;
++}
++
++static uintptr_t find_current_redistributor(void)
++{
++	uint64_t target_aff = mpidr_to_affinity(read_mpidr());
++	uintptr_t addr = GICR_BASE;
++	uintptr_t end = GICR_BASE + GICR_REGION_SIZE;
++
++	while (addr < end) {
++		uint64_t typer = mmio_read64(addr + GICR_TYPER);
++		uint64_t gicr_aff = (typer >> 32) & 0xffffffffULL;
++
++		if (gicr_aff == target_aff) {
++			return addr;
++		}
++
++		if (typer & GICR_TYPER_LAST_BIT) {
++			break;
++		}
++
++		addr += GICR_STRIDE;
++	}
++
++	return 0;
++}
++
++static void pl011_init(uint64_t uart_clk_hz)
++{
++	uint32_t baud = 115200U;
++	uint64_t bauddiv_x64;
++	uint32_t ibrd;
++	uint32_t fbrd;
++
++	mmio_write32(uart_base + PL011_CR, 0);
++	mmio_write32(uart_base + PL011_IMSC, 0);
++	mmio_write32(uart_base + PL011_ICR, 0x7ff);
++
++	if (uart_clk_hz == 0U) {
++		uart_clk_hz = FREERTOS_BENCH_UART_CLK_HZ;
++	}
++
++	bauddiv_x64 = (uart_clk_hz * 4U) / baud;
++	ibrd = (uint32_t)(bauddiv_x64 / 64U);
++	fbrd = (uint32_t)(bauddiv_x64 % 64U);
++	if (ibrd == 0U) {
++		ibrd = 1U;
++	}
++
++	mmio_write32(uart_base + PL011_IBRD, ibrd);
++	mmio_write32(uart_base + PL011_FBRD, fbrd);
++	mmio_write32(uart_base + PL011_LCRH, PL011_LCRH_WLEN_8 | PL011_LCRH_FEN);
++	mmio_write32(uart_base + PL011_CR, PL011_CR_UARTEN | PL011_CR_TXE | PL011_CR_RXE);
++	uart_next_tx_cycle = 0;
++}
++
++static void pl011_putc(char c)
++{
++#if defined( GUEST )
++	/*
++	 * On Phytium guest, reading FR/TXFF can stall even though direct writes to
++	 * DR succeed. Pace writes in software to keep output readable.
++	 */
++	uart_wait_tx_slot();
++	mmio_write32(uart_base + PL011_DR, (uint32_t)c);
++	__asm volatile("dsb sy" ::: "memory");
++#else
++	uint32_t tries = 1000000U;
++	while ((mmio_read32(uart_base + PL011_FR) & PL011_FR_TXFF) && tries-- > 0U) {
++	}
++	mmio_write32(uart_base + PL011_DR, (uint32_t) c);
++#endif
++}
++
++static void pl011_puts(const char *s)
++{
++	while (*s != '\0') {
++		if (*s == '\n') {
++			pl011_putc('\r');
++		}
++		pl011_putc(*s++);
++	}
++}
++
++void freertos_uart_puts_early(const char *s)
++{
++	while (*s != '\0') {
++		if (*s == '\n') {
++			uart_wait_tx_slot();
++			mmio_write32(uart_base + PL011_DR, (uint32_t) '\r');
++		}
++		uart_wait_tx_slot();
++		mmio_write32(uart_base + PL011_DR, (uint32_t) *s++);
++	}
++}
++
++static int uart_emit_char(char c)
++{
++	if (c == '\n') {
++		pl011_putc('\r');
++	}
++	pl011_putc(c);
++	return 1;
++}
++
++static int uart_emit_repeat(char ch, int count)
++{
++	int written = 0;
++	while (count-- > 0) {
++		written += uart_emit_char(ch);
++	}
++	return written;
++}
++
++static int uart_emit_string_len(const char *s, int len)
++{
++	int written = 0;
++	for (int i = 0; i < len; i++) {
++		written += uart_emit_char(s[i]);
++	}
++	return written;
++}
++
++static int format_unsigned(char *buf, unsigned long long value, unsigned base, bool upper)
++{
++	static const char digits_lo[] = "0123456789abcdef";
++	static const char digits_hi[] = "0123456789ABCDEF";
++	const char *digits = upper ? digits_hi : digits_lo;
++	char tmp[32];
++	int pos = 0;
++	int len = 0;
++
++	if (value == 0ULL) {
++		buf[0] = '0';
++		return 1;
++	}
++
++	while (value != 0ULL) {
++		tmp[pos++] = digits[value % base];
++		value /= base;
++	}
++
++	while (pos > 0) {
++		buf[len++] = tmp[--pos];
++	}
++
++	return len;
++}
++
++static int uart_vprintf(const char *fmt, va_list ap)
++{
++	int written = 0;
++
++	while (*fmt != '\0') {
++		if (*fmt != '%') {
++			written += uart_emit_char(*fmt++);
++			continue;
++		}
++
++		fmt++;
++
++		bool left_align = false;
++		bool zero_pad = false;
++		while (*fmt == '-' || *fmt == '0') {
++			if (*fmt == '-') {
++				left_align = true;
++			} else {
++				zero_pad = true;
++			}
++			fmt++;
++		}
++
++		int width = 0;
++		while (*fmt >= '0' && *fmt <= '9') {
++			width = (width * 10) + (*fmt - '0');
++			fmt++;
++		}
++
++		int length = 0;
++		while (*fmt == 'l') {
++			length++;
++			fmt++;
++		}
++
++		char spec = *fmt ? *fmt++ : '\0';
++		char numbuf[34];
++		const char *out = NULL;
++		int len = 0;
++		bool negative = false;
++
++		switch (spec) {
++		case '%':
++			written += uart_emit_char('%');
++			continue;
++		case 'c': {
++			numbuf[0] = (char)va_arg(ap, int);
++			out = numbuf;
++			len = 1;
++			break;
++		}
++		case 's':
++			out = va_arg(ap, const char *);
++			if (out == NULL) {
++				out = "<null>";
++			}
++			while (out[len] != '\0') {
++				len++;
++			}
++			break;
++		case 'p': {
++			uintptr_t value = (uintptr_t)va_arg(ap, void *);
++			numbuf[0] = '0';
++			numbuf[1] = 'x';
++			len = 2 + format_unsigned(&numbuf[2], (unsigned long long)value, 16U, false);
++			out = numbuf;
++			break;
++		}
++		case 'd':
++		case 'i': {
++			long long value;
++			if (length >= 2) {
++				value = va_arg(ap, long long);
++			} else if (length == 1) {
++				value = va_arg(ap, long);
++			} else {
++				value = va_arg(ap, int);
++			}
++			unsigned long long magnitude;
++			if (value < 0) {
++				negative = true;
++				magnitude = (unsigned long long)(-(value + 1)) + 1ULL;
++			} else {
++				magnitude = (unsigned long long)value;
++			}
++			len = format_unsigned(numbuf, magnitude, 10U, false);
++			out = numbuf;
++			break;
++		}
++		case 'u':
++		case 'x':
++		case 'X': {
++			unsigned long long value;
++			unsigned base = (spec == 'u') ? 10U : 16U;
++			bool upper = (spec == 'X');
++			if (length >= 2) {
++				value = va_arg(ap, unsigned long long);
++			} else if (length == 1) {
++				value = va_arg(ap, unsigned long);
++			} else {
++				value = va_arg(ap, unsigned int);
++			}
++			len = format_unsigned(numbuf, value, base, upper);
++			out = numbuf;
++			break;
++		}
++		default:
++			written += uart_emit_char('%');
++			if (spec != '\0') {
++				written += uart_emit_char(spec);
++			}
++			continue;
++		}
++
++		int content_len = len + (negative ? 1 : 0);
++		int pad = (width > content_len) ? (width - content_len) : 0;
++		char pad_char = (zero_pad && !left_align) ? '0' : ' ';
++
++		if (!left_align && pad_char == ' ') {
++			written += uart_emit_repeat(' ', pad);
++		}
++		if (negative) {
++			written += uart_emit_char('-');
++		}
++		if (!left_align && pad_char == '0') {
++			written += uart_emit_repeat('0', pad);
++		}
++		written += uart_emit_string_len(out, len);
++		if (left_align) {
++			written += uart_emit_repeat(' ', pad);
++		}
++	}
++
++	return written;
++}
++
++int freertos_uart_printf(const char *fmt, ...)
++{
++	va_list ap;
++	int len;
++
++	taskDISABLE_INTERRUPTS();
++	va_start(ap, fmt);
++	len = uart_vprintf(fmt, ap);
++	va_end(ap);
++	taskENABLE_INTERRUPTS();
++
++	return len;
++}
++
++int _write(int file, const char *ptr, int len)
++{
++	(void) file;
++	taskDISABLE_INTERRUPTS();
++	for (int i = 0; i < len; i++) {
++		if (ptr[i] == '\n') {
++			pl011_putc('\r');
++		}
++		pl011_putc(ptr[i]);
++	}
++	taskENABLE_INTERRUPTS();
++	return len;
++}
++
++static void gicv3_sre_init(void)
++{
++	uint64_t icc_sre = read_icc_sre_el1();
++	if ((icc_sre & 0x1U) == 0U) {
++		icc_sre |= 0x7U;
++		write_icc_sre_el1(icc_sre);
++	}
++
++	write_icc_pmr_el1(0xffU);
++	write_icc_igrpen1_el1(1U);
++	__asm volatile("isb");
++}
++
++static void gicv3_enable_timer_ppi(void)
++{
++	uintptr_t rdist = current_gicr_base ? current_gicr_base : find_current_redistributor();
++	uintptr_t sgi_base;
++	uint32_t irq = hw.timer_irq ? hw.timer_irq : TIMER_IRQ_ID;
++	uint32_t mask = 1U << irq;
++
++	if (rdist == 0U) {
++		return;
++	}
++
++	current_gicr_base = rdist;
++	sgi_base = rdist + GICR_SGI_BASE_OFF;
++
++	mmio_write32(sgi_base + GIC_DIST_IGROUPR, 0xffffffffU);
++	mmio_write32(sgi_base + GIC_DIST_IGROUPMODR, 0xffffffffU);
++	mmio_write32(sgi_base + GIC_DIST_ICFGR + 4, 0);
++	mmio_write32(sgi_base + GIC_DIST_ICPENDR, mask);
++	*(volatile uint8_t *)(sgi_base + GIC_DIST_IPRIORITYR + irq) =
++		(uint8_t)(portLOWEST_USABLE_INTERRUPT_PRIORITY << portPRIORITY_SHIFT);
++	mmio_write32(sgi_base + GIC_DIST_ISENABLER, mask);
++}
++
++static void freertos_tick_isr(void *arg)
++{
++	(void) arg;
++	FreeRTOS_Tick_Handler();
++}
++
++void freertos_platform_init(void)
++{
++	bool have_dtb;
++	have_dtb = freertos_fdt_probe(&hw);
++
++	if (have_dtb && hw.uart_base != 0U) {
++		uart_base = (uintptr_t)hw.uart_base;
++	}
++	if (have_dtb && hw.gicr_base != 0U) {
++		current_gicr_base = (uintptr_t)hw.gicr_base;
++	}
++
++	freertos_uart_puts_early("[freertos] platform init begin\r\n");
++	pl011_init(hw.uart_clock_hz);
++	gicv3_sre_init();
++	gicv3_enable_timer_ppi();
++	current_timer_handler = freertos_tick_isr;
++}
++
++uint32_t bench_timer_cycles_per_second(void)
++{
++	return (uint32_t) read_cntfrq();
++}
++
++uint32_t bench_timer_cycles_per_tick(void)
++{
++	return bench_timer_cycles_per_second() / configTICK_RATE_HZ;
++}
++
++bench_time_t bench_timer_cycles_get(void)
++{
++	return read_cntvct();
++}
++
++bench_time_t bench_timer_cycles_diff(bench_time_t trigger, bench_time_t sample)
++{
++	return sample - trigger;
++}
++
++bench_isr_handler_t bench_timer_isr_get(void)
++{
++	return current_timer_handler;
++}
++
++void bench_timer_isr_set(bench_isr_handler_t handler)
++{
++	current_timer_handler = handler;
++}
++
++void bench_timer_isr_restore(bench_isr_handler_t handler)
++{
++	current_timer_handler = handler;
++	write_cntv_tval(bench_timer_cycles_per_tick());
++	write_cntv_ctl(1);
++}
++
++bench_time_t bench_timer_isr_expiry_set(uint32_t usec)
++{
++	uint64_t delta = ((uint64_t) bench_timer_cycles_per_second() * usec) / 1000000ULL;
++	uint64_t now = read_cntvct();
++
++	if (delta == 0) {
++		delta = 1;
++	}
++
++	write_cntv_tval((uint32_t) delta);
++	write_cntv_ctl(1);
++	return now + delta;
++}
++
++void vConfigureTickInterrupt(void)
++{
++	tick_cycles = bench_timer_cycles_per_tick();
++	write_cntv_tval((uint32_t) tick_cycles);
++	write_cntv_ctl(1);
++}
++
++void vClearTickInterrupt(void)
++{
++	write_cntv_tval((uint32_t) tick_cycles);
++	write_cntv_ctl(1);
++	__asm volatile("dsb sy");
++	__asm volatile("isb sy");
++}
++
++void vApplicationIRQHandler(uint32_t ulICCIAR)
++{
++	uint32_t intid = ulICCIAR & 0x00ffffffU;
++
++	if (intid == (hw.timer_irq ? hw.timer_irq : TIMER_IRQ_ID) && current_timer_handler != NULL) {
++		current_timer_handler(NULL);
++	}
++}
+diff --git a/freertos/src/freertos_aarch64_guest/platform.h b/freertos/src/freertos_aarch64_guest/platform.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..a5c3256ca4908764665a9303cd5bbc595944d75b
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_guest/platform.h
+@@ -0,0 +1,25 @@
++#ifndef FREERTOS_AARCH64_GUEST_PLATFORM_H_
++#define FREERTOS_AARCH64_GUEST_PLATFORM_H_
++
++#include "bench_api.h"
++
++#include <stdint.h>
++
++void freertos_platform_init(void);
++int freertos_uart_printf(const char *fmt, ...);
++void freertos_uart_puts_early(const char *s);
++void freertos_set_boot_fdt_ptr(const void *fdt);
++bench_isr_handler_t bench_timer_isr_get(void);
++void bench_timer_isr_set(bench_isr_handler_t handler);
++void bench_timer_isr_restore(bench_isr_handler_t handler);
++bench_time_t bench_timer_isr_expiry_set(uint32_t usec);
++bench_time_t bench_timer_cycles_diff(bench_time_t trigger, bench_time_t sample);
++bench_time_t bench_timer_cycles_get(void);
++uint32_t bench_timer_cycles_per_second(void);
++uint32_t bench_timer_cycles_per_tick(void);
++
++void vConfigureTickInterrupt(void);
++void vClearTickInterrupt(void);
++void vApplicationIRQHandler(uint32_t ulICCIAR);
++
++#endif
+diff --git a/freertos/src/freertos_aarch64_guest/vectors.S b/freertos/src/freertos_aarch64_guest/vectors.S
+new file mode 100644
+index 0000000000000000000000000000000000000000..5011f2dfac7bbf02bad8d81fe4c2d829479d2df5
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_guest/vectors.S
+@@ -0,0 +1,70 @@
++    .section .vectors, "ax"
++    .globl _vector_table
++    .globl _freertos_vector_table
++
++_vector_table:
++    b _boot
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++
++    .align 11
++_freertos_vector_table:
++    b FreeRTOS_SWI_Handler
++    .space 0x7c
++    b FreeRTOS_IRQ_Handler
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b FreeRTOS_SWI_Handler
++    .space 0x7c
++    b FreeRTOS_IRQ_Handler
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
++    b .
++    .space 0x7c
+diff --git a/freertos/src/freertos_aarch64_qemu/CMakeLists.txt b/freertos/src/freertos_aarch64_qemu/CMakeLists.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..7e0781a9fc6016e38459de5c50c75cab7eb218bf
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_qemu/CMakeLists.txt
+@@ -0,0 +1,9 @@
++add_subdirectory(../freertos_aarch64_guest/arch arch)
++
++target_sources(app PRIVATE
++    ../freertos_aarch64_guest/fdt.c
++    ../freertos_aarch64_guest/platform.c
++    ../freertos_aarch64_guest/vectors.S
++    ../freertos_aarch64_guest/boot.S
++    ../freertos_aarch64_guest/bench_all_basic.c
++)
+diff --git a/freertos/src/freertos_aarch64_qemu/freertos_aarch64_qemu.cmake b/freertos/src/freertos_aarch64_qemu/freertos_aarch64_qemu.cmake
+new file mode 100644
+index 0000000000000000000000000000000000000000..1f2cc51ef50415760241019bd816b15a2d6060cb
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_qemu/freertos_aarch64_qemu.cmake
+@@ -0,0 +1,41 @@
++# Recall that this fragment is included by "../../CMakeLists.txt".
++
++set(AARCH64_GCC_DIR "/code/rtos/zephyr-sdk-0.16.5-1/aarch64-zephyr-elf/bin" CACHE PATH "AArch64 GCC toolchain bin dir")
++
++set(CMAKE_SYSTEM_NAME Generic)
++set(CMAKE_C_COMPILER ${AARCH64_GCC_DIR}/aarch64-zephyr-elf-gcc CACHE FILEPATH "" FORCE)
++set(CMAKE_ASM_COMPILER ${AARCH64_GCC_DIR}/aarch64-zephyr-elf-gcc CACHE FILEPATH "" FORCE)
++set(CMAKE_OBJCOPY ${AARCH64_GCC_DIR}/aarch64-zephyr-elf-objcopy CACHE FILEPATH "" FORCE)
++
++set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DFREERTOS_AARCH64_QEMU -DGUEST -ffreestanding -fno-common -fno-pic -fno-pie -mcmodel=large -mgeneral-regs-only -march=armv8-a")
++set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DFREERTOS_BENCH_PL011_BASE=0x09000000UL -DFREERTOS_BENCH_GICR_BASE=0x080A0000UL -DFREERTOS_BENCH_TIMER_IRQ_ID=27U -DFREERTOS_BENCH_UART_CLK_HZ=24000000UL")
++set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -DGUEST -ffreestanding -fno-pic -fno-pie -mcmodel=large -mgeneral-regs-only -march=armv8-a")
++set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -nostartfiles -static -Wl,-no-pie -Wl,--build-id=none -Wl,-T${CMAKE_CURRENT_SOURCE_DIR}/src/freertos_aarch64_qemu/linker.ld")
++
++enable_language(ASM)
++
++include_directories(h)
++include_directories(src/freertos_aarch64_guest)
++include_directories(src/freertos)
++include_directories(/code/rtos/FreeRTOS-Kernel/include)
++include_directories(/code/rtos/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE)
++
++add_executable(app
++    src/freertos_aarch64_guest/bench_porting_layer_freertos.c
++    /code/rtos/FreeRTOS-Kernel/list.c
++    /code/rtos/FreeRTOS-Kernel/queue.c
++    /code/rtos/FreeRTOS-Kernel/tasks.c
++    /code/rtos/FreeRTOS-Kernel/timers.c
++    /code/rtos/FreeRTOS-Kernel/portable/MemMang/heap_4.c
++    /code/rtos/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE/port.c
++    /code/rtos/FreeRTOS-Kernel/portable/GCC/ARM_AARCH64_SRE/portASM.S
++)
++
++target_compile_options(app PRIVATE --specs=nano.specs --specs=nosys.specs)
++target_link_options(app PRIVATE --specs=nano.specs --specs=nosys.specs)
++
++add_custom_command(
++    TARGET app POST_BUILD
++    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:app> ${CMAKE_BINARY_DIR}/freertos-aarch64-qemu.bin
++    BYPRODUCTS ${CMAKE_BINARY_DIR}/freertos-aarch64-qemu.bin
++)
+diff --git a/freertos/src/freertos_aarch64_qemu/linker.ld b/freertos/src/freertos_aarch64_qemu/linker.ld
+new file mode 100644
+index 0000000000000000000000000000000000000000..113db9298f8d7b0ebdae7b080dbfd869b8ac96c5
+--- /dev/null
++++ b/freertos/src/freertos_aarch64_qemu/linker.ld
+@@ -0,0 +1,56 @@
++ENTRY(_boot)
++
++MEMORY
++{
++  ram (rwx) : ORIGIN = 0x40000000, LENGTH = 0x08000000
++}
++
++SECTIONS
++{
++  . = ORIGIN(ram);
++
++  .vectors : ALIGN(2048) {
++    KEEP(*(.vectors))
++  } > ram
++
++  .text : ALIGN(16) {
++    *(.text.boot)
++    *(.text)
++    *(.text.*)
++    *(.rodata)
++    *(.rodata.*)
++    *(.gnu.linkonce.t*)
++    *(.gnu.linkonce.r*)
++  } > ram
++
++  .data : ALIGN(16) {
++    __data_start__ = .;
++    *(.data)
++    *(.data.*)
++    __data_end__ = .;
++  } > ram
++
++  .bss (NOLOAD) : ALIGN(16) {
++    __bss_start__ = .;
++    *(.bss)
++    *(.bss.*)
++    *(COMMON)
++    __bss_end__ = .;
++  } > ram
++
++  .boot_stack (NOLOAD) : ALIGN(16) {
++    __boot_stack_bottom = .;
++    . = . + 0x8000;
++    __boot_stack_top = .;
++  } > ram
++
++  end = .;
++  _end = .;
++  __end__ = .;
++
++  /DISCARD/ : {
++    *(.comment)
++    *(.note*)
++    *(.eh_frame*)
++  }
++}

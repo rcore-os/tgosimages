@@ -12,6 +12,7 @@ source "${SCRIPT_DIR}/../lib/rootfs.sh"
 
 # Source directories
 LINUX_REPO_URL="https://github.com/torvalds/linux.git"
+LINUX_REF="74fe02ce122a6103f207d29fafc8b3a53de6abaf"
 LINUX_SRC_DIR="${BUILD_DIR}/qemu_linux"
 LINUX_PATCH_DIR="${ROOT_DIR}/patches/qemu"
 ROOTFS_BUILDERS=()
@@ -92,6 +93,8 @@ linux() {
 
     info "Cloning ${ARCH} Linux source repository $LINUX_REPO_URL"
     clone_repository "$LINUX_REPO_URL" "$LINUX_SRC_DIR"
+    info "Checking out ${ARCH} Linux ref ${LINUX_REF}"
+    checkout_ref "$LINUX_SRC_DIR" "$LINUX_REF"
 
     info "Applying patches..."
     apply_patches "$LINUX_PATCH_DIR" "$LINUX_SRC_DIR"

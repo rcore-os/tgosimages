@@ -11,6 +11,7 @@ source "${SCRIPT_DIR}/../lib/rootfs.sh"
 
 # Repository and directory configuration
 LINUX_REPO_URL="git@github.com:arceos-hypervisor/bst-a1000.git"
+LINUX_REF="1ab6e36a181b74a6f3db6a37acd51d62ab255180"
 LINUX_SRC_DIR="${BUILD_DIR}/bst-a1000"
 LINUX_PATCH_DIR="${ROOT_DIR}/patches/bst-a1000"
 PLATFORM_IMAGES_DIR="${ROOT_DIR}/IMAGES/bst-a1000"
@@ -44,6 +45,8 @@ linux() {
     if [[ "$@" != *"clean"* ]]; then
         info "Cloning Linux source repository $LINUX_REPO_URL -> $LINUX_SRC_DIR"
         clone_repository "$LINUX_REPO_URL" "$LINUX_SRC_DIR"
+        info "Checking out Linux ref ${LINUX_REF}"
+        checkout_ref "$LINUX_SRC_DIR" "$LINUX_REF"
         
         if [[ -d "$LINUX_PATCH_DIR" ]]; then
             info "Applying patches..."

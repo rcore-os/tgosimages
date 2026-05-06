@@ -153,6 +153,75 @@ _rootfs_inject_tree_via_loop_mount() {
     return "${status}"
 }
 
+# Extract ext partition from disk image, inject via debugfs, write back (no root required)
+_rootfs_inject_tree_via_partition_extract() {
+    local image_path="$1"
+    local source_dir="$2"
+    local part_info part_start part_size
+    local tmp_partition
+
+    command -v sfdisk >/dev/null 2>&1 || return 1
+    command -v debugfs >/dev/null 2>&1 || return 1
+
+    # Find the largest Linux/ext partition (sectors are 512-byte units)
+    part_info="$(
+        sfdisk -d "${image_path}" 2>/dev/null | awk -F'[=, ]+' '
+            /start=/ {
+                start = 0; size = 0; type = ""
+                for (i = 1; i <= NF; i++) {
+                    if ($i == "start") start = $(i+1)
+                    if ($i == "size") size = $(i+1)
+                    if ($i == "type") type = $(i+1)
+                }
+                if (type == "83" || type ~ /ext|linux/) {
+                    if (size+0 > max_size+0) {
+                        max_size = size+0
+                        max_start = start+0
+                    }
+                }
+            }
+            END {
+                if (max_size > 0) print max_start, max_size
+            }
+        '
+    )"
+
+    if [[ -z "${part_info}" ]]; then
+        warn "No Linux/ext partition found in disk image: ${image_path}"
+        return 1
+    fi
+
+    part_start="${part_info%% *}"
+    part_size="${part_info##* }"
+    tmp_partition="$(mktemp "${BUILD_DIR}/rootfs-part.XXXXXX")"
+    rm -f "${tmp_partition}"
+
+    # Extract the partition
+    dd if="${image_path}" of="${tmp_partition}" bs=512 skip="${part_start}" count="${part_size}" >/dev/null 2>&1 || {
+        warn "Failed to extract partition from disk image: ${image_path}"
+        rm -f "${tmp_partition}"
+        return 1
+    }
+
+    # Inject via debugfs
+    _rootfs_inject_tree_via_debugfs "${tmp_partition}" "${source_dir}" || {
+        warn "debugfs injection failed for extracted partition from ${image_path}"
+        rm -f "${tmp_partition}"
+        return 1
+    }
+
+    # Write the modified partition back
+    info "Writing modified partition back to ${image_path}"
+    dd if="${tmp_partition}" of="${image_path}" bs=512 seek="${part_start}" count="${part_size}" conv=notrunc >/dev/null 2>&1 || {
+        warn "Failed to write partition back to disk image: ${image_path}"
+        rm -f "${tmp_partition}"
+        return 1
+    }
+
+    rm -f "${tmp_partition}"
+    return 0
+}
+
 rootfs_inject_guest_stage() {
     local rootfs_target="$1"
     local source_dir="$2"
@@ -202,7 +271,8 @@ rootfs_inject_guest_stage() {
     local stage_dir
     stage_dir="$(mktemp -d "${BUILD_DIR}/rootfs-inject.XXXXXX")"
     rootfs_stage_guest_tree "${stage_dir}" "${source_dir}"
-    _rootfs_inject_tree_via_loop_mount "${rootfs_target}" "${stage_dir}" || {
+    _rootfs_inject_tree_via_partition_extract "${rootfs_target}" "${stage_dir}" \
+        || _rootfs_inject_tree_via_loop_mount "${rootfs_target}" "${stage_dir}" || {
         rm -rf "${stage_dir}"
         die "Failed to inject guest payload into disk image: ${rootfs_target}"
     }
