@@ -12,7 +12,7 @@ source "${SCRIPT_DIR}/../lib/utils.sh"
 FREERTOS_REPO_URL="${FREERTOS_REPO_URL:-https://github.com/zephyrproject-rtos/rtos-benchmark.git}"
 FREERTOS_REF="${FREERTOS_REF:-3458360e7e038ca84a28c678e9bb7e967c565d87}"
 FREERTOS_KERNEL_REPO_URL="${FREERTOS_KERNEL_REPO_URL:-https://github.com/FreeRTOS/FreeRTOS-Kernel.git}"
-FREERTOS_KERNEL_REF="${FREERTOS_KERNEL_REF:-d1f551e2539ef7324013aebf22cd430a690e0d42}"
+FREERTOS_KERNEL_REF="${FREERTOS_KERNEL_REF:-a8c9d351520d43bd94692361bd67b6d798985c98}"
 FREERTOS_KERNEL_SRC_DIR="${BUILD_DIR}/FreeRTOS-Kernel"
 FREERTOS_PATCH_DIR="${ROOT_DIR}/patches/freertos"
 if [[ -x "/code/rtos/zephyr-sdk-0.16.5-1/aarch64-zephyr-elf/bin/aarch64-zephyr-elf-gcc" ]]; then

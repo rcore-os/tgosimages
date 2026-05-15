@@ -370,7 +370,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                     ;;
                 all)
                     linux "${BUILD_ARGS[@]}"
-                    arceos "${BUILD_ARGS[@]}"
+                    if [[ "${ARCH}" != "loongarch64" ]]; then
+                        arceos "${BUILD_ARGS[@]}"
+                    fi
                     if [[ "${ARCH}" != "loongarch64" ]]; then
                         nimbos "${BUILD_ARGS[@]}"
                     fi

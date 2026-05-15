@@ -10,7 +10,7 @@ source "${SCRIPT_DIR}/../lib/utils.sh"
 
 # Default values
 RTTHREAD_REPO_URL="${RTTHREAD_REPO_URL:-https://github.com/RT-Thread/rt-thread.git}"
-RTTHREAD_REF="${RTTHREAD_REF:-ddf52e2cdd977f14fc04035c88672ac204aec713}"
+RTTHREAD_REF="${RTTHREAD_REF:-94df46c5fd9a381bd70a521257c7943952054013}"
 RTTHREAD_SRC_DIR="${RTTHREAD_SRC_DIR:-${BUILD_DIR}/rtthread}"
 RTTHREAD_PATCH_DIR="${RTTHREAD_PATCH_DIR:-${ROOT_DIR}/patches/rtthread}"
 
@@ -135,7 +135,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             RTTHREAD_PLATFORM_BIN_NAME="rtthread_a64.bin"
             ;;
         roc-rk3568-pc)
-            RTTHREAD_PLATFORM_DIR="$RTTHREAD_SRC_DIR/bsp/rockchip/rk3568"
+            RTTHREAD_PLATFORM_DIR="$RTTHREAD_SRC_DIR/bsp/rockchip/rk3500"
             RTTHREAD_PLATFORM_BIN_NAME="rtthread.bin"
             ;;
         all)

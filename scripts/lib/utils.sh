@@ -160,15 +160,24 @@ checkout_ref() {
         git fetch --quiet --depth=1 origin "$ref" 2>/dev/null || true
     fi
     git fetch --all --tags --quiet
-    if git rev-parse --verify "$ref" >/dev/null 2>&1; then
-        git checkout --quiet --force "$ref"
-        git clean -fd --quiet
-        echo "Switched to $ref"
-        popd >/dev/null
-        return 0
-    else
+    if ! git rev-parse --verify "$ref" >/dev/null 2>&1; then
+        echo "[FETCH] Ref not found in shallow clone, unshallowing..."
+        git fetch --unshallow --quiet 2>/dev/null || true
+        git fetch --all --tags --quiet
+    fi
+    if ! git rev-parse --verify "$ref" >/dev/null 2>&1; then
         echo "Error: Branch, tag, or commit not found: $ref" >&2
         popd >/dev/null
         return 2
     fi
+    # Try checkout; if it fails (e.g. "unable to read tree"), unshallow and retry
+    if ! git checkout --quiet --force "$ref" 2>&1; then
+        echo "[FETCH] Checkout failed in shallow clone, unshallowing..."
+        git fetch --unshallow --quiet 2>/dev/null || true
+        git checkout --quiet --force "$ref"
+    fi
+    git clean -fd --quiet
+    echo "Switched to $ref"
+    popd >/dev/null
+    return 0
 }

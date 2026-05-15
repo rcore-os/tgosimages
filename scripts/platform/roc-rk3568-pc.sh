@@ -97,6 +97,7 @@ linux() {
             cp "${REMOTE_DIR}/kernel/arch/arm64/boot/Image" "${linux_images_dir}/roc-rk3568-pc" 2>/dev/null || true
             cp "${REMOTE_DIR}/u-boot/uboot.img" "${linux_images_dir}/roc-rk3568-pc_uboot.img" 2>/dev/null || true
             cp "${REMOTE_DIR}/${REMOTE_IMAGES_DIR}/rootfs.img" "${PLATFORM_ROOTFS_DIR}/roc-rk3568-pc.img" 2>/dev/null || true
+            chmod a+rw "${PLATFORM_ROOTFS_DIR}/roc-rk3568-pc.img" 2>/dev/null || true
 
         fi
     else

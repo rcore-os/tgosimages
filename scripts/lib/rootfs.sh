@@ -153,6 +153,45 @@ _rootfs_inject_tree_via_loop_mount() {
     return "${status}"
 }
 
+# Probe partitions by extracting and checking filesystem type (fallback for unknown GPT GUIDs)
+_probe_partitions_for_ext() {
+    local image_path="$1"
+    local json_start json_size p_start p_size tmp_part fs_type
+    local best_start="" best_size=0
+
+    # Parse partition table via JSON output
+    while IFS= read -r line; do
+        json_start="$(echo "$line" | awk '{print $1}')"
+        json_size="$(echo "$line" | awk '{print $2}')"
+        [[ -n "${json_start}" && -n "${json_size}" ]] || continue
+
+        tmp_part="$(mktemp "${BUILD_DIR}/rootfs-probe.XXXXXX")"
+        dd if="${image_path}" of="${tmp_part}" bs=512 skip="${json_start}" count="${json_size}" >/dev/null 2>&1 || {
+            rm -f "${tmp_part}"
+            continue
+        }
+
+        fs_type="$(_rootfs_detect_fs_type "${tmp_part}")"
+        rm -f "${tmp_part}"
+
+        if [[ "${fs_type}" =~ ^ext[234]$ ]]; then
+            if [[ "${json_size}" -gt "${best_size}" ]]; then
+                best_size="${json_size}"
+                best_start="${json_start}"
+            fi
+        fi
+    done < <(sfdisk -J "${image_path}" 2>/dev/null | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for p in data.get('partitiontable', {}).get('partitions', []):
+    print(p.get('start', 0), p.get('size', 0))
+" 2>/dev/null)
+
+    if [[ -n "${best_start}" ]]; then
+        printf '%s %s\n' "${best_start}" "${best_size}"
+    fi
+}
+
 # Extract ext partition from disk image, inject via debugfs, write back (no root required)
 _rootfs_inject_tree_via_partition_extract() {
     local image_path="$1"
@@ -162,6 +201,10 @@ _rootfs_inject_tree_via_partition_extract() {
 
     command -v sfdisk >/dev/null 2>&1 || return 1
     command -v debugfs >/dev/null 2>&1 || return 1
+
+    # Well-known GPT type GUIDs for Linux partitions (case-insensitive)
+    local gpt_linux_guids
+    gpt_linux_guids="0fc63daf-8483-4772-8e79-3d69d8477de4|44479540-f297-41b2-9af7-d131d5f0458a|4f68bce3-e8cd-4db1-96e7-fbcaf984b709|b921b045-1df0-41c3-af44-4c6f280d3fae|69dad710-2ce4-4e3c-b16c-21a1d49abed3"
 
     # Find the largest Linux/ext partition (sectors are 512-byte units)
     part_info="$(
@@ -173,7 +216,8 @@ _rootfs_inject_tree_via_partition_extract() {
                     if ($i == "size") size = $(i+1)
                     if ($i == "type") type = $(i+1)
                 }
-                if (type == "83" || type ~ /ext|linux/) {
+                # MBR type 83 (Linux), or GPT Linux filesystem GUIDs, or name contains linux/ext
+                if (type == "83" || tolower(type) ~ /'"${gpt_linux_guids}"'/ || tolower(type) ~ /ext|linux/) {
                     if (size+0 > max_size+0) {
                         max_size = size+0
                         max_start = start+0
@@ -185,6 +229,11 @@ _rootfs_inject_tree_via_partition_extract() {
             }
         '
     )"
+
+    # Fallback: probe each partition's actual filesystem
+    if [[ -z "${part_info}" ]]; then
+        part_info="$( _probe_partitions_for_ext "${image_path}" )"
+    fi
 
     if [[ -z "${part_info}" ]]; then
         warn "No Linux/ext partition found in disk image: ${image_path}"
@@ -212,7 +261,8 @@ _rootfs_inject_tree_via_partition_extract() {
 
     # Write the modified partition back
     info "Writing modified partition back to ${image_path}"
-    dd if="${tmp_partition}" of="${image_path}" bs=512 seek="${part_start}" count="${part_size}" conv=notrunc >/dev/null 2>&1 || {
+    chmod u+w "${image_path}" 2>/dev/null || sudo chmod a+w "${image_path}" 2>/dev/null || true
+    dd if="${tmp_partition}" of="${image_path}" bs=512 seek="${part_start}" count="${part_size}" conv=notrunc >/dev/null || {
         warn "Failed to write partition back to disk image: ${image_path}"
         rm -f "${tmp_partition}"
         return 1

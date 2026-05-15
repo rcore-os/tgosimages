@@ -10,7 +10,7 @@ source "${SCRIPT_DIR}/../lib/utils.sh"
 
 # Default values
 ARCEOS_REPO_URL="${ARCEOS_REPO_URL:-https://github.com/rcore-os/tgoskits.git}"
-ARCEOS_REF="${ARCEOS_REF:-4927ff8ad4c156ef06bc9b5cc4e1ab547fe1a425}"
+ARCEOS_REF="${ARCEOS_REF:-b9299158932a89b69ced203b071f752de79836aa}"
 ARCEOS_SRC_DIR="${ARCEOS_SRC_DIR:-${BUILD_DIR}/tgoskits}"
 ARCEOS_PATCH_DIR="${ARCEOS_PATCH_DIR:-${ROOT_DIR}/patches/arceos}"
 
@@ -121,6 +121,13 @@ arceos_build() {
 
     if [[ -d "$ARCEOS_SRC_DIR" ]]; then
         pushd "$ARCEOS_SRC_DIR" >/dev/null
+
+        # Remove stale axbuild snapshot to avoid cached plat_dyn/conflicts
+        local snapshot_file="$ARCEOS_SRC_DIR/.arceos.toml"
+        if [[ -f "$snapshot_file" ]]; then
+            info "Removing stale axbuild snapshot: $snapshot_file"
+            rm -f "$snapshot_file"
+        fi
 
         local build_cmd="cargo arceos build --package ax-helloworld-myplat --arch $arch $ARCEOS_ARGS"
         info "EXEC: $build_cmd"

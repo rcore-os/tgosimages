@@ -61,7 +61,7 @@ linux() {
         pushd "$LINUX_SRC_DIR/kernel" >/dev/null
         if [[ "$@" != *"clean"* ]]; then
             info "Configuring kernel: make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 O=build_bst bsta1000b_release_defconfig"
-            chmod -R 755 scripts/
+            chmod -R 755 scripts/ arch/arm64/kernel/vdso/gen_vdso_offsets.sh
             make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 O=build_bst bsta1000b_release_defconfig
 
             info "Starting compilation: make CROSS_COMPILE=aarch64-linux-gnu-  ARCH=arm64 O=build_bst -j$(nproc) $@"
@@ -69,9 +69,9 @@ linux() {
 
             info "Copying build artifacts -> $linux_images_dir"
             mkdir -p "$linux_images_dir"
-            cp "$LINUX_SRC_DIR/build_bst/arch/arm64/boot/Image" "$linux_images_dir/"
-            cp "$LINUX_SRC_DIR/../bst_dt/bsta1000b-fada.dtb" "$linux_images_dir/"
-            cp "$LINUX_SRC_DIR/../bst_dt/bsta1000b-fadb.dtb" "$linux_images_dir/"
+            cp "$LINUX_SRC_DIR/kernel/build_bst/arch/arm64/boot/Image" "$linux_images_dir/"
+            cp "$LINUX_SRC_DIR/bst_dt/bsta1000b-fada.dtb" "$linux_images_dir/"
+            cp "$LINUX_SRC_DIR/bst_dt/bsta1000b-fadb.dtb" "$linux_images_dir/"
         else
             info "Cleaning: make -j$(nproc) clean"
             make -j$(nproc) clean 2>&1

@@ -1,0 +1,521 @@
+diff --git a/components/libc/compilers/common/include/musl_compat.h b/components/libc/compilers/common/include/musl_compat.h
+new file mode 100644
+index 0000000000..02189306ff
+--- /dev/null
++++ b/components/libc/compilers/common/include/musl_compat.h
+@@ -0,0 +1,160 @@
++/*
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * Compatibility header providing musl-libc/Linux definitions needed by
++ * RT-Thread LWP when building with bare-metal newlib toolchain.
++ */
++
++#ifndef __MUSL_COMPAT_H__
++#define __MUSL_COMPAT_H__
++
++/* ── POSIX / Linux errno ─────────────────────────────────────────────── */
++
++#ifndef ERESTART
++#define ERESTART        85
++#endif
++
++/* ── Missing types ───────────────────────────────────────────────────── */
++
++#ifndef __clockid_t_defined
++typedef int clockid_t;
++#define __clockid_t_defined
++#endif
++
++#ifndef __timer_t_defined
++typedef void *timer_t;
++#define __timer_t_defined
++#endif
++
++#ifndef __suseconds_t_defined
++typedef long suseconds_t;
++#define __suseconds_t_defined
++#endif
++
++#ifndef __clock_t_defined
++typedef long clock_t;
++#define __clock_t_defined
++#endif
++
++#ifndef _PID_T_DECLARED
++typedef int pid_t;
++#define _PID_T_DECLARED
++#endif
++
++/* ── Signal flags (SA_*) ─────────────────────────────────────────────── */
++
++#ifndef SA_NOCLDSTOP
++#define SA_NOCLDSTOP    0x00000001
++#endif
++#ifndef SA_NOCLDWAIT
++#define SA_NOCLDWAIT    0x00000002
++#endif
++#ifndef SA_SIGINFO
++#define SA_SIGINFO      0x00000004
++#endif
++#ifndef SA_RESTORER
++#define SA_RESTORER     0x04000000
++#endif
++#ifndef SA_ONSTACK
++#define SA_ONSTACK      0x08000000
++#endif
++#ifndef SA_RESTART
++#define SA_RESTART      0x10000000
++#endif
++#ifndef SA_NODEFER
++#define SA_NODEFER      0x40000000
++#endif
++
++/* ── SI_* codes ──────────────────────────────────────────────────────── */
++
++#ifndef SI_KERNEL
++#define SI_KERNEL       0x80
++#endif
++
++/* ── CLD_* codes (for SIGCHLD si_code) ───────────────────────────────── */
++
++#ifndef CLD_EXITED
++#define CLD_EXITED      1
++#endif
++#ifndef CLD_KILLED
++#define CLD_KILLED      2
++#endif
++#ifndef CLD_DUMPED
++#define CLD_DUMPED      3
++#endif
++#ifndef CLD_TRAPPED
++#define CLD_TRAPPED     4
++#endif
++#ifndef CLD_STOPPED
++#define CLD_STOPPED     5
++#endif
++#ifndef CLD_CONTINUED
++#define CLD_CONTINUED   6
++#endif
++
++/* ── Wait / status macros ────────────────────────────────────────────── */
++
++#ifndef WEXITSTATUS
++#define WEXITSTATUS(s)  (((s) >> 8) & 0xff)
++#endif
++#ifndef WTERMSIG
++#define WTERMSIG(s)     ((s) & 0x7f)
++#endif
++#ifndef WIFSTOPPED
++#define WIFSTOPPED(s)   (WTERMSIG(s) == 0x7f)
++#endif
++#ifndef WIFSIGNALED
++#define WIFSIGNALED(s)  (((signed char)(((s) & 0x7f) + 1) >> 1) > 0)
++#endif
++#ifndef WIFCONTINUED
++#define WIFCONTINUED(s) ((s) == 0xffff)
++#endif
++
++/* ── File flags ──────────────────────────────────────────────────────── */
++
++#ifndef O_CLOEXEC
++#define O_CLOEXEC       02000000
++#endif
++#ifndef O_DIRECT
++#define O_DIRECT        040000
++#endif
++#ifndef F_DUPFD_CLOEXEC
++#define F_DUPFD_CLOEXEC 1030
++#endif
++#ifndef O_LARGEFILE
++#define O_LARGEFILE     0400000
++#endif
++
++/* ── CPU set ──────────────────────────────────────────────────────────── */
++
++#ifndef _CPU_SET_T_defined
++#define _CPU_SET_T_defined
++typedef struct { unsigned long __bits[128 / sizeof(long)]; } cpu_set_t;
++#endif
++
++#ifndef CPU_SET_SIZE
++#define CPU_SET_SIZE (sizeof(cpu_set_t))
++#endif
++
++#ifndef CPU_ZERO_S
++#define CPU_ZERO_S(size, set)   do { size_t _i; for (_i = 0; _i < (size)/sizeof(long); _i++) ((long*)(set))[_i] = 0; } while(0)
++#endif
++
++#ifndef CPU_SET_S
++#define CPU_SET_S(cpu, size, set) do { if ((size_t)(cpu) < 8*(size)) ((long*)(set))[(cpu)/(8*sizeof(long))] |= (1UL << ((cpu) % (8*sizeof(long)))); } while(0)
++#endif
++
++#ifndef CPU_ISSET_S
++#define CPU_ISSET_S(cpu, size, set) (((size_t)(cpu) < 8*(size)) ? (((long*)(set))[(cpu)/(8*sizeof(long))] & (1UL << ((cpu) % (8*sizeof(long))))) != 0 : 0)
++#endif
++
++/* ── siginfo_t extensions ────────────────────────────────────────────── */
++/*
++ * The minimal newlib/RT-Thread siginfo_t only has si_signo, si_code, si_value.
++ * LWP code expects additional members. We cannot modify the struct in-place,
++ * so code using these members must be adapted; this header only ensures the
++ * *types and constants* are available. The siginfo_t members like si_pid,
++ * si_status etc. need to be handled at the source level.
++ */
++
++#endif /* __MUSL_COMPAT_H__ */
+diff --git a/components/libc/compilers/common/include/sys/epoll.h b/components/libc/compilers/common/include/sys/epoll.h
+new file mode 100644
+index 0000000000..8d17cf0240
+--- /dev/null
++++ b/components/libc/compilers/common/include/sys/epoll.h
+@@ -0,0 +1,49 @@
++/*
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * Stub sys/epoll.h for builds without musl libc.
++ */
++#ifndef _SYS_EPOLL_H
++#define _SYS_EPOLL_H
++
++#include <sys/types.h>
++
++#define EPOLLIN          0x001
++#define EPOLLPRI         0x002
++#define EPOLLOUT         0x004
++#define EPOLLERR         0x008
++#define EPOLLHUP         0x010
++#define EPOLLRDNORM      0x040
++#define EPOLLRDBAND      0x080
++#define EPOLLWRNORM      0x100
++#define EPOLLWRBAND      0x200
++#define EPOLLMSG         0x400
++#define EPOLLRDHUP       0x2000
++#define EPOLLEXCLUSIVE   (1U << 28)
++#define EPOLLWAKEUP      (1U << 29)
++#define EPOLLONESHOT     (1U << 30)
++#define EPOLLET          (1U << 31)
++
++#define EPOLL_CTL_ADD    1
++#define EPOLL_CTL_DEL    2
++#define EPOLL_CTL_MOD    3
++
++typedef union epoll_data {
++    void    *ptr;
++    int      fd;
++    uint32_t u32;
++    uint64_t u64;
++} epoll_data_t;
++
++struct epoll_event {
++    uint32_t     events;
++    epoll_data_t data;
++};
++
++int epoll_create(int size);
++int epoll_create1(int flags);
++int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
++int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);
++int epoll_pwait(int epfd, struct epoll_event *events, int maxevents, int timeout, const sigset_t *sigmask);
++
++#endif /* _SYS_EPOLL_H */
+diff --git a/components/libc/compilers/common/include/sys/signalfd.h b/components/libc/compilers/common/include/sys/signalfd.h
+new file mode 100644
+index 0000000000..5a517f451c
+--- /dev/null
++++ b/components/libc/compilers/common/include/sys/signalfd.h
+@@ -0,0 +1,37 @@
++/*
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * Stub sys/signalfd.h for builds without musl libc.
++ */
++#ifndef _SYS_SIGNALFD_H
++#define _SYS_SIGNALFD_H
++
++#include <signal.h>
++#include <sys/types.h>
++
++#define SFD_CLOEXEC     02000000
++#define SFD_NONBLOCK    04000
++
++struct signalfd_siginfo {
++    uint32_t ssi_signo;
++    int32_t  ssi_errno;
++    int32_t  ssi_code;
++    uint32_t ssi_pid;
++    uint32_t ssi_uid;
++    int32_t  ssi_fd;
++    uint32_t ssi_tid;
++    uint32_t ssi_band;
++    uint32_t ssi_overrun;
++    uint32_t ssi_trapno;
++    int32_t  ssi_status;
++    int32_t  ssi_int;
++    uint64_t ssi_ptr;
++    uint64_t ssi_utime;
++    uint64_t ssi_stime;
++    uint64_t ssi_addr;
++    uint8_t  ssi_pad[128 - 14*4 - 4*8];
++};
++
++int signalfd(int fd, const sigset_t *mask, int flags);
++
++#endif /* _SYS_SIGNALFD_H */
+diff --git a/components/libc/compilers/common/include/sys/sysinfo.h b/components/libc/compilers/common/include/sys/sysinfo.h
+new file mode 100644
+index 0000000000..0fcc66a85f
+--- /dev/null
++++ b/components/libc/compilers/common/include/sys/sysinfo.h
+@@ -0,0 +1,29 @@
++/*
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * Stub sys/sysinfo.h for builds without musl libc.
++ */
++#ifndef _SYS_SYSINFO_H
++#define _SYS_SYSINFO_H
++
++#include <sys/types.h>
++
++struct sysinfo {
++    long uptime;
++    unsigned long loads[3];
++    unsigned long totalram;
++    unsigned long freeram;
++    unsigned long sharedram;
++    unsigned long bufferram;
++    unsigned long totalswap;
++    unsigned long freeswap;
++    unsigned short procs;
++    unsigned long totalhigh;
++    unsigned long freehigh;
++    unsigned int mem_unit;
++    char _f[20 - 2 * sizeof(long) - sizeof(int)];
++};
++
++int sysinfo(struct sysinfo *info);
++
++#endif /* _SYS_SYSINFO_H */
+diff --git a/components/libc/compilers/common/include/sys/timerfd.h b/components/libc/compilers/common/include/sys/timerfd.h
+new file mode 100644
+index 0000000000..bd06d07db8
+--- /dev/null
++++ b/components/libc/compilers/common/include/sys/timerfd.h
+@@ -0,0 +1,22 @@
++/*
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * Stub sys/timerfd.h for builds without musl libc.
++ */
++#ifndef _SYS_TIMERFD_H
++#define _SYS_TIMERFD_H
++
++#include <time.h>
++#include <sys/types.h>
++
++#define TFD_CLOEXEC     02000000
++#define TFD_NONBLOCK    04000
++
++#define TFD_TIMER_ABSTIME (1 << 0)
++#define TFD_TIMER_CANCEL_ON_SET (1 << 1)
++
++int timerfd_create(int clockid, int flags);
++int timerfd_settime(int fd, int flags, const struct itimerspec *new_value, struct itimerspec *old_value);
++int timerfd_gettime(int fd, struct itimerspec *curr_value);
++
++#endif /* _SYS_TIMERFD_H */
+diff --git a/components/libc/compilers/common/include/sys/uio.h b/components/libc/compilers/common/include/sys/uio.h
+new file mode 100644
+index 0000000000..1726f3fed5
+--- /dev/null
++++ b/components/libc/compilers/common/include/sys/uio.h
+@@ -0,0 +1,20 @@
++/*
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * Stub sys/uio.h for builds without musl libc.
++ */
++#ifndef _SYS_UIO_H
++#define _SYS_UIO_H
++
++#include <stddef.h>
++#include <sys/types.h>
++
++struct iovec {
++    void  *iov_base;
++    size_t iov_len;
++};
++
++ssize_t readv(int fd, const struct iovec *iov, int iovcnt);
++ssize_t writev(int fd, const struct iovec *iov, int iovcnt);
++
++#endif /* _SYS_UIO_H */
+diff --git a/bsp/rockchip/rk3500/rtconfig.py b/bsp/rockchip/rk3500/rtconfig.py
+index 70773ac7bc..4b77f07156 100644
+--- a/bsp/rockchip/rk3500/rtconfig.py
++++ b/bsp/rockchip/rk3500/rtconfig.py
+@@ -41,7 +41,7 @@ if PLATFORM == 'gcc':
+     CPPFLAGS= ' -nostdinc -undef -E -P -x assembler-with-cpp'
+     CFLAGS = DEVICE + ' -Wall -Wno-cpp'
+     AFLAGS = ' -c' + ' -x assembler-with-cpp -D__ASSEMBLY__'
+-    LFLAGS  = DEVICE + ' -nostartfiles -Wl,--no-warn-rwx-segments -Wl,--gc-sections,-Map=rtthread.map,-cref,-u,system_vectors -T link.lds'
++    LFLAGS  = DEVICE + ' -nostartfiles -Wl,--gc-sections,-Map=rtthread.map,-cref,-u,system_vectors -T link.lds'
+     CPATH   = ''
+     LPATH   = ''
+ 
+diff --git a/components/dfs/dfs_v2/filesystems/procfs/proc_cmdline.c b/components/dfs/dfs_v2/filesystems/procfs/proc_cmdline.c
+index 5845b5ff88..eb344f4c71 100644
+--- a/components/dfs/dfs_v2/filesystems/procfs/proc_cmdline.c
++++ b/components/dfs/dfs_v2/filesystems/procfs/proc_cmdline.c
+@@ -15,6 +15,7 @@
+ 
+ #include <fcntl.h>
+ #include <errno.h>
++#include <string.h>
+ 
+ #include <dfs_dentry.h>
+ 
+diff --git a/components/dfs/dfs_v2/src/dfs_file.c b/components/dfs/dfs_v2/src/dfs_file.c
+index 9c6e383e1b..042d6188e9 100644
+--- a/components/dfs/dfs_v2/src/dfs_file.c
++++ b/components/dfs/dfs_v2/src/dfs_file.c
+@@ -19,6 +19,10 @@
+ #include "dfs_mnt.h"
+ #include "dfs_private.h"
+ 
++#ifndef O_DIRECT
++#define O_DIRECT 040000
++#endif
++
+ #ifdef RT_USING_PAGECACHE
+ #include "dfs_pcache.h"
+ #endif
+diff --git a/components/libc/compilers/common/include/dirent.h b/components/libc/compilers/common/include/dirent.h
+index 6020e95c35..312bc10fa1 100644
+--- a/components/libc/compilers/common/include/dirent.h
++++ b/components/libc/compilers/common/include/dirent.h
+@@ -65,13 +65,8 @@ struct dirent
+ };
+ #endif
+ 
+-#ifdef RT_USING_MUSLLIBC
+-typedef uint64_t ino_t;
+-#endif
+ struct libc_dirent {
+-#ifdef RT_USING_MUSLLIBC
+     ino_t d_ino;
+-#endif
+     off_t d_off;
+     unsigned short d_reclen;
+     unsigned char d_type;
+diff --git a/components/libc/compilers/common/include/sys/signal.h b/components/libc/compilers/common/include/sys/signal.h
+index b6990e1b55..41a05e7592 100644
+--- a/components/libc/compilers/common/include/sys/signal.h
++++ b/components/libc/compilers/common/include/sys/signal.h
+@@ -66,8 +66,16 @@ struct sigevent
+ struct siginfo
+ {
+     uint16_t si_signo;
++    int32_t  si_errno;
+     uint16_t si_code;
+     union sigval si_value;
++    int32_t  si_pid;
++    uint32_t si_uid;
++    void    *si_addr;
++    int32_t  si_status;
++    int32_t  si_band;
++    uint64_t si_utime;
++    uint64_t si_stime;
+ };
+ typedef struct siginfo siginfo_t;
+ 
+diff --git a/components/lwp/lwp.h b/components/lwp/lwp.h
+index 49b4324b8d..5194d954a4 100644
+--- a/components/lwp/lwp.h
++++ b/components/lwp/lwp.h
+@@ -89,15 +89,11 @@ struct rt_lwp_notify
+ 
+ struct lwp_tty;
+ 
+-#ifdef RT_USING_MUSLLIBC
+ #define LWP_COREDUMP_FLAG                         0x80
+ #define LWP_CREATE_STAT_EXIT(exit_code)           (((exit_code)&0xff) << 8)
+ #define LWP_CREATE_STAT_SIGNALED(signo, coredump) (((signo) & 0x7f) | (coredump ? LWP_COREDUMP_FLAG : 0))
+ #define LWP_CREATE_STAT_STOPPED(signo)            (LWP_CREATE_STAT_EXIT(signo) | 0x7f)
+ #define LWP_CREATE_STAT_CONTINUED                 (0xffff)
+-#else
+-#error "No compatible lwp set status provided for this libc"
+-#endif
+ 
+ typedef struct rt_lwp *rt_lwp_t;
+ typedef struct rt_session *rt_session_t;
+diff --git a/components/lwp/lwp_internal.h b/components/lwp/lwp_internal.h
+index 96c7949d64..5cc4594226 100644
+--- a/components/lwp/lwp_internal.h
++++ b/components/lwp/lwp_internal.h
+@@ -18,6 +18,7 @@
+ #include "lwp_mm.h"
+ 
+ #include <rtthread.h>
++#include <sys/uio.h>
+ #include "libc_musl.h"
+ 
+ struct rt_lwp;
+diff --git a/components/lwp/lwp_user_mm.h b/components/lwp/lwp_user_mm.h
+index 48fb7b778e..567da31b31 100644
+--- a/components/lwp/lwp_user_mm.h
++++ b/components/lwp/lwp_user_mm.h
+@@ -21,6 +21,7 @@
+ #include <mm_aspace.h>
+ #include <mm_fault.h>
+ #include <mm_page.h>
++#include <sys/mman.h>
+ 
+ #ifdef __cplusplus
+ extern "C" {
+diff --git a/components/lwp/terminal/bsd_porting.h b/components/lwp/terminal/bsd_porting.h
+index fba8f47fb3..dba3d6e51f 100644
+--- a/components/lwp/terminal/bsd_porting.h
++++ b/components/lwp/terminal/bsd_porting.h
+@@ -275,11 +275,13 @@ struct cdevsw
+ #endif
+ };
+ 
++#ifndef _SYS_UIO_H
+ struct iovec
+ {
+     void *iov_base; /* Base address. */
+     size_t iov_len; /* Length. */
+ };
++#endif
+ 
+ enum uio_rw
+ {
+diff --git a/include/rttypes.h b/include/rttypes.h
+index 110e39df0e..9e51e68734 100644
+--- a/include/rttypes.h
++++ b/include/rttypes.h
+@@ -16,6 +16,7 @@
+ #include <stdint.h>
+ #include <stddef.h>
+ #include <stdarg.h>
++#include <musl_compat.h>
+ #ifndef RT_USING_NANO
+ #include <sys/types.h>
+ #include <sys/errno.h>
+diff --git a/src/kservice.c b/src/kservice.c
+index 5a5ea24331..4fecee6dce 100644
+--- a/src/kservice.c
++++ b/src/kservice.c
+@@ -574,6 +574,10 @@ rt_err_t rt_backtrace_thread(rt_thread_t thread)
+ 
+ #ifdef RT_USING_CPU_USAGE_TRACER
+ 
++#ifndef RT_CPU_USAGE_CALC_INTERVAL_MS
++#define RT_CPU_USAGE_CALC_INTERVAL_MS 1000
++#endif
++
+ #define RT_CPU_USAGE_CALC_INTERVAL_TICK \
+     ((RT_TICK_PER_SECOND * RT_CPU_USAGE_CALC_INTERVAL_MS + 999U) / 1000U)
+ 

@@ -118,7 +118,8 @@ EOF
             local img_path
             img_path=$(find "$LINUX_SRC_DIR/output/images" -name "*.img" -type f | head -1)
             if [[ -n "$img_path" ]]; then
-                mv "$img_path" "$PLATFORM_ROOTFS_DIR/orangepi-5-plus.img"
+                mkdir -p "$PLATFORM_ROOTFS_DIR"
+                install -m 0666 "$img_path" "$PLATFORM_ROOTFS_DIR/orangepi-5-plus.img"
             else
                 warn "No .img file found in $LINUX_SRC_DIR/output/images/"
             fi
