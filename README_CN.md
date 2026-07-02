@@ -204,6 +204,8 @@ scripts/rootfs/debian.sh loongarch64 --debian unstable --out_dir IMAGES/rootfs
 
 - 下载 Alpine 官方 `minirootfs`
 - 使用 SHA256 校验下载文件
+- 从 `https://github.com/linux-test-project/ltp/releases/download/20260529/ltp-full-20260529.tar.xz` 构建并安装 LTP syscall 测例到 `/opt/ltp`
+- 在 Alpine Docker 容器内通过 `apk add` 安装构建依赖并编译 LTP
 - 生成 ext4 rootfs 镜像
 - 当前支持 `aarch64`、`loongarch64`、`riscv64`、`x86_64`
 
