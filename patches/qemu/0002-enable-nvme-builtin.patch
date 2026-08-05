@@ -1,0 +1,53 @@
+Enable NVMe as a built-in driver (CONFIG_NVME_CORE=y + CONFIG_BLK_DEV_NVME=y)
+across the QEMU Linux defconfigs so guests can use a virtio/PCIe NVMe device
+without loading a module from an initramfs.
+
+  - arm64 (aarch64):  BLK_DEV_NVME was =m, switch to =y
+  - riscv64:          BLK_DEV_NVME was =m, switch to =y
+  - x86_64:           BLK_DEV_NVME was unset, add =y
+  - loongarch64:      already =y in loongson64_defconfig, no change needed
+
+Generated with `git diff` against the Linux source tree at ref
+74fe02ce122a6103f207d29fafc8b3a53de6abaf (after 0001-enable-sbi-v01.patch).
+
+diff --git a/arch/arm64/configs/defconfig b/arch/arm64/configs/defconfig
+index d905a0777..0c064a83f 100644
+--- a/arch/arm64/configs/defconfig
++++ b/arch/arm64/configs/defconfig
+@@ -311,7 +311,8 @@ CONFIG_HBMC_AM654=m
+ CONFIG_BLK_DEV_LOOP=y
+ CONFIG_BLK_DEV_NBD=m
+ CONFIG_VIRTIO_BLK=y
+-CONFIG_BLK_DEV_NVME=m
++CONFIG_NVME_CORE=y
++CONFIG_BLK_DEV_NVME=y
+ CONFIG_NVME_APPLE=m
+ CONFIG_QCOM_COINCELL=m
+ CONFIG_QCOM_FASTRPC=m
+diff --git a/arch/riscv/configs/defconfig b/arch/riscv/configs/defconfig
+index 61a3af9be..f5a847790 100644
+--- a/arch/riscv/configs/defconfig
++++ b/arch/riscv/configs/defconfig
+@@ -116,7 +116,8 @@ CONFIG_MTD_CFI_ADV_OPTIONS=y
+ CONFIG_MTD_SPI_NOR=y
+ CONFIG_BLK_DEV_LOOP=y
+ CONFIG_VIRTIO_BLK=y
+-CONFIG_BLK_DEV_NVME=m
++CONFIG_NVME_CORE=y
++CONFIG_BLK_DEV_NVME=y
+ CONFIG_BLK_DEV_SD=y
+ CONFIG_BLK_DEV_SR=y
+ CONFIG_SCSI_VIRTIO=y
+diff --git a/arch/x86/configs/x86_64_defconfig b/arch/x86/configs/x86_64_defconfig
+index 269f7d808..ad153f82c 100644
+--- a/arch/x86/configs/x86_64_defconfig
++++ b/arch/x86/configs/x86_64_defconfig
+@@ -132,6 +132,8 @@ CONFIG_DEBUG_DEVRES=y
+ CONFIG_CONNECTOR=y
+ CONFIG_BLK_DEV_LOOP=y
+ CONFIG_VIRTIO_BLK=y
++CONFIG_NVME_CORE=y
++CONFIG_BLK_DEV_NVME=y
+ CONFIG_BLK_DEV_SD=y
+ CONFIG_BLK_DEV_SR=y
+ CONFIG_CHR_DEV_SG=y

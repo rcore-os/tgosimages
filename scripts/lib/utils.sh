@@ -426,6 +426,13 @@ checkout_ref() {
         git checkout --quiet --force "$target"
     fi
     git clean -fd --quiet
+    # The forced checkout above reset the worktree to $ref, which discards any
+    # previously applied patches (both `git apply` working-tree edits and `git am`
+    # commits, since HEAD moved back to $ref). Their stamps under .patch_stamps
+    # are now stale, so drop them — otherwise apply_patches would skip the patches
+    # and leave the tree without them. This matters when several builds reuse one
+    # source dir (e.g. qemu multi-arch builds sharing build/qemu_linux).
+    rm -rf -- "${repo_path}/.patch_stamps"
     echo "Switched to $ref"
     popd >/dev/null
     return 0
