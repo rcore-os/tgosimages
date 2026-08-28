@@ -24,7 +24,8 @@ ALPINE_LTP_URL="${ALPINE_LTP_URL:-https://github.com/linux-test-project/ltp/rele
 ALPINE_LTP_PREFIX="${ALPINE_LTP_PREFIX:-/opt/ltp}"
 ALPINE_LTP_CFLAGS="${ALPINE_LTP_CFLAGS:-}"
 ALPINE_LTP_LDFLAGS="${ALPINE_LTP_LDFLAGS:-}"
-ALPINE_LTP_FILTER_OUT_DIRS="${ALPINE_LTP_FILTER_OUT_DIRS:-fmtmsg timer_create}"
+ALPINE_LTP_FILTER_OUT_DIRS="${ALPINE_LTP_FILTER_OUT_DIRS:-fmtmsg}"
+ALPINE_LTP_FILTER_OUT_TESTS="${ALPINE_LTP_FILTER_OUT_TESTS:-timer_create01 timer_create03}"
 ALPINE_LTP_DOCKER_IMAGE="${ALPINE_LTP_DOCKER_IMAGE:-}"
 ALPINE_LTP_DOCKER_INSTALL_PACKAGES="${ALPINE_LTP_DOCKER_INSTALL_PACKAGES:-0}"
 ALPINE_LTP_BUILD_PACKAGES=(
@@ -191,6 +192,7 @@ alpine_usage() {
     printf '  ALPINE_LTP_CFLAGS             Extra CFLAGS for LTP build\n'
     printf '  ALPINE_LTP_LDFLAGS            Extra LDFLAGS for LTP build\n'
     printf '  ALPINE_LTP_FILTER_OUT_DIRS    LTP syscall directories skipped for Alpine/musl builds\n'
+    printf '  ALPINE_LTP_FILTER_OUT_TESTS   Exact LTP syscall testcases skipped for Alpine/musl builds\n'
     printf '  ALPINE_LTP_DOCKER_IMAGE       Docker image used to build LTP (default: <prefix>-<target-arch>-ltp:<release>)\n'
     printf '  ALPINE_LTP_DOCKER_INSTALL_PACKAGES Install LTP build packages in container, 1 or 0 (default: 0)\n'
     printf '\n'
@@ -448,6 +450,7 @@ alpine_install_ltp_tests() {
     local ltp_docker_image="${ALPINE_LTP_DOCKER_IMAGE:-$(alpine_ltp_docker_image_for_arch "${ALPINE_ARCH}")}"
     local ltp_runtest_filter_pattern=""
     local filter_dir
+    local filter_test
 
     ltp_src_dir="${ltp_src_dir:-$(alpine_ltp_prepare_source)}"
 
@@ -475,6 +478,16 @@ alpine_install_ltp_tests() {
             ltp_runtest_filter_pattern="${ltp_runtest_filter_pattern}|^${filter_dir}([0-9_]|[[:space:]]|$)"
         fi
     done
+    for filter_test in ${ALPINE_LTP_FILTER_OUT_TESTS}; do
+        [[ "${filter_test}" =~ ^[A-Za-z0-9_]+$ ]] || {
+            die "Invalid LTP testcase filter: ${filter_test}"
+        }
+        if [[ -z "${ltp_runtest_filter_pattern}" ]]; then
+            ltp_runtest_filter_pattern="^${filter_test}([[:space:]]|$)"
+        else
+            ltp_runtest_filter_pattern="${ltp_runtest_filter_pattern}|^${filter_test}([[:space:]]|$)"
+        fi
+    done
 
     info "Installing LTP tests in Docker (${docker_platform}, ${ltp_docker_image})"
     docker run --rm \
@@ -490,6 +503,9 @@ alpine_install_ltp_tests() {
             if [ '${ALPINE_LTP_DOCKER_INSTALL_PACKAGES}' = '1' ]; then
                 apk add --no-cache ${ALPINE_LTP_BUILD_PACKAGES[*]}
             fi
+            rm -rf /tmp/ltp-build
+            cp -a /ltp /tmp/ltp-build
+            cd /tmp/ltp-build
             if [ -x ./autogen.sh ] && [ ! -x ./configure ]; then
                 ./autogen.sh
             elif [ ! -x ./configure ]; then
@@ -498,6 +514,9 @@ alpine_install_ltp_tests() {
             make clean >/dev/null 2>&1 || true
             rm -rf /tmp/ltp-stage
             mkdir -p /tmp/ltp-stage
+            for filter_test in ${ALPINE_LTP_FILTER_OUT_TESTS}; do
+                find testcases/kernel/syscalls -type f -name \"\${filter_test}.c\" -print -delete
+            done
             rm -f include/mk/config.mk include/mk/config-openposix.mk include/mk/features.mk include/config.h config.status
             CFLAGS='${ALPINE_LTP_CFLAGS}' \
             LDFLAGS='${ALPINE_LTP_LDFLAGS}' \

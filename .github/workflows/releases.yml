@@ -31,6 +31,9 @@ jobs:
           ./build.sh platform phytiumpi all
           ./build.sh platform tac-e400-plc all
           ./build.sh platform orangepi-5-plus starry
+
+      - name: Verify Alpine LTP images
+        run: scripts/tests/alpine-ltp-content.sh
         
       - name: Prepare release files
         id: release
