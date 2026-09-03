@@ -1,0 +1,12 @@
+--- a/src/cyclictest/cyclictest.c
++++ b/src/cyclictest/cyclictest.c
+@@ -52,7 +52,9 @@
+ #define SCHED_NORMAL SCHED_OTHER
+ #endif
+ 
++#ifndef sigev_notify_thread_id
+ #define sigev_notify_thread_id _sigev_un._tid
++#endif
+ 
+ #ifdef __UCLIBC__
+ #define MAKE_PROCESS_CPUCLOCK(pid, clock) \

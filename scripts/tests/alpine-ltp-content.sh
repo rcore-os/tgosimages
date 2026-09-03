@@ -7,9 +7,10 @@ ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
 IMAGE_DIR="${ROOT_DIR}/IMAGES/rootfs"
 LTP_VERSION="20260529"
 ARCHES=(aarch64 loongarch64 riscv64 x86_64)
+SELECTED_ARCH=""
 
 usage() {
-    printf 'Usage: %s [--image-dir <dir>]\n' "$0"
+    printf 'Usage: %s [--image-dir <dir>] [--arch <arch>]\n' "$0"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -22,6 +23,21 @@ while [[ $# -gt 0 ]]; do
             IMAGE_DIR="$2"
             shift 2
             ;;
+        --arch)
+            [[ $# -ge 2 ]] || {
+                usage >&2
+                exit 2
+            }
+            case "$2" in
+                aarch64|loongarch64|riscv64|x86_64) ;;
+                *)
+                    printf 'unsupported architecture: %s\n' "$2" >&2
+                    exit 2
+                    ;;
+            esac
+            SELECTED_ARCH="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -32,6 +48,10 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ -n "${SELECTED_ARCH}" ]]; then
+    ARCHES=("${SELECTED_ARCH}")
+fi
 
 for tool in debugfs readelf; do
     command -v "${tool}" >/dev/null 2>&1 || {
@@ -55,6 +75,13 @@ debugfs_path_exists() {
     local guest_path="$2"
 
     debugfs_stat "${image}" "${guest_path}" | grep -q '^Inode:'
+}
+
+debugfs_fmtmsg_artifact_exists() {
+    local image="$1"
+
+    debugfs -R 'ls -p /opt/ltp/testcases/bin' "${image}" 2>/dev/null |
+        grep -Eq '/fmtmsg[0-9_]*(/|$)'
 }
 
 debugfs_dump_required() {
@@ -91,11 +118,20 @@ for arch in "${ARCHES[@]}"; do
     mkdir -p "${arch_dir}"
     version_file="${arch_dir}/Version"
     runtest_file="${arch_dir}/syscalls"
+    sched_runtest_file="${arch_dir}/sched"
     testcase_file="${arch_dir}/timer_create02"
+    hackbench_file="${arch_dir}/hackbench"
 
     debugfs_dump_required "${image}" /opt/ltp/Version "${version_file}"
     debugfs_dump_required "${image}" /opt/ltp/runtest/syscalls "${runtest_file}"
+    debugfs_dump_required "${image}" /opt/ltp/runtest/sched "${sched_runtest_file}"
     debugfs_dump_required "${image}" /opt/ltp/testcases/bin/timer_create02 "${testcase_file}"
+    debugfs_dump_required "${image}" /opt/ltp/testcases/bin/hackbench "${hackbench_file}"
+
+    [[ -s "${runtest_file}" && -s "${sched_runtest_file}" ]] || {
+        printf 'empty LTP runtest asset for %s\n' "${arch}" >&2
+        exit 1
+    }
 
     version=$(tr -d '\r\n' < "${version_file}")
     [[ "${version}" == "${LTP_VERSION}" ]] || {
@@ -114,6 +150,15 @@ for arch in "${ARCHES[@]}"; do
         fi
     done
 
+    if debugfs_fmtmsg_artifact_exists "${image}"; then
+        printf 'unexpected fmtmsg testcase artifact for %s\n' "${arch}" >&2
+        exit 1
+    fi
+    if awk '$1 ~ /^fmtmsg([0-9_]|$)/ { found = 1 } END { exit !found }' "${runtest_file}"; then
+        printf 'unexpected fmtmsg runtest entry for %s\n' "${arch}" >&2
+        exit 1
+    fi
+
     [[ -x "${testcase_file}" ]] || {
         printf 'timer_create02 is not executable for %s\n' "${arch}" >&2
         exit 1
@@ -131,6 +176,24 @@ for arch in "${ARCHES[@]}"; do
     machine=$(expected_machine "${arch}")
     grep -q "Machine:[[:space:]]*${machine}" <<< "${readelf_header}" || {
         printf 'unexpected timer_create02 ELF machine for %s\n' "${arch}" >&2
+        exit 1
+    }
+
+    [[ -x "${hackbench_file}" ]] || {
+        printf 'hackbench is not executable for %s\n' "${arch}" >&2
+        exit 1
+    }
+    awk '$1 ~ /^hackbench[0-9_]*$/ { found = 1 } END { exit !found }' "${sched_runtest_file}" || {
+        printf 'hackbench scheduler runtest entry is missing for %s\n' "${arch}" >&2
+        exit 1
+    }
+    readelf_header=$(readelf -h "${hackbench_file}")
+    grep -q 'Class:[[:space:]]*ELF64' <<< "${readelf_header}" || {
+        printf 'hackbench is not ELF64 for %s\n' "${arch}" >&2
+        exit 1
+    }
+    grep -q "Machine:[[:space:]]*${machine}" <<< "${readelf_header}" || {
+        printf 'unexpected hackbench ELF machine for %s\n' "${arch}" >&2
         exit 1
     }
 

@@ -69,9 +69,9 @@
 
 | 脚本 | 主要职责 | 典型产物 |
 | --- | --- | --- |
-| `scripts/rootfs/busybox.sh` | 基于 BusyBox 生成最小 rootfs | `busybox-initramfs-<arch>.cpio.gz`、`busybox-rootfs-<arch>.img` |
-| `scripts/rootfs/alpine.sh` | 下载 Alpine minirootfs 并生成 ext4 镜像 | `alpine-rootfs-<arch>.img` |
-| `scripts/rootfs/debian.sh` | 基于 Docker + debootstrap 生成 Debian rootfs 镜像 | `debian-rootfs-<arch>.img` |
+| `scripts/rootfs/busybox.sh` | 基于 BusyBox 生成最小 rootfs | `initramfs-<arch>-busybox.cpio.gz`、`rootfs-<arch>-busybox.img` |
+| `scripts/rootfs/alpine.sh` | 下载 Alpine minirootfs 并生成 ext4 镜像 | `rootfs-<arch>-alpine.img` |
+| `scripts/rootfs/debian.sh` | 基于 Docker + debootstrap 生成 Debian rootfs 镜像 | `rootfs-<arch>-debian.img` |
 
 ## 支持的目标
 
@@ -202,6 +202,70 @@ scripts/rootfs/debian.sh loongarch64 --debian unstable --out_dir IMAGES/rootfs
 
 ## Rootfs 说明
 
+### 外层与嵌套镜像
+
+每个 ext4 构建器都从同一个干净基础镜像分出两条独立的组合分支：
+
+```text
+干净基础镜像
+├── 客户机分支 + 客户机测试插件 -> 嵌套 rootfs
+└── 外层分支 + 外层测试插件 + /guest 平台文件
+    └── /guest/rootfs-<arch>-<type>.img（嵌套 rootfs）
+```
+
+客户机插件安装到嵌套镜像的 `/guest-tests/<plugin>`。外层镜像在 `/guest`
+下包含平台文件，并在 `/guest/rootfs-<arch>-<type>.img` 保存原始嵌套镜像；
+外层专用平台文件和 `/opt/ltp` 不会进入嵌套镜像。系统刻意不生成
+`run-all.sh`：选择测试只负责打包测试资源，不规定执行顺序，也不会自动运行。
+
+默认值如下：
+
+| 镜像范围 | BusyBox | Alpine | Debian |
+| --- | --- | --- | --- |
+| 外层测试 | `none` | `ltp` | `none` |
+| 嵌套客户机测试 | `cyclictest,lmbench,iozone` | `cyclictest,lmbench,iozone` | `cyclictest,lmbench,iozone` |
+
+嵌套与外层 ext4 默认各保留 256 MiB 空闲空间。嵌套镜像以未压缩原始文件
+嵌入，因此外层原始镜像可能明显变大；发布阶段的 xz 压缩包仍可能小得多，
+但不保证固定压缩大小阈值。BusyBox ext4 同样参与组合。旧有 initramfs
+继续保留平台文件注入，但不包含客户机测试插件和嵌套 rootfs。
+
+直接构建 rootfs 的示例：
+
+```bash
+scripts/rootfs/busybox.sh x86_64 \
+  --outer-tests none --guest-tests cyclictest \
+  --guest-free-size 128M --outer-free-size 384M
+scripts/rootfs/alpine.sh aarch64 \
+  --outer-tests ltp --guest-tests cyclictest,lmbench,iozone \
+  --guest-free-size 256M --outer-free-size 512M
+```
+
+QEMU 流程会透传相同选项：
+
+```bash
+./build.sh platform qemu-x86_64 linux --rootfs busybox,alpine,debian \
+  --outer-tests none --guest-tests cyclictest \
+  --guest-free-size 256M --outer-free-size 512M
+```
+
+使用 `none` 可让某个范围不安装测试；非默认构建可传入逗号分隔的明确列表。
+
+### Rootfs 测试插件
+
+可执行的 `scripts/rootfs-tests/plugins/*.sh` 文件是扩展入口。插件实现两个命令：
+
+- `describe` 必须恰好输出 `name=`、`arches=`、`rootfs=`、`scopes=` 四行。
+- `build --arch <arch> --rootfs <type> --scope <outer|guest> --output <empty-dir>`
+  向指定空目录写入 overlay。客户机插件通常使用 `guest-tests/<name>/`，
+  外层插件则写入它在外层 rootfs 中的原生路径。
+
+新增插件时，可复制一个现有的小型插件，固定上游版本与 SHA256，只声明实际支持
+的组合；如包含二进制，应为所选架构生成静态 ELF64，并扩展快速插件测试。
+框架会自动发现插件，无需维护中央列表。Overlay 只接受目录、普通文件和符号链接；
+特殊节点与额外的元数据路径会被拒绝。下载缓存与解压源码按已校验的 checksum
+区分并记录 checksum 来源，构建容器则由配置中的镜像版本固定。
+
 ### BusyBox
 
 - 同时生成 initramfs 和 ext4 rootfs 镜像
@@ -212,8 +276,9 @@ scripts/rootfs/debian.sh loongarch64 --debian unstable --out_dir IMAGES/rootfs
 
 - 下载 Alpine 官方 `minirootfs`
 - 使用 SHA256 校验下载文件
-- 从 `https://github.com/linux-test-project/ltp/releases/download/20260529/ltp-full-20260529.tar.xz` 构建并安装 LTP syscall 测例到 `/opt/ltp`
-- 在 Alpine Docker 容器内通过 `apk add` 安装构建依赖并编译 LTP
+- 只生成干净的 Alpine 基础镜像；默认外层 `ltp` 插件另行构建并把筛选后的 LTP 20260529 内容安装到 `/opt/ltp`
+- 遵循 Alpine 排除规则：跳过 `fmtmsg` 目录与 `timer_create01`、`timer_create03`，保留 `timer_create02`
+- 通过共享且校验 checksum 的 Alpine 插件构建器编译 LTP
 - 生成 ext4 rootfs 镜像
 - 当前支持 `aarch64`、`loongarch64`、`riscv64`、`x86_64`
 
@@ -223,6 +288,46 @@ scripts/rootfs/debian.sh loongarch64 --debian unstable --out_dir IMAGES/rootfs
 - 生成 ext4 rootfs 镜像
 - 默认 suite 为 `trixie`
 - 支持 `aarch64`、`riscv64`、`x86_64`、`loongarch64`
+
+### Rootfs 验证
+
+耗时镜像构建前先运行不触发构建的快速测试：
+
+```bash
+scripts/tests/rootfs-nested-content-test.sh
+scripts/tests/qemu-rootfs-test-options.sh
+scripts/tests/rootfs-builder-options.sh
+scripts/tests/rootfs-test-plugins.sh
+scripts/tests/rootfs-compose.sh
+scripts/tests/starry-release-smoke.sh
+```
+
+构建完成后，可在不挂载镜像的情况下验证指定内容：
+
+```bash
+scripts/tests/rootfs-nested-content.sh --image-dir IMAGES/rootfs \
+  --arch x86_64 --rootfs busybox \
+  --guest-tests cyclictest,lmbench,iozone \
+  --guest-free-size 256M --outer-free-size 256M
+scripts/tests/alpine-ltp-content.sh --image-dir IMAGES/rootfs --arch x86_64
+```
+
+BusyBox 端到端夹具构建需要显式启用：
+
+```bash
+scripts/tests/rootfs-builder-options.sh --integration
+```
+
+完整 QEMU 验证同样是可选的，并需按架构手动执行：
+
+```bash
+./build.sh platform qemu-aarch64 all --rootfs busybox,alpine,debian
+./build.sh platform qemu-riscv64 all --rootfs busybox,alpine,debian
+./build.sh platform qemu-x86_64 all --rootfs busybox,alpine,debian
+./build.sh platform qemu-loongarch64 all --rootfs busybox,alpine
+```
+
+这些构建或验证命令都不会自动执行 `run-all.sh`；工作负载必须在客户机中显式调用。
 
 ## 输出目录
 
@@ -274,7 +379,7 @@ QEMU Linux 的典型文件包括：
 - `bzImage`，用于 `x86_64`
 - `vmlinuz.efi` 与 `vmlinux.elf`，用于 `loongarch64`
 - `linux-qemu` 作为通用 QEMU Linux 入口名；对于 `loongarch64`，它是从 `vmlinux.elf` 复制得到的 ELF 镜像
-- BusyBox 产物，如 `busybox-initramfs-<arch>.cpio.gz`、`busybox-rootfs-<arch>.img`
+- BusyBox 产物，如 `initramfs-<arch>-busybox.cpio.gz`、`rootfs-<arch>-busybox.img`
 
 ## QEMU 快速验证
 

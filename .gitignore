@@ -9,6 +9,7 @@
 
 # Zephyr Twister host-test reports and build trees.
 /twister-out/
+/.worktrees/
 
 /target
 .axconfig.toml
