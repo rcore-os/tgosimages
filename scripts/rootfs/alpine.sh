@@ -8,11 +8,16 @@ ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
 BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
 
 source "${SCRIPT_DIR}/../lib/utils.sh"
+source "${SCRIPT_DIR}/../lib/rootfs-compose.sh"
 
 # Default values
 ALPINE_ARCH=""
 ALPINE_OUT_DIR=""
 ALPINE_GUEST_DIR=""
+ALPINE_OUTER_TESTS=""
+ALPINE_GUEST_TESTS=""
+ALPINE_GUEST_FREE_SIZE=""
+ALPINE_OUTER_FREE_SIZE=""
 ALPINE_IMG_SIZE="${ALPINE_IMG_SIZE:-2G}"
 ALPINE_BASE="${ALPINE_BASE:-https://mirrors.tuna.tsinghua.edu.cn/alpine}"
 ALPINE_REL="${ALPINE_REL:-v3.23}"
@@ -20,21 +25,6 @@ ALPINE_DOCKER_DNS="${ALPINE_DOCKER_DNS:-223.5.5.5,114.114.114.114}"
 ALPINE_DOCKER_IMAGE_PREFIX="${ALPINE_DOCKER_IMAGE_PREFIX:-tgos/alpine}"
 ALPINE_APK_DOCKER_ARCH="${ALPINE_APK_DOCKER_ARCH:-x86_64}"
 ALPINE_APK_DOCKER_IMAGE="${ALPINE_APK_DOCKER_IMAGE:-}"
-ALPINE_LTP_URL="${ALPINE_LTP_URL:-https://github.com/linux-test-project/ltp/releases/download/20260529/ltp-full-20260529.tar.xz}"
-ALPINE_LTP_PREFIX="${ALPINE_LTP_PREFIX:-/opt/ltp}"
-ALPINE_LTP_CFLAGS="${ALPINE_LTP_CFLAGS:-}"
-ALPINE_LTP_LDFLAGS="${ALPINE_LTP_LDFLAGS:-}"
-ALPINE_LTP_FILTER_OUT_DIRS="${ALPINE_LTP_FILTER_OUT_DIRS:-fmtmsg}"
-ALPINE_LTP_FILTER_OUT_TESTS="${ALPINE_LTP_FILTER_OUT_TESTS:-timer_create01 timer_create03}"
-ALPINE_LTP_DOCKER_IMAGE="${ALPINE_LTP_DOCKER_IMAGE:-}"
-ALPINE_LTP_DOCKER_INSTALL_PACKAGES="${ALPINE_LTP_DOCKER_INSTALL_PACKAGES:-0}"
-ALPINE_LTP_BUILD_PACKAGES=(
-    build-base
-    linux-headers
-    autoconf
-    automake
-    pkgconf
-)
 ALPINE_ARCHES=("aarch64" "loongarch64" "riscv64" "x86_64")
 ALPINE_DEFAULT_PACKAGES=(
     binutils
@@ -90,11 +80,6 @@ alpine_base_docker_image_for_arch() {
     printf '%s-%s:%s\n' "${ALPINE_DOCKER_IMAGE_PREFIX}" "$(alpine_docker_arch_name "${arch}")" "$(alpine_release_tag)"
 }
 
-alpine_ltp_docker_image_for_arch() {
-    local arch="$1"
-    printf '%s-%s-ltp:%s\n' "${ALPINE_DOCKER_IMAGE_PREFIX}" "$(alpine_docker_arch_name "${arch}")" "$(alpine_release_tag)"
-}
-
 alpine_docker_platform_for_arch() {
     local arch="$1"
 
@@ -132,33 +117,6 @@ alpine_ensure_base_docker_image() {
     docker tag "${source_image}" "${image}"
 }
 
-alpine_ensure_ltp_docker_image() {
-    local arch="$1"
-    local image="$2"
-    local platform
-    local dockerfile="${ALPINE_SCRIPT_DIR}/alpine-ltp.Dockerfile"
-    local context_dockerfile
-    if ! command -v docker >/dev/null 2>&1; then
-        die "docker is required to prepare Alpine LTP Docker image ${image}"
-    fi
-
-    if alpine_docker_image_exists "${image}"; then
-        return 0
-    fi
-
-    alpine_download_archive
-    platform="$(alpine_docker_platform_for_arch "${arch}")"
-    context_dockerfile="${ALPINE_WORK_DIR}/alpine-ltp.Dockerfile"
-    cp -f "${dockerfile}" "${context_dockerfile}"
-    info "Building Alpine LTP Docker image ${image} (${platform}) from ${ALPINE_ARCHIVE}"
-    docker build \
-        --platform "${platform}" \
-        -f "${context_dockerfile}" \
-        --build-arg "ALPINE_MINIROOTFS=$(basename "${ALPINE_ARCHIVE}")" \
-        -t "${image}" \
-        "${ALPINE_WORK_DIR}"
-}
-
 alpine_usage() {
     printf 'Build Alpine-based rootfs image\n'
     printf '\n'
@@ -177,6 +135,10 @@ alpine_usage() {
     printf '[options]:\n'
     printf '  --out_dir <dir>               Output directory (default image: IMAGES/rootfs/rootfs-<arch>-alpine.img)\n'
     printf '  --guest <dir>                 Guest directory to copy into rootfs /guest\n'
+    printf '  --outer-tests <list>          Tests installed in the outer image (default: ltp)\n'
+    printf '  --guest-tests <list>          Tests installed in the nested guest image (default from rootfs-tests)\n'
+    printf '  --guest-free-size <size>      Free space reserved in nested guest image (default: 256M)\n'
+    printf '  --outer-free-size <size>      Free space reserved in outer image (default: 256M)\n'
     printf '  --img-size <size>             Output image size (default: 2G)\n'
     printf '\n'
     printf 'Environment Variables:\n'
@@ -187,17 +149,16 @@ alpine_usage() {
     printf '  ALPINE_DOCKER_IMAGE_PREFIX    Local Docker image prefix (default: tgos/alpine)\n'
     printf '  ALPINE_APK_DOCKER_ARCH        Docker architecture used to run apk --root/--arch (default: x86_64)\n'
     printf '  ALPINE_APK_DOCKER_IMAGE       Docker image used to run apk --root/--arch (default: <prefix>-<apk-arch>:<release>)\n'
-    printf '  ALPINE_LTP_URL                LTP source archive URL\n'
-    printf '  ALPINE_LTP_PREFIX             LTP installation prefix (default: /opt/ltp)\n'
-    printf '  ALPINE_LTP_CFLAGS             Extra CFLAGS for LTP build\n'
-    printf '  ALPINE_LTP_LDFLAGS            Extra LDFLAGS for LTP build\n'
-    printf '  ALPINE_LTP_FILTER_OUT_DIRS    LTP syscall directories skipped for Alpine/musl builds\n'
-    printf '  ALPINE_LTP_FILTER_OUT_TESTS   Exact LTP syscall testcases skipped for Alpine/musl builds\n'
-    printf '  ALPINE_LTP_DOCKER_IMAGE       Docker image used to build LTP (default: <prefix>-<target-arch>-ltp:<release>)\n'
-    printf '  ALPINE_LTP_DOCKER_INSTALL_PACKAGES Install LTP build packages in container, 1 or 0 (default: 0)\n'
+    printf '  ALPINE_LTP_URL/SHA256         Paired LTP source override used by the ltp plugin\n'
+    printf '  ALPINE_LTP_CFLAGS/LDFLAGS     Extra LTP build flags\n'
+    printf '  ALPINE_LTP_FILTER_OUT_DIRS/TESTS LTP exclusion lists\n'
+    printf '  ALPINE_LTP_PREFIX             Only /opt/ltp is supported\n'
+    printf '  ALPINE_LTP_DOCKER_IMAGE       Non-empty legacy override is rejected\n'
+    printf '  ALPINE_LTP_DOCKER_INSTALL_PACKAGES Only 0 is supported\n'
     printf '\n'
     printf 'Notes:\n'
     printf '  * Generates rootfs.img only.\n'
+    printf '  * Guest/overlay inputs must use safe path names and whole-second timestamps; xattrs, extended ACLs, and special files are rejected.\n'
     printf '  * Downloads Alpine minirootfs into build/alpine/<arch>/.\n'
     printf '  * The all command currently targets: aarch64, loongarch64, riscv64, x86_64.\n'
     printf '\n'
@@ -214,15 +175,38 @@ alpine_parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --out_dir)
+                (($# >= 2)) || die "missing value for --out_dir"
                 ALPINE_OUT_DIR="$2"
                 shift 2
                 ;;
             --guest)
+                (($# >= 2)) || die "missing value for --guest"
                 ALPINE_GUEST_DIR="$2"
                 shift 2
                 ;;
             --img-size)
+                (($# >= 2)) || die "missing value for --img-size"
                 ALPINE_IMG_SIZE="$2"
+                shift 2
+                ;;
+            --outer-tests)
+                (($# >= 2)) || die "missing value for --outer-tests"
+                ALPINE_OUTER_TESTS=$2
+                shift 2
+                ;;
+            --guest-tests)
+                (($# >= 2)) || die "missing value for --guest-tests"
+                ALPINE_GUEST_TESTS=$2
+                shift 2
+                ;;
+            --guest-free-size)
+                (($# >= 2)) || die "missing value for --guest-free-size"
+                ALPINE_GUEST_FREE_SIZE=$2
+                shift 2
+                ;;
+            --outer-free-size)
+                (($# >= 2)) || die "missing value for --outer-free-size"
+                ALPINE_OUTER_FREE_SIZE=$2
                 shift 2
                 ;;
             *)
@@ -250,8 +234,7 @@ alpine_init_config() {
 
     if [[ -n "${ALPINE_GUEST_DIR}" ]]; then
         ALPINE_GUEST_DIR="$(cd "${ALPINE_GUEST_DIR}" 2>/dev/null && pwd -P)" || {
-            warn "Guest directory ${ALPINE_GUEST_DIR} does not exist or is not accessible"
-            ALPINE_GUEST_DIR=""
+            die "Guest directory ${ALPINE_GUEST_DIR} does not exist or is not accessible"
         }
     fi
 
@@ -385,198 +368,6 @@ alpine_load_release_metadata() {
     fi
 
     ALPINE_ARCHIVE="${ALPINE_WORK_DIR}/${ALPINE_METADATA_FILE}"
-}
-
-alpine_ltp_archive_path() {
-    printf '%s/ltp/%s\n' "${BUILD_DIR}" "$(basename "${ALPINE_LTP_URL%%\?*}")"
-}
-
-alpine_ltp_src_dir() {
-    local archive_name
-    archive_name="$(basename "${ALPINE_LTP_URL%%\?*}")"
-    archive_name="${archive_name%.tar.xz}"
-    archive_name="${archive_name%.tar.gz}"
-    archive_name="${archive_name%.tgz}"
-    printf '%s/ltp/%s\n' "${BUILD_DIR}" "${archive_name}"
-}
-
-alpine_ltp_docker_platform_for_arch() {
-    local arch="$1"
-
-    alpine_docker_platform_for_arch "${arch}"
-}
-
-alpine_ltp_prepare_source() {
-    local archive_path
-    local src_dir
-    local src_parent
-
-    archive_path="$(alpine_ltp_archive_path)"
-    src_dir="$(alpine_ltp_src_dir)"
-    src_parent="$(dirname "${src_dir}")"
-    mkdir -p "${src_parent}"
-
-    if [[ -f "${archive_path}" ]]; then
-        info "Using cached LTP archive: ${archive_path}"
-    else
-        info "Downloading LTP archive: ${ALPINE_LTP_URL}"
-        curl -# -L -o "${archive_path}" "${ALPINE_LTP_URL}"
-    fi
-
-    if [[ -d "${src_dir}" ]]; then
-        printf '%s\n' "${src_dir}"
-        return 0
-    fi
-
-    info "Extracting LTP archive to ${src_parent}"
-    tar -xf "${archive_path}" -C "${src_parent}"
-
-    if [[ ! -d "${src_dir}" ]]; then
-        die "LTP source directory not found after extraction: ${src_dir}"
-    fi
-
-    printf '%s\n' "${src_dir}"
-}
-
-alpine_install_ltp_tests() {
-    local rootfs_dir="$1"
-    local ltp_src_dir="${2:-}"
-    local host_uid
-    local host_gid
-    local docker_platform
-    local docker_dns_servers=()
-    local docker_dns_args=()
-    local dns_server
-    local ltp_docker_image="${ALPINE_LTP_DOCKER_IMAGE:-$(alpine_ltp_docker_image_for_arch "${ALPINE_ARCH}")}"
-    local ltp_runtest_filter_pattern=""
-    local filter_dir
-    local filter_test
-
-    ltp_src_dir="${ltp_src_dir:-$(alpine_ltp_prepare_source)}"
-
-    if ! command -v docker >/dev/null 2>&1; then
-        die "docker is required to build LTP tests"
-    fi
-
-    if [[ -n "${ALPINE_DOCKER_DNS}" ]]; then
-        IFS=',' read -r -a docker_dns_servers <<< "${ALPINE_DOCKER_DNS}"
-    fi
-    for dns_server in "${docker_dns_servers[@]}"; do
-        [[ -n "${dns_server}" ]] || continue
-        docker_dns_args+=("--dns" "${dns_server}")
-    done
-
-    host_uid="$(id -u)"
-    host_gid="$(id -g)"
-    docker_platform="$(alpine_ltp_docker_platform_for_arch "${ALPINE_ARCH}")"
-    alpine_ensure_ltp_docker_image "${ALPINE_ARCH}" "${ltp_docker_image}"
-    for filter_dir in ${ALPINE_LTP_FILTER_OUT_DIRS}; do
-        [[ -n "${filter_dir}" ]] || continue
-        if [[ -z "${ltp_runtest_filter_pattern}" ]]; then
-            ltp_runtest_filter_pattern="^${filter_dir}([0-9_]|[[:space:]]|$)"
-        else
-            ltp_runtest_filter_pattern="${ltp_runtest_filter_pattern}|^${filter_dir}([0-9_]|[[:space:]]|$)"
-        fi
-    done
-    for filter_test in ${ALPINE_LTP_FILTER_OUT_TESTS}; do
-        [[ "${filter_test}" =~ ^[A-Za-z0-9_]+$ ]] || {
-            die "Invalid LTP testcase filter: ${filter_test}"
-        }
-        if [[ -z "${ltp_runtest_filter_pattern}" ]]; then
-            ltp_runtest_filter_pattern="^${filter_test}([[:space:]]|$)"
-        else
-            ltp_runtest_filter_pattern="${ltp_runtest_filter_pattern}|^${filter_test}([[:space:]]|$)"
-        fi
-    done
-
-    info "Installing LTP tests in Docker (${docker_platform}, ${ltp_docker_image})"
-    docker run --rm \
-        "${docker_dns_args[@]}" \
-        --platform "${docker_platform}" \
-        -v "${ltp_src_dir}:/ltp" \
-        -v "${rootfs_dir}:/rootfs" \
-        -w /ltp \
-        "${ltp_docker_image}" \
-        sh -lc "
-            set -e
-            trap 'chown -R ${host_uid}:${host_gid} /rootfs /ltp >/dev/null 2>&1 || true' EXIT
-            if [ '${ALPINE_LTP_DOCKER_INSTALL_PACKAGES}' = '1' ]; then
-                apk add --no-cache ${ALPINE_LTP_BUILD_PACKAGES[*]}
-            fi
-            rm -rf /tmp/ltp-build
-            cp -a /ltp /tmp/ltp-build
-            cd /tmp/ltp-build
-            if [ -x ./autogen.sh ] && [ ! -x ./configure ]; then
-                ./autogen.sh
-            elif [ ! -x ./configure ]; then
-                make autotools
-            fi
-            make clean >/dev/null 2>&1 || true
-            rm -rf /tmp/ltp-stage
-            mkdir -p /tmp/ltp-stage
-            for filter_test in ${ALPINE_LTP_FILTER_OUT_TESTS}; do
-                find testcases/kernel/syscalls -type f -name \"\${filter_test}.c\" -print -delete
-            done
-            rm -f include/mk/config.mk include/mk/config-openposix.mk include/mk/features.mk include/config.h config.status
-            CFLAGS='${ALPINE_LTP_CFLAGS}' \
-            LDFLAGS='${ALPINE_LTP_LDFLAGS}' \
-            ./configure \
-                --prefix='${ALPINE_LTP_PREFIX}' \
-                --without-numa \
-                --without-tirpc \
-                --without-modules
-            if printf '#include <linux/if_alg.h>
-int main(void){struct sockaddr_alg a; struct af_alg_iv v; return sizeof(a)+sizeof(v);}
-' | gcc -x c -c -o /tmp/ltp-if-alg.o - >/dev/null 2>&1; then
-                sed -i \
-                    -e 's@^/\* #undef HAVE_LINUX_IF_ALG_H \*/@#define HAVE_LINUX_IF_ALG_H 1@' \
-                    -e 's@^/\* #undef HAVE_STRUCT_AF_ALG_IV \*/@#define HAVE_STRUCT_AF_ALG_IV 1@' \
-                    -e 's@^/\* #undef HAVE_STRUCT_SOCKADDR_ALG \*/@#define HAVE_STRUCT_SOCKADDR_ALG 1@' \
-                    include/config.h
-            else
-                sed -i \
-                    -e 's@^#define HAVE_STRUCT_AF_ALG_IV .*@/* #undef HAVE_STRUCT_AF_ALG_IV */@' \
-                    -e 's@^#define HAVE_STRUCT_SOCKADDR_ALG .*@/* #undef HAVE_STRUCT_SOCKADDR_ALG */@' \
-                    include/config.h
-            fi
-            make -C testcases/kernel/syscalls \
-                top_srcdir=/ltp \
-                top_builddir=/ltp \
-                FILTER_OUT_DIRS='${ALPINE_LTP_FILTER_OUT_DIRS}'
-            make -C testcases/kernel/syscalls \
-                top_srcdir=/ltp \
-                top_builddir=/ltp \
-                FILTER_OUT_DIRS='${ALPINE_LTP_FILTER_OUT_DIRS}' \
-                DESTDIR=/tmp/ltp-stage \
-                install
-            make -C testcases/kernel/ipc/pipeio \
-                top_srcdir=/ltp \
-                top_builddir=/ltp
-            make -C testcases/kernel/ipc/pipeio \
-                top_srcdir=/ltp \
-                top_builddir=/ltp \
-                DESTDIR=/tmp/ltp-stage \
-                install
-            make -C testcases/kernel/sched \
-                top_srcdir=/ltp \
-                top_builddir=/ltp
-            make -C testcases/kernel/sched \
-                top_srcdir=/ltp \
-                top_builddir=/ltp \
-                DESTDIR=/tmp/ltp-stage \
-                install
-            install -Dm0644 VERSION '/tmp/ltp-stage${ALPINE_LTP_PREFIX}/Version'
-            mkdir -p '/tmp/ltp-stage${ALPINE_LTP_PREFIX}/runtest'
-            if [ -n '${ltp_runtest_filter_pattern}' ]; then
-                grep -v -E '${ltp_runtest_filter_pattern}' runtest/syscalls > '/tmp/ltp-stage${ALPINE_LTP_PREFIX}/runtest/syscalls'
-            else
-                cp -f runtest/syscalls '/tmp/ltp-stage${ALPINE_LTP_PREFIX}/runtest/syscalls'
-            fi
-            cp -f runtest/sched '/tmp/ltp-stage${ALPINE_LTP_PREFIX}/runtest/sched'
-            mkdir -p '/rootfs${ALPINE_LTP_PREFIX}'
-            cp -a '/tmp/ltp-stage${ALPINE_LTP_PREFIX}/.' '/rootfs${ALPINE_LTP_PREFIX}/'
-            diff -qr '/tmp/ltp-stage${ALPINE_LTP_PREFIX}' '/rootfs${ALPINE_LTP_PREFIX}'
-        "
 }
 
 alpine_write_overlay_files() {
@@ -780,28 +571,53 @@ alpine_cleanup_rootfs_dir() {
         warn "Failed to clean temporary directory via Docker: ${rootfs_dir}"
 }
 
-alpine_download_archive() {
+alpine_download_archive() (
+    local lock_fd candidate actual
+    exec {lock_fd}>"${ALPINE_ARCHIVE}.lock"
+    flock -x "$lock_fd"
     if [[ -f "${ALPINE_ARCHIVE}" ]]; then
-        info "Using cached Alpine minirootfs archive: ${ALPINE_ARCHIVE}"
-    else
+        actual=$(sha256sum "$ALPINE_ARCHIVE" | awk '{print $1}')
+    fi
+    if [[ ${actual:-} != "$ALPINE_METADATA_SHA256" ]]; then
+        [[ -z ${actual:-} ]] || warn "Replacing invalid cached Alpine minirootfs: ${ALPINE_ARCHIVE}"
         info "Downloading ${ALPINE_METADATA_FILE}..."
         info "Arch: ${ALPINE_METADATA_ARCH}"
         info "Version: ${ALPINE_METADATA_VERSION}"
         info "Date: ${ALPINE_METADATA_DATE}"
         info "Time: ${ALPINE_METADATA_TIME}"
         info "Size: $(numfmt --to=iec "${ALPINE_METADATA_SIZE}") (${ALPINE_METADATA_SIZE} bytes)"
-        curl -# -L -o "${ALPINE_ARCHIVE}" "${ALPINE_URL}/${ALPINE_METADATA_FILE}"
+        candidate=$(mktemp "${ALPINE_ARCHIVE}.tmp.XXXXXX")
+        trap 'rm -f -- "${candidate:-}"' EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        curl -# -L -o "$candidate" "${ALPINE_URL}/${ALPINE_METADATA_FILE}" || return 1
+        echo "${ALPINE_METADATA_SHA256}  ${candidate}" | sha256sum -c - || return 1
+        mv -T -- "$candidate" "$ALPINE_ARCHIVE" || return 1
+        candidate=
+        trap - EXIT INT TERM
+    else
+        info "Using cached Alpine minirootfs archive: ${ALPINE_ARCHIVE}"
     fi
+    flock -u "$lock_fd"
+    exec {lock_fd}>&-
+)
 
-    info "Verifying ${ALPINE_METADATA_FILE}..."
-    echo "${ALPINE_METADATA_SHA256}  ${ALPINE_ARCHIVE}" | sha256sum -c -
+alpine_validate_legacy_ltp_environment() {
+    [[ ${ALPINE_LTP_PREFIX:-/opt/ltp} == /opt/ltp ]] ||
+        die "ALPINE_LTP_PREFIX is no longer configurable; use /opt/ltp with --outer-tests ltp"
+    [[ -z ${ALPINE_LTP_DOCKER_IMAGE:-} ]] ||
+        die "ALPINE_LTP_DOCKER_IMAGE is unsupported by rootfs-tests; unset it"
+    case ${ALPINE_LTP_DOCKER_INSTALL_PACKAGES:-0} in
+    0|'') ;;
+    *) die "ALPINE_LTP_DOCKER_INSTALL_PACKAGES is unsupported by rootfs-tests; use 0" ;;
+    esac
 }
 
 alpine_create_rootfs() {
     local rootfs_dir
-    local rootfs_img_tmp="${ALPINE_ROOTFS_IMG}.tmp.$$"
+    local rootfs_img_tmp="${ALPINE_ROOTFS_IMG}.base.tmp.$$"
     rootfs_dir="$(mktemp -d "${ALPINE_WORK_DIR}/rootfs.XXXXXX")"
-    trap 'alpine_cleanup_rootfs_dir "'"${rootfs_dir}"'"; rm -f "'"${rootfs_img_tmp}"'"' EXIT
+    trap 'alpine_cleanup_rootfs_dir "'"${rootfs_dir}"'"; rm -f "'"${rootfs_img_tmp}"'" "'"${rootfs_img_tmp}.lock"'"; rm -rf -- "${composition_dir:-}"' EXIT
 
     info "Creating Alpine rootfs image ${ALPINE_ROOTFS_IMG} (${ALPINE_IMG_SIZE})"
     rm -f "${rootfs_img_tmp}"
@@ -812,13 +628,10 @@ alpine_create_rootfs() {
     info "Extracting ${ALPINE_METADATA_FILE} to ${ALPINE_ROOTFS_IMG}..."
     tar -xzf "${ALPINE_ARCHIVE}" -C "${rootfs_dir}"
 
-    alpine_copy_guest_dir "${rootfs_dir}"
-
     sed -i "s#https\?://dl-cdn.alpinelinux.org/alpine#${ALPINE_BASE}#g" \
         "${rootfs_dir}/etc/apk/repositories"
     alpine_install_default_packages "${rootfs_dir}"
     alpine_write_overlay_files "${rootfs_dir}"
-    alpine_install_ltp_tests "${rootfs_dir}"
 
     if ! command -v debugfs >/dev/null 2>&1; then
         die "debugfs not found. Please install e2fsprogs"
@@ -842,19 +655,42 @@ alpine_create_rootfs() {
         done
     )
 
-    mv -f "${rootfs_img_tmp}" "${ALPINE_ROOTFS_IMG}"
+    rootfs_compose_test_images "${rootfs_img_tmp}" "${ALPINE_OUTER_TEST_OVERLAY}" \
+        "${ALPINE_GUEST_TEST_OVERLAY}" "${ALPINE_OUTER_GUEST_DIR}" "${ALPINE_ARCH}" alpine \
+        "${ALPINE_GUEST_FREE_SIZE}" "${ALPINE_OUTER_FREE_SIZE}" "${ALPINE_ROOTFS_IMG}"
+    rm -f -- "${rootfs_img_tmp}" "${rootfs_img_tmp}.lock"
     trap - EXIT
     alpine_cleanup_rootfs_dir "${rootfs_dir}"
 
     success "Alpine rootfs created: ${ALPINE_ROOTFS_IMG}"
 }
 
-alpine() {
+alpine() (
+    alpine_validate_legacy_ltp_environment
     alpine_init_config
+    rootfs_builder_load_test_options alpine ALPINE_OUTER_TESTS ALPINE_GUEST_TESTS \
+        ALPINE_GUEST_FREE_SIZE ALPINE_OUTER_FREE_SIZE
+    rootfs_builder_validate_reserves "$ALPINE_GUEST_FREE_SIZE" "$ALPINE_OUTER_FREE_SIZE"
+    local composition_dir
+    composition_dir=$(mktemp -d)
+    trap 'rm -rf -- "$composition_dir"' EXIT
+    ALPINE_OUTER_GUEST_DIR="$composition_dir/outer-guest"
+    if [[ -n $ALPINE_GUEST_DIR ]]; then
+        ALPINE_OUTER_GUEST_DIR=$ALPINE_GUEST_DIR
+    else
+        mkdir -p -- "$ALPINE_OUTER_GUEST_DIR"
+    fi
+    rootfs_validate_payload_tree "$ALPINE_OUTER_GUEST_DIR" || return 1
+    rootfs_builder_prepare_test_overlays "$ALPINE_ARCH" alpine "$ALPINE_OUTER_TESTS" \
+        "$ALPINE_GUEST_TESTS" "$composition_dir" ALPINE_OUTER_TEST_OVERLAY ALPINE_GUEST_TEST_OVERLAY || return 1
+    _rootfs_validate_protected_outer_path "$ALPINE_OUTER_GUEST_DIR" "$ALPINE_OUTER_TEST_OVERLAY" \
+        "rootfs-${ALPINE_ARCH}-alpine.img"
     alpine_load_release_metadata
     alpine_download_archive
     alpine_create_rootfs
-}
+    rm -rf -- "$composition_dir"
+    trap - EXIT
+)
 
 alpine_clean_outputs() {
     local output_dir="${ALPINE_OUT_DIR:-${ROOT_DIR}/IMAGES/rootfs}"
@@ -863,6 +699,7 @@ alpine_clean_outputs() {
         "${output_dir}/rootfs-loongarch64-alpine.img" \
         "${output_dir}/rootfs-riscv64-alpine.img" \
         "${output_dir}/rootfs-x86_64-alpine.img"
+    rm -f -- "${output_dir}"/rootfs-*-alpine.img.base.tmp.*
     success "Alpine rootfs outputs cleaned in ${output_dir}"
 }
 

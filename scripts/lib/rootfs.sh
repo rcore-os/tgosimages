@@ -104,49 +104,279 @@ _rootfs_inject_tree_via_cpio_gz() {
     return 0
 }
 
-_rootfs_inject_tree_via_debugfs() {
-    local image_path="$1"
-    local source_dir="$2"
-    local abs_source
-    local rel_path
-    local target_path
-    local link_target
-
-    command -v debugfs >/dev/null 2>&1 || {
-        warn "debugfs not found, cannot inject into ext filesystem image: ${image_path}"
-        return 1
-    }
-
-    abs_source="$(cd "${source_dir}" && pwd -P)"
-    pushd "${abs_source}" >/dev/null
-
-    while IFS= read -r rel_path; do
-        [[ "${rel_path}" == "." ]] && continue
-        target_path="/${rel_path#./}"
-        debugfs -w -R "mkdir ${target_path}" "${image_path}" >/dev/null 2>&1 || true
-    done < <(find . -type d | sort)
-
-    while IFS= read -r rel_path; do
-        target_path="/${rel_path#./}"
-        debugfs -w -R "rm ${target_path}" "${image_path}" >/dev/null 2>&1 || true
-        debugfs -w -R "write ${abs_source}/${rel_path#./} ${target_path}" "${image_path}" >/dev/null || {
-            popd >/dev/null
-            return 1
-        }
-    done < <(find . -type f | sort)
-
-    while IFS= read -r rel_path; do
-        target_path="/${rel_path#./}"
-        link_target="$(readlink "${rel_path}")"
-        debugfs -w -R "rm ${target_path}" "${image_path}" >/dev/null 2>&1 || true
-        debugfs -w -R "symlink ${target_path} ${link_target}" "${image_path}" >/dev/null || {
-            popd >/dev/null
-            return 1
-        }
-    done < <(find . -type l | sort)
-
-    popd >/dev/null
+_rootfs_debugfs_quote() {
+    local value=$1
+    value=${value//\\/\\\\}
+    value=${value//\"/\\\"}
+    printf '"%s"' "$value"
 }
+
+_rootfs_debugfs_stat() {
+    local image=$1 path=$2 quoted output
+    quoted=$(_rootfs_debugfs_quote "$path") || return 1
+    output=$(LC_ALL=C debugfs -R "stat ${quoted}" "$image" 2>&1) || return 1
+    [[ "$output" != *'File not found'* && "$output" == *'Inode:'* ]] || return 1
+    printf '%s\n' "$output"
+}
+
+_rootfs_payload_has_unpreserved_metadata() {
+    local path=$1 output
+    output=$(getfattr -h -d -m- -- "$path" 2>/dev/null) || return 2
+    [[ "$output" != *'='* ]] || return 0
+    if [[ ! -L "$path" ]]; then
+        output=$(getfacl -cp -- "$path" 2>/dev/null) || return 2
+        if grep -Eq '^(default:|user:.+:|group:.+:|mask:)' <<<"$output"; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Contract: this mutates IMAGE directly. Atomic callers must pass an image they
+# own (rootfs-compose does so via an adjacent temporary copy).
+_rootfs_inject_tree_via_debugfs() (
+    local image_path=$1 source_dir=$2 image_dir snapshot inventory_raw inventory
+    local path rel target type mode uid gid atime mtime size sha link_target key first
+    local quoted_source quoted_target quoted_first stat_output actual actual_mode actual_uid actual_gid
+    local actual_size actual_atime actual_mtime actual_links verify_dir verify_file verify_sha full_mode type_bits index=0
+    local -a paths=()
+    local -a source_paths=()
+    local -a scan_dirs=()
+    local -A hardlink_first=()
+    local -A captured_mode=() captured_uid=() captured_gid=() captured_atime=() captured_mtime=()
+    local -A captured_identity=()
+    local timestamp_text fraction atime_raw mtime_raw scan_dir scan_path scan_index=0 snapshot_path
+
+    for tool in awk basename cat chmod cp debugfs dirname find getfacl getfattr grep head mkdir mktemp readlink rm sed sha256sum sort stat touch; do
+        command -v "$tool" >/dev/null 2>&1 || {
+            warn "${tool} not found, cannot safely inject ext filesystem image: ${image_path}"
+            return 1
+        }
+    done
+    [[ -f "$image_path" && -d "$source_dir" ]] || return 1
+    image_dir=$(dirname -- "$image_path")
+    snapshot=
+    inventory_raw=
+    inventory=
+    verify_dir=
+    trap 'if [[ -n ${snapshot:-} ]]; then chmod -R u+w -- "$snapshot" 2>/dev/null || true; rm -rf -- "$snapshot"; fi; [[ -z ${verify_dir:-} ]] || rm -rf -- "$verify_dir"; [[ -z ${inventory_raw:-} ]] || rm -f -- "$inventory_raw"; [[ -z ${inventory:-} ]] || rm -f -- "$inventory"' EXIT
+    trap 'exit 130' INT TERM
+    snapshot=$(mktemp -d "${image_dir}/.rootfs-payload.XXXXXX") || return 1
+    inventory_raw=$(mktemp "${image_dir}/.rootfs-inventory.raw.XXXXXX") || return 1
+    inventory=$(mktemp "${image_dir}/.rootfs-inventory.sorted.XXXXXX") || return 1
+    verify_dir=$(mktemp -d "${image_dir}/.rootfs-verify.XXXXXX") || return 1
+
+    # Capture metadata and reject unsupported entries before any content read.
+    : >"$inventory_raw"
+    scan_dirs=("$source_dir")
+    while ((scan_index < ${#scan_dirs[@]})); do
+        scan_dir=${scan_dirs[$scan_index]}
+        scan_index=$((scan_index + 1))
+        LC_ALL=C find "$scan_dir" -mindepth 1 -maxdepth 1 \
+            -printf '%A@\034%T@\034%m\034%U\034%G\034%p\0' >"$inventory" || return 1
+        cat "$inventory" >>"$inventory_raw" || return 1
+        while IFS=$'\034' read -r -d '' _ _ _ _ _ scan_path; do
+            [[ -d "$scan_path" && ! -L "$scan_path" ]] && scan_dirs+=("$scan_path")
+        done <"$inventory"
+    done
+    while IFS=$'\034' read -r -d '' atime_raw mtime_raw mode uid gid path; do
+        source_paths+=("$path")
+        rel=${path#"$source_dir/"}
+        [[ "$rel" != *[$'\001'-$'\037'$'\177']* && "$rel" != *['"'\\]* ]] || return 1
+        captured_mode[$rel]=$mode
+        captured_uid[$rel]=$uid
+        captured_gid[$rel]=$gid
+        captured_atime[$rel]=${atime_raw%%.*}
+        captured_mtime[$rel]=${mtime_raw%%.*}
+        captured_identity[$rel]=$(stat -c '%d:%i:%s:%f:%z' -- "$path") || return 1
+        # Traversing a directory to inventory its children can itself update
+        # directory atime under relatime. Directory mtime and all file/symlink
+        # timestamps remain immutable and are checked exactly.
+        if [[ ! -L "$path" && -d "$path" ]]; then
+            timestamp_text=$mtime_raw
+        else
+            timestamp_text="$atime_raw $mtime_raw"
+        fi
+        for timestamp_text in $timestamp_text; do
+            [[ "$timestamp_text" =~ \.([0-9]{9}) ]] || return 1
+            fraction=${BASH_REMATCH[1]}
+            [[ "$fraction" == 000000000 ]] || {
+                warn "Fractional payload timestamps are not supported: ${rel}"
+                return 1
+            }
+        done
+        if [[ -L "$path" ]]; then
+            link_target=$(readlink -- "$path") || return 1
+            [[ "$link_target" != *[$'\001'-$'\037'$'\177']* && "$link_target" != *['"'\\]* ]] || return 1
+        elif [[ ! -f "$path" && ! -d "$path" ]]; then
+            return 1
+        fi
+        if _rootfs_payload_has_unpreserved_metadata "$path"; then return 1; else [[ $? -eq 1 ]] || return 1; fi
+    done <"$inventory_raw"
+
+    cp -a --reflink=auto -- "$source_dir/." "$snapshot/" || return 1
+    # Never write caller-owned payload paths. Verify identity after the copy,
+    # then apply the pre-read manifest only to the private snapshot.
+    for path in "${source_paths[@]}"; do
+        rel=${path#"$source_dir/"}
+        [[ "$(stat -c '%d:%i:%s:%f:%z' -- "$path")" == "${captured_identity[$rel]}" ]] || return 1
+        snapshot_path="$snapshot/$rel"
+        if [[ -L "$snapshot_path" ]]; then
+            touch -h -a -d "@${captured_atime[$rel]}" -- "$snapshot_path" || return 1
+            touch -h -m -d "@${captured_mtime[$rel]}" -- "$snapshot_path" || return 1
+        else
+            touch -a -d "@${captured_atime[$rel]}" -- "$snapshot_path" || return 1
+            touch -m -d "@${captured_mtime[$rel]}" -- "$snapshot_path" || return 1
+        fi
+    done
+    find "$snapshot" -mindepth 1 -print0 >"$inventory_raw" || return 1
+    sort -z "$inventory_raw" >"$inventory" || return 1
+    while IFS= read -r -d '' path; do
+        paths+=("$path")
+    done <"$inventory"
+
+    # Validate the complete immutable snapshot before the first image write.
+    for path in "${paths[@]}"; do
+        rel=${path#"$snapshot/"}
+        [[ "$rel" != *[$'\001'-$'\037'$'\177']* ]] || {
+            warn "Unsupported control character in payload path"
+            return 1
+        }
+        [[ "$rel" != *['"'\\]* ]] || {
+            warn "Payload path cannot be represented losslessly by debugfs: ${rel}"
+            return 1
+        }
+        if [[ -L "$path" ]]; then
+            link_target=$(readlink -- "$path") || return 1
+            [[ "$link_target" != *[$'\001'-$'\037'$'\177']* ]] || {
+                warn "Unsupported control character in symlink target: ${rel}"
+                return 1
+            }
+            [[ "$link_target" != *['"'\\]* ]] || {
+                warn "Symlink target cannot be represented losslessly by debugfs: ${rel}"
+                return 1
+            }
+        elif [[ ! -f "$path" && ! -d "$path" ]]; then
+            warn "Unsupported special payload object: ${rel}"
+            return 1
+        fi
+        if _rootfs_payload_has_unpreserved_metadata "$path"; then
+            warn "Payload xattrs or extended ACLs are not supported: ${rel}"
+            return 1
+        else
+            [[ $? -eq 1 ]] || return 1
+        fi
+    done
+
+    # Create directory topology first. Existing directories are overlay roots.
+    for path in "${paths[@]}"; do
+        [[ -d "$path" && ! -L "$path" ]] || continue
+        rel=${path#"$snapshot/"}; target="/${rel}"
+        if ! _rootfs_debugfs_stat "$image_path" "$target" >/dev/null; then
+            quoted_target=$(_rootfs_debugfs_quote "$target") || return 1
+            LC_ALL=C debugfs -w -R "mkdir ${quoted_target}" "$image_path" >/dev/null 2>&1 || return 1
+        fi
+    done
+
+    # Write data and construct hardlinks. Final verification, not debugfs's
+    # process status, decides whether each semantic operation succeeded.
+    for path in "${paths[@]}"; do
+        rel=${path#"$snapshot/"}; target="/${rel}"
+        if [[ -L "$path" ]]; then
+            link_target=$(readlink -- "$path") || return 1
+            quoted_target=$(_rootfs_debugfs_quote "$target") || return 1
+            if _rootfs_debugfs_stat "$image_path" "$target" >/dev/null; then
+                LC_ALL=C debugfs -w -R "rm ${quoted_target}" "$image_path" >/dev/null 2>&1 || return 1
+            fi
+            LC_ALL=C debugfs -w -R "symlink ${quoted_target} $(_rootfs_debugfs_quote "$link_target")" \
+                "$image_path" >/dev/null 2>&1 || return 1
+        elif [[ -f "$path" ]]; then
+            key=$(stat -c '%d:%i' -- "$path") || return 1
+            quoted_target=$(_rootfs_debugfs_quote "$target") || return 1
+            if _rootfs_debugfs_stat "$image_path" "$target" >/dev/null; then
+                LC_ALL=C debugfs -w -R "rm ${quoted_target}" "$image_path" >/dev/null 2>&1 || return 1
+            fi
+            first=${hardlink_first[$key]-}
+            if [[ -n "$first" ]]; then
+                quoted_first=$(_rootfs_debugfs_quote "$first") || return 1
+                LC_ALL=C debugfs -w -R "ln ${quoted_first} ${quoted_target}" "$image_path" >/dev/null 2>&1 || return 1
+            else
+                quoted_source=$(_rootfs_debugfs_quote "$path") || return 1
+                LC_ALL=C debugfs -w -R "write ${quoted_source} ${quoted_target}" "$image_path" >/dev/null 2>&1 || return 1
+                hardlink_first[$key]=$target
+            fi
+        fi
+    done
+
+    # Apply inode metadata only after all children and links have been created.
+    for path in "${paths[@]}"; do
+        rel=${path#"$snapshot/"}; target="/${rel}"
+        mode=${captured_mode[$rel]}
+        uid=${captured_uid[$rel]}
+        gid=${captured_gid[$rel]}
+        atime=${captured_atime[$rel]}
+        mtime=${captured_mtime[$rel]}
+        ((atime >= 0 && atime <= 4294967295 && mtime >= 0 && mtime <= 4294967295)) || return 1
+        if [[ -L "$path" ]]; then type_bits=$((8#120000));
+        elif [[ -d "$path" ]]; then type_bits=$((8#040000));
+        else type_bits=$((8#100000)); fi
+        full_mode=$((type_bits + 8#$mode))
+        printf -v full_mode '0%o' "$full_mode"
+        quoted_target=$(_rootfs_debugfs_quote "$target") || return 1
+        LC_ALL=C debugfs -w -R "set_inode_field ${quoted_target} mode ${full_mode}" "$image_path" >/dev/null 2>&1 || return 1
+        LC_ALL=C debugfs -w -R "set_inode_field ${quoted_target} uid ${uid}" "$image_path" >/dev/null 2>&1 || return 1
+        LC_ALL=C debugfs -w -R "set_inode_field ${quoted_target} gid ${gid}" "$image_path" >/dev/null 2>&1 || return 1
+        LC_ALL=C debugfs -w -R "set_inode_field ${quoted_target} atime @${atime}" "$image_path" >/dev/null 2>&1 || return 1
+        LC_ALL=C debugfs -w -R "set_inode_field ${quoted_target} mtime @${mtime}" "$image_path" >/dev/null 2>&1 || return 1
+        if [[ -f "$path" && ! -L "$path" ]]; then
+            LC_ALL=C debugfs -w -R "set_inode_field ${quoted_target} links_count $(stat -c %h -- "$path")" \
+                "$image_path" >/dev/null 2>&1 || return 1
+        fi
+    done
+
+    # Verify a complete post-write manifest. This catches debugfs commands that
+    # return zero while reporting semantic errors.
+    for path in "${paths[@]}"; do
+        index=$((index + 1)); rel=${path#"$snapshot/"}; target="/${rel}"
+        stat_output=$(_rootfs_debugfs_stat "$image_path" "$target") || return 1
+        actual_mode=$(sed -n 's/.*Mode:[[:space:]]*\([0-7][0-7]*\).*/\1/p' <<<"$stat_output" | head -n1)
+        read -r actual_uid actual_gid < <(awk '/^User:/ {print $2, $4; exit}' <<<"$stat_output")
+        actual_atime=$(sed -n 's/.*atime: 0x\([0-9a-fA-F]*\):.*/\1/p' <<<"$stat_output" | head -n1)
+        actual_mtime=$(sed -n 's/.*mtime: 0x\([0-9a-fA-F]*\):.*/\1/p' <<<"$stat_output" | head -n1)
+        actual_links=$(awk '/^Links:/ {print $2; exit}' <<<"$stat_output")
+        mode=${captured_mode[$rel]}; uid=${captured_uid[$rel]}; gid=${captured_gid[$rel]}
+        atime=${captured_atime[$rel]}; printf -v atime '%08x' "$atime"
+        mtime=${captured_mtime[$rel]}; printf -v mtime '%08x' "$mtime"
+        [[ "$actual_mode" == "0${mode}" || "$actual_mode" == "$mode" ]] || return 1
+        [[ "$actual_uid" == "$uid" && "$actual_gid" == "$gid" ]] || return 1
+        [[ "${actual_atime,,}" == "${atime,,}" && "${actual_mtime,,}" == "${mtime,,}" ]] || return 1
+        if [[ -L "$path" ]]; then
+            [[ "$stat_output" == *'Type: symlink'* ]] || return 1
+            mkdir "$verify_dir/$index" || return 1
+            LC_ALL=C debugfs -R "rdump $(_rootfs_debugfs_quote "$target") $(_rootfs_debugfs_quote "$verify_dir/$index")" \
+                "$image_path" >/dev/null 2>&1 || return 1
+            actual=$(readlink -- "$verify_dir/$index/$(basename -- "$path")") || return 1
+            [[ "$actual" == "$(readlink -- "$path")" ]] || return 1
+        elif [[ -f "$path" ]]; then
+            [[ "$stat_output" == *'Type: regular'* && "$actual_links" == "$(stat -c %h -- "$path")" ]] || return 1
+            size=$(stat -c %s -- "$path"); sha=$(sha256sum -- "$path" | awk '{print $1}')
+            actual_size=$(awk '/ Project: / {print $NF; exit}' <<<"$stat_output")
+            verify_file="$verify_dir/file.$index"
+            LC_ALL=C debugfs -R "dump $(_rootfs_debugfs_quote "$target") $(_rootfs_debugfs_quote "$verify_file")" \
+                "$image_path" >/dev/null 2>&1 || return 1
+            [[ -f "$verify_file" && "$(stat -c %s -- "$verify_file")" == "$size" ]] || return 1
+            verify_sha=$(sha256sum -- "$verify_file" | awk '{print $1}')
+            [[ "$verify_sha" == "$sha" ]] || return 1
+            key=$(stat -c '%d:%i' -- "$path"); first=${hardlink_first[$key]}
+            if [[ "$first" != "$target" ]]; then
+                actual=$(_rootfs_debugfs_stat "$image_path" "$first" | awk '/^Inode:/ {print $2; exit}')
+                [[ "$actual" == "$(awk '/^Inode:/ {print $2; exit}' <<<"$stat_output")" ]] || return 1
+            fi
+        elif [[ -d "$path" ]]; then
+            [[ "$stat_output" == *'Type: directory'* ]] || return 1
+        fi
+    done
+)
 
 _rootfs_inject_tree_via_loop_mount() {
     local image_path="$1"

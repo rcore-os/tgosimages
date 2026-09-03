@@ -65,9 +65,9 @@ These scripts generate filesystem contents or filesystem images.
 
 | Script | Main responsibility | Typical output |
 | --- | --- | --- |
-| `scripts/rootfs/busybox.sh` | Build a minimal BusyBox-based rootfs | `busybox-initramfs-<arch>.cpio.gz`, `busybox-rootfs-<arch>.img` |
-| `scripts/rootfs/alpine.sh` | Download Alpine minirootfs and pack an ext4 image | `alpine-rootfs-<arch>.img` |
-| `scripts/rootfs/debian.sh` | Use Docker + debootstrap to build a Debian rootfs image | `debian-rootfs-<arch>.img` |
+| `scripts/rootfs/busybox.sh` | Build a minimal BusyBox-based rootfs | `initramfs-<arch>-busybox.cpio.gz`, `rootfs-<arch>-busybox.img` |
+| `scripts/rootfs/alpine.sh` | Download Alpine minirootfs and pack an ext4 image | `rootfs-<arch>-alpine.img` |
+| `scripts/rootfs/debian.sh` | Use Docker + debootstrap to build a Debian rootfs image | `rootfs-<arch>-debian.img` |
 
 ## Supported Targets
 
@@ -198,6 +198,80 @@ scripts/rootfs/debian.sh loongarch64 --debian unstable --out_dir IMAGES/rootfs
 
 ## Rootfs Notes
 
+### Outer and nested images
+
+Each ext4 builder starts from one clean base image and composes two independent
+branches:
+
+```text
+clean base
+├── guest branch + guest test plugins -> nested rootfs
+└── outer branch + outer test plugins + /guest platform payload
+    └── /guest/rootfs-<arch>-<type>.img (the nested rootfs)
+```
+
+Guest plugins install below `/guest-tests/<plugin>` in the nested image. The
+outer image contains platform payload below `/guest` and the raw nested image at
+`/guest/rootfs-<arch>-<type>.img`; outer-only platform files and `/opt/ltp` do
+not leak into the nested image. There is deliberately no generated
+`run-all.sh`: selecting tests packages their assets but does not choose a test
+order or run them automatically.
+
+The defaults are:
+
+| Image scope | BusyBox | Alpine | Debian |
+| --- | --- | --- | --- |
+| Outer tests | `none` | `ltp` | `none` |
+| Nested guest tests | `cyclictest,lmbench,iozone` | `cyclictest,lmbench,iozone` | `cyclictest,lmbench,iozone` |
+
+Both nested and outer ext4 images reserve 256 MiB free space by default. The
+uncompressed nested image is embedded as a raw file, so the raw outer image can
+grow substantially; release-time xz compression may still make the archive
+much smaller, but no compressed-size threshold is guaranteed. BusyBox ext4
+uses the same composition. Its legacy initramfs keeps existing platform
+injection, but excludes guest test plugins and the nested rootfs.
+
+Direct rootfs examples:
+
+```bash
+scripts/rootfs/busybox.sh x86_64 \
+  --outer-tests none --guest-tests cyclictest \
+  --guest-free-size 128M --outer-free-size 384M
+scripts/rootfs/alpine.sh aarch64 \
+  --outer-tests ltp --guest-tests cyclictest,lmbench,iozone \
+  --guest-free-size 256M --outer-free-size 512M
+```
+
+The same options pass through the QEMU flow:
+
+```bash
+./build.sh platform qemu-x86_64 linux --rootfs busybox,alpine,debian \
+  --outer-tests none --guest-tests cyclictest \
+  --guest-free-size 256M --outer-free-size 512M
+```
+
+Use `none` to build a scope without tests, or an explicit comma-separated list
+for nondefault builds.
+
+### Rootfs test plugins
+
+Executable `scripts/rootfs-tests/plugins/*.sh` files form the extension point.
+A plugin implements two commands:
+
+- `describe` prints exactly `name=`, `arches=`, `rootfs=`, and `scopes=` lines.
+- `build --arch <arch> --rootfs <type> --scope <outer|guest> --output <empty-dir>`
+  writes an overlay into the supplied empty directory. Guest plugins normally
+  use `guest-tests/<name>/`; outer plugins use their native outer-rootfs path.
+
+Add a plugin by copying an existing small plugin, pinning its upstream version
+and SHA256, declaring only supported combinations, producing static ELF64
+binaries for the selected architecture where applicable, and extending the
+fast plugin tests. The framework discovers plugins rather than maintaining a
+central list. Overlays accept directories, regular files, and symlinks only;
+special nodes and out-of-band metadata paths are rejected. Download caches and
+extracted sources are keyed by the verified checksum and record checksum
+provenance, while builder containers are pinned by their configured image.
+
 ### BusyBox
 
 - Generates both initramfs and ext4 rootfs images
@@ -208,11 +282,12 @@ scripts/rootfs/debian.sh loongarch64 --debian unstable --out_dir IMAGES/rootfs
 
 - Downloads official Alpine `minirootfs`
 - Verifies the downloaded archive with SHA256
-- Builds and installs filtered LTP syscall tests and the complete `testcases/kernel/sched` subtree from `https://github.com/linux-test-project/ltp/releases/download/20260529/ltp-full-20260529.tar.xz` into `/opt/ltp`
+- Produces a clean Alpine base; the default outer `ltp` plugin separately builds
+  and installs filtered LTP 20260529 content into `/opt/ltp`
 - Follows the upstream Alpine exclusions: skips the `fmtmsg` directory and only `timer_create01`/`timer_create03`, while retaining `timer_create02`
 - Includes `/opt/ltp/Version` and executable `/opt/ltp/testcases/bin/hackbench`
 - Packages all scheduler build artifacts, but only `hackbench` is currently verified as a Starry workload
-- Builds LTP inside an Alpine Docker container with `apk add` build dependencies
+- Builds LTP through the shared, checksum-verified Alpine plugin builder
 - Generates an ext4 rootfs image
 - Currently supports `aarch64`, `loongarch64`, `riscv64`, and `x86_64`
 - `scripts/tests/alpine-ltp-content.sh` validates the LTP version, timer_create contents, runtest entries, executable bit, and ELF architecture in all four images
@@ -223,6 +298,47 @@ scripts/rootfs/debian.sh loongarch64 --debian unstable --out_dir IMAGES/rootfs
 - Generates an ext4 rootfs image
 - Defaults to Debian `trixie`
 - Supports `aarch64`, `riscv64`, `x86_64`, and `loongarch64`
+
+### Rootfs validation
+
+Run the fast, build-free suites before a costly image build:
+
+```bash
+scripts/tests/rootfs-nested-content-test.sh
+scripts/tests/qemu-rootfs-test-options.sh
+scripts/tests/rootfs-builder-options.sh
+scripts/tests/rootfs-test-plugins.sh
+scripts/tests/rootfs-compose.sh
+scripts/tests/starry-release-smoke.sh
+```
+
+After building, validate selected image content without mounting it:
+
+```bash
+scripts/tests/rootfs-nested-content.sh --image-dir IMAGES/rootfs \
+  --arch x86_64 --rootfs busybox \
+  --guest-tests cyclictest,lmbench,iozone \
+  --guest-free-size 256M --outer-free-size 256M
+scripts/tests/alpine-ltp-content.sh --image-dir IMAGES/rootfs --arch x86_64
+```
+
+The BusyBox end-to-end fixture build is opt-in:
+
+```bash
+scripts/tests/rootfs-builder-options.sh --integration
+```
+
+Optional full QEMU validation is intentionally manual and per architecture:
+
+```bash
+./build.sh platform qemu-aarch64 all --rootfs busybox,alpine,debian
+./build.sh platform qemu-riscv64 all --rootfs busybox,alpine,debian
+./build.sh platform qemu-x86_64 all --rootfs busybox,alpine,debian
+./build.sh platform qemu-loongarch64 all --rootfs busybox,alpine
+```
+
+None of these build or verification commands automatically executes a
+`run-all.sh`; workloads must be invoked explicitly inside the guest.
 
 ## Output Layout
 
@@ -275,7 +391,7 @@ Typical QEMU Linux files:
 - `bzImage` for `x86_64`
 - `vmlinuz.efi` and `vmlinux.elf` for `loongarch64`
 - `linux-qemu` as the generic QEMU Linux entry name; for `loongarch64`, this is the ELF image copied from `vmlinux.elf`
-- BusyBox rootfs artifacts such as `busybox-initramfs-<arch>.cpio.gz` and `busybox-rootfs-<arch>.img`
+- BusyBox rootfs artifacts such as `initramfs-<arch>-busybox.cpio.gz` and `rootfs-<arch>-busybox.img`
 
 ## QEMU Validation
 
