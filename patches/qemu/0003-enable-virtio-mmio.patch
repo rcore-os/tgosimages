@@ -1,0 +1,37 @@
+Enable virtio-mmio as a built-in driver (CONFIG_VIRTIO_MMIO=y) across the
+QEMU Linux defconfigs so guests using memory-mapped virtio devices do not
+depend on loading a module from an initramfs.
+
+  - x86_64:          VIRTIO_MMIO was unset, add =y
+  - loongarch64:     VIRTIO_MMIO was =m, switch to =y
+  - arm64 (aarch64): already =y in defconfig, no change needed
+  - riscv64:         already =y in defconfig, no change needed
+
+Generated with `git diff` against the Linux source tree at ref
+74fe02ce122a6103f207d29fafc8b3a53de6abaf (after 0002-enable-nvme-builtin.patch).
+
+diff --git a/arch/x86/configs/x86_64_defconfig b/arch/x86/configs/x86_64_defconfig
+index ad153f82c..bd264937e 100644
+--- a/arch/x86/configs/x86_64_defconfig
++++ b/arch/x86/configs/x86_64_defconfig
+@@ -228,6 +228,7 @@ CONFIG_DMADEVICES=y
+ CONFIG_VIRTIO_PCI=y
+ CONFIG_VIRTIO_INPUT=y
++CONFIG_VIRTIO_MMIO=y
+ CONFIG_EEEPC_LAPTOP=y
+ CONFIG_AMD_IOMMU=y
+ CONFIG_INTEL_IOMMU=y
+ # CONFIG_INTEL_IOMMU_DEFAULT_ON is not set
+diff --git a/arch/loongarch/configs/loongson64_defconfig b/arch/loongarch/configs/loongson64_defconfig
+index 2a1c5f8b4..7e0b3d29a 100644
+--- a/arch/loongarch/configs/loongson64_defconfig
++++ b/arch/loongarch/configs/loongson64_defconfig
+@@ -936,7 +936,7 @@ CONFIG_UIO_PCI_GENERIC=m
+ CONFIG_VIRTIO_PCI=y
+ CONFIG_VIRTIO_BALLOON=m
+ CONFIG_VIRTIO_INPUT=m
+-CONFIG_VIRTIO_MMIO=m
++CONFIG_VIRTIO_MMIO=y
+ CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES=y
+ CONFIG_VHOST_NET=m
+ CONFIG_VHOST_SCSI=m
