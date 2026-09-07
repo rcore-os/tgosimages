@@ -22,23 +22,21 @@ Starry 用户态程序和 StarryOS 客户机镜像，并把板端需要的文件
 
 ## 1. 仓库职责和结构
 
-### 1.1 推荐目录布局
+### 1.1 仓库关系
+
+`tgosimages`、`aka-rk3588` 和 `ivc-sdk` 是彼此独立的 Git 仓库，不要求使用固定的父目录
+名称或本地 checkout 布局。本文命令默认从命令所属仓库的根目录执行。
 
 ```text
-axvisor_two/
-├── aka-rk3588/
-│   ├── perception/                         # Starry/Linux 感知程序
-│   ├── protocol/perception_result_v2.h     # Starry/Zephyr 公共协议
-│   ├── zephyr/orangepi_robot_control/      # Zephyr 控制应用
-│   └── scripts/build_zephyr_control.sh     # AKA 侧构建入口
-├── ivc-sdk/                              # Starry/Zephyr 共用 AXIVC SDK
-└── tgosimages/
-    ├── scripts/os/zephyr.sh                # 通用 Zephyr 构建器
-    ├── scripts/apps/aka-rk3588-zephyr.sh   # AKA Zephyr 入口
-    ├── scripts/apps/ivc-rk3588.sh          # AXIVC demo/benchmark 入口
-    ├── patches/zephyr/                     # Zephyr 补丁
-    ├── build/                              # Zephyr 源码、SDK、构建缓存
-    └── IMAGES/                             # 最终镜像
+aka-rk3588/                               # 感知、公共协议和机器人控制应用
+ivc-sdk/                                  # Starry/Linux/Zephyr 共用 AXIVC SDK
+tgosimages/                               # 系统构建环境和发布产物
+├── scripts/os/zephyr.sh                  # 通用 Zephyr 构建器
+├── scripts/apps/aka-rk3588-zephyr.sh     # AKA Zephyr 入口
+├── scripts/apps/ivc-rk3588.sh            # AXIVC demo/benchmark 入口
+├── patches/zephyr/                       # Zephyr 补丁
+├── build/                                # Zephyr 源码、SDK、构建缓存
+└── IMAGES/                               # 最终镜像
 ```
 
 ### 1.2 职责边界
@@ -150,7 +148,7 @@ CMake + Ninja
 仓库已忽略 `build/`、`IMAGES/`、`release/` 等生成目录，并补充：
 
 ```text
-/twister-out/
+/twister-out*/
 ```
 
 Twister 生成的 CMake cache、对象文件、ELF、XML/JSON 和日志都不应提交。
@@ -164,7 +162,7 @@ Twister 生成的 CMake cache、对象文件、ELF、XML/JSON 和日志都不应
 推荐命令：
 
 ```bash
-cd /path/axvisor_two/tgosimages
+# 在 tgosimages 仓库根目录执行
 ./scripts/apps/aka-rk3588-zephyr.sh
 ```
 
@@ -172,18 +170,18 @@ cd /path/axvisor_two/tgosimages
 
 1. `--aka-dir <路径>`；
 2. 环境变量 `AKA_RK3588_DIR`；
-3. 同级目录 `../aka-rk3588`；
-4. 以上均不存在时，clone AKA 默认分支到 `../aka-rk3588`。
+3. `tgosimages` 同级的 `aka-rk3588` checkout；
+4. 以上均不存在时，在 `tgosimages` 同级创建 `aka-rk3588` checkout。
 
-`ivc-sdk` 使用同样的查找规则，默认路径为同级 `../ivc-sdk`。不存在时 clone
+`ivc-sdk` 使用同样的查找规则，默认使用 `tgosimages` 同级的 `ivc-sdk` checkout。不存在时 clone
 `https://github.com/rcore-os/ivc-sdk.git` 的当前默认分支；已有 checkout 不会被自动
 pull、切换、reset 或清理。
 
 输出会包含：
 
 ```text
-TGOSIMAGES_DIR=/home/.../tgosimages
-AKA_RK3588_DIR=/home/.../aka-rk3588
+TGOSIMAGES_DIR=<tgosimages-checkout>
+AKA_RK3588_DIR=<aka-rk3588-checkout>
 AKA_RK3588_COMMIT=<commit>
 AKA_RK3588_WORKTREE=clean|dirty
 ```
@@ -194,21 +192,21 @@ AKA_RK3588_WORKTREE=clean|dirty
 
 ```bash
 ./scripts/apps/aka-rk3588-zephyr.sh \
-  --aka-dir /path/to/aka-rk3588
+  --aka-dir <aka-rk3588-checkout>
 ```
 
 同时指定 SDK：
 
 ```bash
 ./scripts/apps/aka-rk3588-zephyr.sh \
-  --aka-dir /path/to/aka-rk3588 \
-  --ivc-sdk-dir /path/to/ivc-sdk
+  --aka-dir <aka-rk3588-checkout> \
+  --ivc-sdk-dir <ivc-sdk-checkout>
 ```
 
 或者：
 
 ```bash
-AKA_RK3588_DIR=/path/to/aka-rk3588 \
+AKA_RK3588_DIR=<aka-rk3588-checkout> \
 ./scripts/apps/aka-rk3588-zephyr.sh
 ```
 
@@ -244,7 +242,7 @@ AKA 不存在时可以覆盖 clone 地址：
 AKA 提供对称入口：
 
 ```bash
-cd /path/axvisor_two/aka-rk3588
+# 在 aka-rk3588 仓库根目录执行
 ./scripts/build_zephyr_control.sh
 ```
 
@@ -255,7 +253,7 @@ cd /path/axvisor_two/aka-rk3588
 
 ```bash
 ./scripts/build_zephyr_control.sh \
-  --tgosimages-dir /path/to/tgosimages
+  --tgosimages-dir <tgosimages-checkout>
 ```
 
 ### 3.5 传递 Zephyr 参数
@@ -273,7 +271,7 @@ cd /path/axvisor_two/aka-rk3588
 
 ```bash
 ./scripts/apps/aka-rk3588-zephyr.sh \
-  --images-dir /tmp/orangepi-zephyr-images
+  --images-dir <output-directory>
 ```
 
 查看通用参数：
@@ -287,7 +285,7 @@ cd /path/axvisor_two/aka-rk3588
 Orange Pi 5 Plus 上的 Zephyr-Starry IVC 测例使用：
 
 ```bash
-cd /path/axvisor_two/tgosimages
+# 在 tgosimages 仓库根目录执行
 ./build.sh platform orangepi-5-plus ivc
 ```
 
@@ -305,7 +303,8 @@ cd /path/axvisor_two/tgosimages
 
 默认行为：
 
-- `ivc-sdk` 优先使用同级 `../ivc-sdk`；不存在时 clone `https://github.com/rcore-os/ivc-sdk.git`。
+- `ivc-sdk` 优先使用 `tgosimages` 同级的同名 checkout；不存在时 clone
+  `https://github.com/rcore-os/ivc-sdk.git`。
 - StarryOS 使用远端 `https://github.com/rcore-os/tgoskits.git` 的 `dev` 分支，不使用同级本地
   `tgoskits`。
 - StarryOS 日志级别默认为 `Error`。
@@ -317,7 +316,7 @@ cd /path/axvisor_two/tgosimages
 
 ```bash
 ./build.sh platform orangepi-5-plus ivc \
-  --ivc-sdk-dir /path/to/ivc-sdk \
+  --ivc-sdk-dir <ivc-sdk-checkout> \
   --tgoskits-ref dev \
   --starry-log Error
 ```
@@ -343,16 +342,8 @@ IMAGES/orangepi/ivc/usr/lib/libaxivc.so
 ```
 
 默认 release 打包入口是 `IMAGES/`，因此 `release/orangepi.tar.xz` 会包含整个
-`IMAGES/orangepi`，也就包含上面的 `ivc/guest` 和 `ivc/usr` 文件。只使用发布包部署 IVC 测例时，可先
-解包，再把包内 rootfs 内容同步到开发板：
-
-```bash
-mkdir -p /tmp/tgosimages-orangepi
-tar -xJf release/orangepi.tar.xz -C /tmp/tgosimages-orangepi
-tar -C /tmp/tgosimages-orangepi/ivc -cf - . \
-  | sshpass -p root ssh -o StrictHostKeyChecking=no root@10.3.10.35 \
-      'tar -C / -xf - && sync'
-```
+`IMAGES/orangepi`，也就包含上面的 `ivc/guest` 和 `ivc/usr` 文件。部署由项目 CI 或板卡
+管理环境负责；服务器地址、认证信息和临时解包目录不写入仓库文档。
 
 ---
 
@@ -407,12 +398,13 @@ sha256sum \
 测试源码位于 AKA，Zephyr 测试环境由 TGOSImages 提供：
 
 ```bash
-cd /path/axvisor_two/tgosimages
-
+# 在 tgosimages 仓库根目录执行，并显式提供外部仓库和 Python 环境
+AKA_RK3588_DIR=<aka-rk3588-checkout>
+ZEPHYR_PYTHON=<zephyr-python>
 ZEPHYR_BASE="$PWD/build/zephyr" \
 ZEPHYR_TOOLCHAIN_VARIANT=host \
-/tmp/zephyr-pyenv/bin/python build/zephyr/scripts/twister \
-  -T ../aka-rk3588/zephyr/orangepi_robot_control/tests \
+"${ZEPHYR_PYTHON}" build/zephyr/scripts/twister \
+  -T "${AKA_RK3588_DIR}/zephyr/orangepi_robot_control/tests" \
   -p native_sim/native/64
 ```
 
@@ -460,8 +452,8 @@ Zephyr 控制 application 静态链接进客户机镜像，不是在 Zephyr Shel
 感知、公共协议、控制状态机、UART6、看门狗和日志说明位于 AKA：
 
 ```text
-../aka-rk3588/AKA_RK3588_MODIFICATIONS.md
-../aka-rk3588/zephyr/orangepi_robot_control/README.md
+AKA_RK3588_MODIFICATIONS.md
+zephyr/orangepi_robot_control/README.md
 ```
 
 ---
@@ -556,7 +548,7 @@ scripts/apps/aka-rk3588-zephyr.sh
 ```text
 build/
 IMAGES/
-twister-out/
+twister-out*/
 机器人控制业务源码
 AKA 感知源码
 TGOSKits 虚拟机配置

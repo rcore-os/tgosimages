@@ -8,7 +8,7 @@
 **/__pycache__
 
 # Zephyr Twister host-test reports and build trees.
-/twister-out/
+/twister-out*/
 
 /target
 .axconfig.toml
