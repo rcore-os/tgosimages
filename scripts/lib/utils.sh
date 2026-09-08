@@ -110,6 +110,15 @@ warn() {
     log "⚠️  $1"
 }
 
+report_build_arch() {
+    local arch=$1
+    info "Building architecture: ${arch}"
+    if [[ -n ${BUILD_PROGRESS_FILE:-} ]]; then
+        # Append each transition so even short architectures survive polling.
+        printf '%s %s\n' "$arch" "$(date '+%s')" >>"$BUILD_PROGRESS_FILE"
+    fi
+}
+
 copy_required() {
     local src="$1"
     local dst="$2"
@@ -222,7 +231,7 @@ run_parallel_functions() {
     done
 
     local remaining="${#pids[@]}"
-    local heartbeat_interval="${PARALLEL_HEARTBEAT_INTERVAL:-30}"
+    local heartbeat_interval="${PARALLEL_HEARTBEAT_INTERVAL:-60}"
     local next_heartbeat=$(( $(date '+%s') + heartbeat_interval ))
     while [[ "${remaining}" -gt 0 ]]; do
         local progressed=0

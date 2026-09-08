@@ -1,0 +1,134 @@
+--- a/src/bench.h
++++ b/src/bench.h
+@@ -43,10 +43,7 @@
+ #ifdef HAVE_SCHED_SETAFFINITY
+ #include	<sched.h>
+ #endif
+-#define PORTMAP
+-#include	<rpc/rpc.h>
+-#endif
+-#include	<rpc/types.h>
++#endif
+ 
+ #include 	<stdarg.h>
+ #ifndef HAVE_uint
+@@ -358,8 +354,10 @@
+ #define XACT_VERS ((u_long)1)
+ #define RPC_XACT ((u_long)1)
+ #define RPC_EXIT ((u_long)2)
++#ifndef NO_PORTMAPPER
+ extern char *rpc_xact_1(char *msg, register SVCXPRT *transp);
+ extern char *client_rpc_xact_1(char *argp, CLIENT *clnt);
++#endif
+ 
+ void lmbench_usage(int argc, char *argv[], char* usage);
+ 
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -97,7 +97,7 @@
+ 	$O/bw_mem64d.s $O/bw_mem64a.s
+ EXES =	$O/bw_file_rd $O/bw_mem $O/bw_mem64 $O/bw_mmap_rd		\
+ 	$O/bw_pipe $O/bw_tcp $O/bw_unix $O/hello			\
+-	$O/lat_select $O/lat_pipe $O/lat_rpc $O/lat_syscall $O/lat_tcp	\
++	$O/lat_select $O/lat_pipe $O/lat_syscall $O/lat_tcp		\
+ 	$O/lat_udp $O/lat_mmap $O/mhz $O/lat_proc $O/lat_pagefault	\
+ 	$O/lat_connect $O/lat_fs $O/lat_sig $O/lat_mem_rd $O/lat_ctx	\
+ 	$O/lat_sem 							\
+@@ -104,7 +104,7 @@
+ 	$O/lat_connect $O/lat_fs $O/lat_sig $O/lat_mem_rd $O/lat_ctx	\
+ 	$O/lat_sem 							\
+ 	$O/memsize $O/lat_unix $O/lmdd $O/timing_o $O/enough		\
+-	$O/msleep $O/loop_o $O/lat_fifo $O/lmhttp $O/lat_http		\
++	$O/msleep $O/loop_o $O/lat_fifo				\
+ 	$O/lat_fcntl $O/disk $O/lat_unix_connect $O/flushdisk		\
+ 	$O/lat_ops $O/line $O/tlb $O/par_mem $O/par_ops 		\
+ 	$O/stream $O/lat_mem_pingpong $O/bw_mem64p $O/bw_mem64d		\
+--- a/src/lib_tcp.c
++++ b/src/lib_tcp.c
+@@ -41,6 +41,7 @@
+ 		perror("listen");
+ 		exit(4);
+ 	}
++#ifndef NO_PORTMAPPER
+ 	if (prog > 0) {
+ #ifdef	LIBTCP_VERBOSE
+ 		fprintf(stderr, "Server port %d\n", sockport(sock));
+@@ -52,6 +53,7 @@
+ 			exit(5);
+ 		}
+ 	}
++#endif
+ 	return (sock);
+ }
+ 
+@@ -61,9 +63,11 @@
+ int
+ tcp_done(int prog)
+ {
++#ifndef NO_PORTMAPPER
+ 	if (prog > 0) {
+ 		pmap_unset((u_long)prog, (u_long)1);
+ 	}
++#endif
+ 	return (0);
+ }
+ 
+@@ -159,6 +163,7 @@
+ 		bzero((void *) &s, sizeof(s));
+ 		s.sin_family = AF_INET;
+ 		bcopy((void*)h->h_addr, (void *)&s.sin_addr, h->h_length);
++#ifndef NO_PORTMAPPER
+ 		if (prog > 0) {
+ 			save_port = pmap_getport(&s, prog,
+ 			    (u_long)1, IPPROTO_TCP);
+@@ -170,6 +175,9 @@
+ #endif
+ 			s.sin_port = htons(save_port);
+ 		} else {
++#else
++		{
++#endif
+ 			s.sin_port = htons(-prog);
+ 		}
+ 	}
+--- a/src/lib_udp.c
++++ b/src/lib_udp.c
+@@ -51,7 +51,9 @@
+ void
+ udp_done(int prog)
+ {
++#ifndef NO_PORTMAPPER
+ 	(void)pmap_unset((u_long)prog, (u_long)1);
++#endif
+ }
+ 
+ /*
+--- a/src/lat_usleep.c
++++ b/src/lat_usleep.c
+@@ -31,6 +31,13 @@
+ #include "bench.h"
+ #include <sched.h>
+ 
++#ifndef TRUE
++#define TRUE 1
++#endif
++#ifndef FALSE
++#define FALSE 0
++#endif
++
+ typedef     enum {USLEEP, NANOSLEEP, SELECT, PSELECT, ITIMER} timer_e;
+ 
+ uint64          caught,
+--- a/scripts/os
++++ b/scripts/os
+@@ -1,5 +1,10 @@
+ #!/bin/sh
+ 
++# The rootfs-test plugin builds and packages one stable runtime directory.
++if [ "X$OS" = "X" ]; then
++    OS=Linux
++fi
++
+ if [ "X$OS" != "X" ] && echo "$OS" | grep -q '`'
+ then
+     OS=
