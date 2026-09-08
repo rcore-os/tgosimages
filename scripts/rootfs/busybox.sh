@@ -460,6 +460,7 @@ mkfs_pack_fs() {
 }
 
 mkfs() (
+    report_build_arch "$MKFS_ARCH"
     local composition_dir output_dir
     output_dir="${MKFS_OUT_DIR:-${ROOT_DIR}/IMAGES/rootfs}"
     rootfs_builder_load_test_options busybox MKFS_OUTER_TESTS MKFS_GUEST_TESTS \

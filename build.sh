@@ -138,12 +138,18 @@ run_parallel_targets() {
     local pid_logs=()
     local pid_status_files=()
     local pid_start_times=()
+    local pid_progress_files=()
+    local pid_progress_lines=()
+    local pid_arches=()
+    local pid_arch_start_times=()
     local now
     for target in "${targets[@]}"; do
         local target_log="${log_dir}/${target}.log"
         local status_file="${log_dir}/${target}.status"
+        local progress_file="${log_dir}/${target}.progress"
         local command=("$0" "$group" "$target" "${target_args[@]}")
         rm -f "${status_file}"
+        : >"$progress_file"
         printf '[%s] QUEUE %s: %s\n' "$(date '+%F %T')" "$target" "$target_log" | tee -a "$summary_log"
         (
             set +e
@@ -153,7 +159,7 @@ run_parallel_targets() {
                 printf 'command='
                 printf '%q ' "${command[@]}"
                 printf '\n\n'
-                LOG_FILE="$target_log" LOG_TO_STDERR=0 "${command[@]}"
+                LOG_FILE="$target_log" LOG_TO_STDERR=0 BUILD_PROGRESS_FILE="$progress_file" "${command[@]}"
                 status=$?
                 printf '\n[%s] END %s %s status=%s\n' "$(date '+%F %T')" "$group" "$target" "$status"
                 printf '%s\n' "$status" >"${status_file}"
@@ -166,32 +172,54 @@ run_parallel_targets() {
         pid_logs+=("$target_log")
         pid_status_files+=("$status_file")
         pid_start_times+=("$(date '+%s')")
+        pid_progress_files+=("$progress_file")
+        pid_progress_lines+=(0)
+        pid_arches+=("")
+        pid_arch_start_times+=(0)
         printf '[%s] STARTED %s: pid=%s\n' "$(date '+%F %T')" "$target" "$pid" | tee -a "$summary_log"
     done
 
     local remaining="${#pids[@]}"
-    local heartbeat_interval="${PARALLEL_HEARTBEAT_INTERVAL:-30}"
+    local heartbeat_interval="${PARALLEL_HEARTBEAT_INTERVAL:-60}"
     local next_heartbeat=$(( $(date '+%s') + heartbeat_interval ))
     local i
+    local target_finished entry arch arch_started display_target elapsed
+    local progress_entries=()
     while [[ "${remaining}" -gt 0 ]]; do
         local progressed=0
         for i in "${!pids[@]}"; do
             [[ -n "${pids[$i]:-}" ]] || continue
-            [[ -f "${pid_status_files[$i]}" ]] || continue
+            # Observe completion first, then drain progress: a fast final
+            # transition must be included when reporting a failed target.
+            target_finished=0
+            [[ ! -f "${pid_status_files[$i]}" ]] || target_finished=1
+            mapfile -t -s "${pid_progress_lines[$i]}" progress_entries <"${pid_progress_files[$i]}"
+            pid_progress_lines[$i]=$((pid_progress_lines[$i] + ${#progress_entries[@]}))
+            for entry in "${progress_entries[@]}"; do
+                read -r arch arch_started <<<"$entry"
+                [[ $arch =~ ^[a-zA-Z0-9_-]+$ && $arch_started =~ ^[0-9]+$ ]] || continue
+                pid_arches[$i]=$arch
+                pid_arch_start_times[$i]=$arch_started
+                printf '[%s] BUILDING %s/%s\n' "$(date '+%F %T')" "${pid_targets[$i]}" "$arch" | tee -a "$summary_log"
+            done
+            [[ $target_finished -eq 1 ]] || continue
             pid="${pids[$i]}"
             target="${pid_targets[$i]}"
             target_log="${pid_logs[$i]}"
             status="$(<"${pid_status_files[$i]}")"
             wait "$pid" 2>/dev/null || true
-            rm -f "${pid_status_files[$i]}"
+            rm -f "${pid_status_files[$i]}" "${pid_progress_files[$i]}"
             unset 'pids[i]'
             progressed=1
             if [[ "${status}" -eq 0 ]]; then
                 printf '[%s] DONE %s: log=%s\n' "$(date '+%F %T')" "$target" "$target_log" | tee -a "$summary_log"
             else
                 failed=1
-                failed_targets+=("$target")
-                printf '[%s] FAILED %s: status=%s log=%s\n' "$(date '+%F %T')" "$target" "$status" "$target_log" | tee -a "$summary_log"
+                display_target="$target${pid_arches[$i]:+/${pid_arches[$i]}}"
+                failed_targets+=("$display_target")
+                printf '[%s] FAILED %s: status=%s log=%s\n' "$(date '+%F %T')" "$display_target" "$status" "$target_log" | tee -a "$summary_log"
+                printf '[%s] FAILURE LOG %s (last 40 lines):\n' "$(date '+%F %T')" "$display_target" | tee -a "$summary_log"
+                tail -n 40 -- "$target_log" | tee -a "$summary_log"
             fi
             remaining=$((remaining - 1))
         done
@@ -201,7 +229,13 @@ run_parallel_targets() {
             local running=()
             for i in "${!pids[@]}"; do
                 [[ -n "${pids[$i]:-}" ]] || continue
-                running+=("${pid_targets[$i]}:$((now - pid_start_times[$i]))s")
+                display_target=${pid_targets[$i]}
+                elapsed=$((now - pid_start_times[$i]))
+                if [[ -n ${pid_arches[$i]} ]]; then
+                    display_target+="/${pid_arches[$i]}"
+                    elapsed=$((now - pid_arch_start_times[$i]))
+                fi
+                running+=("${display_target}:${elapsed}s")
             done
             printf '[%s] RUNNING %s %s: %s\n' "$(date '+%F %T')" "$group" "$action" "${running[*]}" | tee -a "$summary_log"
             next_heartbeat=$((now + heartbeat_interval))

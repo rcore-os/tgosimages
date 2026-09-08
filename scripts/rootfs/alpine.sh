@@ -666,6 +666,7 @@ alpine_create_rootfs() {
 }
 
 alpine() (
+    report_build_arch "$ALPINE_ARCH"
     alpine_validate_legacy_ltp_environment
     alpine_init_config
     rootfs_builder_load_test_options alpine ALPINE_OUTER_TESTS ALPINE_GUEST_TESTS \

@@ -176,8 +176,8 @@ rootfs_parse_size_bytes() {
 
 _rootfs_ext4_stats() {
     local image=$1 output block_count free_blocks block_size free_inodes max=9223372036854775807 value
-    [[ -f "$image" ]] || return 1
-    output=$(LC_ALL=C dumpe2fs -h "$image" 2>/dev/null) || return 1
+    [[ -f "$image" ]] || { _rootfs_compose_error "image not found: $image"; return 1; }
+    output=$(_rootfs_run_tool 0 dumpe2fs -h "$image") || return 1
     block_count=$(awk -F: '$1 == "Block count" {gsub(/^[[:space:]]+/, "", $2); print $2; exit}' <<<"$output")
     free_blocks=$(awk -F: '$1 == "Free blocks" {gsub(/^[[:space:]]+/, "", $2); print $2; exit}' <<<"$output")
     block_size=$(awk -F: '$1 == "Block size" {gsub(/^[[:space:]]+/, "", $2); print $2; exit}' <<<"$output")
@@ -257,17 +257,16 @@ rootfs_overlay_apparent_bytes() {
 }
 
 _rootfs_check_clean() {
-    local image=$1 status state
-    state=$(LC_ALL=C dumpe2fs -h "$image" 2>/dev/null | awk -F: '
+    local image=$1 output state
+    output=$(_rootfs_run_tool 0 dumpe2fs -h "$image") || return 1
+    state=$(awk -F: '
         $1 == "Filesystem state" {gsub(/^[[:space:]]+/, "", $2); print $2; exit}
-    ') || return 1
-    [[ "$state" == clean ]] || return 1
-    if LC_ALL=C e2fsck -fn "$image" >/dev/null 2>&1; then
-        status=0
-    else
-        status=$?
-    fi
-    [[ $status -eq 0 ]]
+    ' <<<"$output") || return 1
+    [[ "$state" == clean ]] || {
+        _rootfs_compose_error "unexpected filesystem state '${state:-unknown}': $image"
+        return 1
+    }
+    _rootfs_run_tool 0 e2fsck -fn "$image" >/dev/null
 }
 
 _rootfs_resize_for_capacity_in_place() {
@@ -294,7 +293,7 @@ _rootfs_resize_for_capacity_in_place() {
         ((current_size <= 9223372036854775807 - addition)) || return 1
         new_size=$((current_size + addition))
         truncate -s "$new_size" -- "$image" || return 1
-        LC_ALL=C resize2fs "$image" >/dev/null 2>&1 || return 1
+        _rootfs_run_tool 0 resize2fs "$image" >/dev/null || return 1
         free=$(rootfs_ext4_free_bytes "$image") || return 1
         free_inodes=$(rootfs_ext4_free_inodes "$image") || return 1
     done
@@ -338,20 +337,14 @@ rootfs_ensure_ext4_capacity() (
 )
 
 _rootfs_repair_ext4() {
-    local image=$1 status
-    if LC_ALL=C e2fsck -fy "$image" >/dev/null 2>&1; then
-        status=0
-    else
-        status=$?
-    fi
-    ((status == 0 || status == 1))
+    _rootfs_run_tool '0 1' e2fsck -fy "$1" >/dev/null
 }
 
 _rootfs_compact_in_place() {
     local image=$1 reserve=$2 stats blocks block_size exact_size free deficit add_blocks new_blocks headroom
     local iterations=0
     _rootfs_repair_ext4 "$image" || return 1
-    LC_ALL=C resize2fs -M "$image" >/dev/null 2>&1 || return 1
+    _rootfs_run_tool 0 resize2fs -M "$image" >/dev/null || return 1
     stats=$(_rootfs_ext4_stats "$image") || return 1
     read -r blocks _ block_size _ <<<"$stats"
     ((blocks <= 9223372036854775807 / block_size)) || return 1
@@ -376,7 +369,7 @@ _rootfs_compact_in_place() {
         new_blocks=$((blocks + add_blocks))
         ((new_blocks <= 9223372036854775807 / block_size)) || return 1
         truncate -s "$((new_blocks * block_size))" -- "$image" || return 1
-        LC_ALL=C resize2fs "$image" "$new_blocks" >/dev/null 2>&1 || return 1
+        _rootfs_run_tool 0 resize2fs "$image" "$new_blocks" >/dev/null || return 1
         stats=$(_rootfs_ext4_stats "$image") || return 1
         read -r blocks _ block_size _ <<<"$stats"
         ((blocks <= 9223372036854775807 / block_size)) || return 1
@@ -605,6 +598,23 @@ rootfs_compose_test_images() (
     local guest_free_value=$7 outer_free_value=$8 output=$9 guest_free outer_free nested_name
     local output_dir output_base guest_image outer_image nested_stage empty_overlay guest_overlay_snapshot base_snapshot
     local base_lock output_lock lock_fd1 lock_fd2
+    local stage=validate-inputs exit_status
+    guest_image= outer_image= nested_stage= empty_overlay= guest_overlay_snapshot= base_snapshot=
+    trap '
+        exit_status=$?
+        if ((exit_status != 0)); then
+            printf "rootfs-compose: FAILED %s/%s stage=%s status=%s base=%s output=%s\n" \
+                "$rootfs_type" "$arch" "$stage" "$exit_status" "$base" "$output" >&2
+        fi
+        [[ -z ${guest_image:-} ]] || rm -f -- "$guest_image"
+        [[ -z ${outer_image:-} ]] || rm -f -- "$outer_image"
+        [[ -z ${nested_stage:-} ]] || rm -rf -- "$nested_stage"
+        [[ -z ${empty_overlay:-} ]] || rm -rf -- "$empty_overlay"
+        [[ -z ${guest_overlay_snapshot:-} ]] || rm -rf -- "$guest_overlay_snapshot"
+        [[ -z ${base_snapshot:-} ]] || rm -f -- "$base_snapshot"
+        exit "$exit_status"
+    ' EXIT
+    trap 'exit 130' INT TERM
     _rootfs_require_tools awk basename cp debugfs dirname dumpe2fs e2fsck find flock mkdir mktemp mv realpath resize2fs rm stat touch truncate || return 1
     [[ "$base" != *.cpio.gz && "$output" != *.cpio.gz ]] || return 1
     [[ -f "$base" && -n "$arch" && "$arch" != */* && -n "$rootfs_type" && "$rootfs_type" != */* ]] || return 1
@@ -617,6 +627,7 @@ rootfs_compose_test_images() (
     else
         [[ $? -eq 1 ]] || return 1
     fi
+    stage=lock-images
     base_lock=$(realpath -m -- "${base}.lock") || return 1
     output_lock=$(realpath -m -- "${output}.lock") || return 1
     [[ "$base_lock" != "$output_lock" ]] || {
@@ -633,24 +644,19 @@ rootfs_compose_test_images() (
     fi
     flock -x "$lock_fd1" || return 1
     flock -x "$lock_fd2" || return 1
+    stage=validate-payloads
     guest_free=$(rootfs_parse_size_bytes "$guest_free_value") || return 1
     outer_free=$(rootfs_parse_size_bytes "$outer_free_value") || return 1
     _rootfs_validate_payload_tree "$outer_overlay" || return 1
     _rootfs_validate_payload_tree "$guest_overlay" || return 1
     _rootfs_validate_payload_tree "$outer_guest" || return 1
     _rootfs_validate_guest_overlay_merge "$outer_guest" "$outer_overlay" || return 1
+    stage=check-base-image
     _rootfs_ext4_stats "$base" >/dev/null || return 1
     _rootfs_check_clean "$base" || return 1
     nested_name="rootfs-${arch}-${rootfs_type}.img"
     _rootfs_validate_protected_outer_path "$outer_guest" "$outer_overlay" "$nested_name" || return 1
-    guest_image=
-    outer_image=
-    nested_stage=
-    empty_overlay=
-    guest_overlay_snapshot=
-    base_snapshot=
-    trap '[[ -z ${guest_image:-} ]] || rm -f -- "$guest_image"; [[ -z ${outer_image:-} ]] || rm -f -- "$outer_image"; [[ -z ${nested_stage:-} ]] || rm -rf -- "$nested_stage"; [[ -z ${empty_overlay:-} ]] || rm -rf -- "$empty_overlay"; [[ -z ${guest_overlay_snapshot:-} ]] || rm -rf -- "$guest_overlay_snapshot"; [[ -z ${base_snapshot:-} ]] || rm -f -- "$base_snapshot"' EXIT
-    trap 'exit 130' INT TERM
+    stage=snapshot-inputs
     base_snapshot=$(mktemp "${output_dir}/.${output_base}.base.XXXXXX") || return 1
     cp --preserve=all --reflink=auto --sparse=always -- "$base" "$base_snapshot" || return 1
     guest_overlay_snapshot=$(mktemp -d "${output_dir}/.${output_base}.guest-overlay.XXXXXX") || return 1
@@ -664,14 +670,17 @@ rootfs_compose_test_images() (
     empty_overlay=$(mktemp -d "${output_dir}/.${output_base}.empty.XXXXXX") || {
         rm -rf -- "$nested_stage"; rm -f -- "$guest_image" "$outer_image"; return 1;
     }
-    if ! cp --preserve=all --reflink=auto --sparse=always -- "$base_snapshot" "$guest_image" ||
-       ! _rootfs_resize_for_capacity_in_place "$guest_image" "$(rootfs_overlay_apparent_bytes "$guest_overlay_snapshot")" "$guest_free" "$(_rootfs_overlay_required_inodes "$guest_overlay_snapshot")" ||
-       ! _rootfs_inject_tree_via_debugfs "$guest_image" "$guest_overlay_snapshot" ||
-       ! _rootfs_compact_in_place "$guest_image" "$guest_free" ||
-       ! cp --preserve=all --reflink=auto --sparse=always -- "$base_snapshot" "$outer_image"; then
-        rm -rf -- "$nested_stage" "$empty_overlay"; rm -f -- "$guest_image" "$outer_image"
-        return 1
-    fi
+    stage=prepare-guest-image
+    cp --preserve=all --reflink=auto --sparse=always -- "$base_snapshot" "$guest_image" || return 1
+    stage=grow-guest-image
+    _rootfs_resize_for_capacity_in_place "$guest_image" "$(rootfs_overlay_apparent_bytes "$guest_overlay_snapshot")" "$guest_free" "$(_rootfs_overlay_required_inodes "$guest_overlay_snapshot")" || return 1
+    stage=inject-guest-tests
+    _rootfs_inject_tree_via_debugfs "$guest_image" "$guest_overlay_snapshot" || return 1
+    stage=compact-guest-image
+    _rootfs_compact_in_place "$guest_image" "$guest_free" || return 1
+    stage=prepare-outer-image
+    cp --preserve=all --reflink=auto --sparse=always -- "$base_snapshot" "$outer_image" || return 1
+    stage=stage-nested-image
     touch -d "@$(stat -c %Y -- "$base_snapshot")" "$guest_image" || return 1
     mkdir -p "$nested_stage/guest"
     # The nested image becomes filesystem payload; retain ordinary metadata but
@@ -681,14 +690,15 @@ rootfs_compose_test_images() (
         rm -rf -- "$nested_stage" "$empty_overlay"; rm -f -- "$guest_image" "$outer_image"
         return 1
     }
-    if ! _rootfs_finish_outer_in_place "$outer_image" "$nested_stage/guest" "$empty_overlay" 0 ||
-       ! _rootfs_finish_outer_in_place "$outer_image" "$outer_guest" "$outer_overlay" "$outer_free" "$nested_name" ||
-       ! _rootfs_compact_in_place "$outer_image" "$outer_free" ||
-       ! touch -r "$base_snapshot" "$outer_image" ||
-       ! mv -T -- "$outer_image" "$output"; then
-        rm -rf -- "$nested_stage" "$empty_overlay"; rm -f -- "$guest_image" "$outer_image"
-        return 1
-    fi
+    stage=inject-nested-image
+    _rootfs_finish_outer_in_place "$outer_image" "$nested_stage/guest" "$empty_overlay" 0 || return 1
+    stage=inject-outer-payload
+    _rootfs_finish_outer_in_place "$outer_image" "$outer_guest" "$outer_overlay" "$outer_free" "$nested_name" || return 1
+    stage=compact-outer-image
+    _rootfs_compact_in_place "$outer_image" "$outer_free" || return 1
+    stage=publish-outer-image
+    touch -r "$base_snapshot" "$outer_image" || return 1
+    mv -T -- "$outer_image" "$output" || return 1
     rm -rf -- "$nested_stage" "$empty_overlay" "$guest_overlay_snapshot"
     rm -f -- "$guest_image" "$base_snapshot"
     guest_image=

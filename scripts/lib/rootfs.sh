@@ -5,6 +5,42 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
+# Keep successful tool output available to parsers, but preserve all diagnostics
+# on failure even when callers discard stdout. e2fsck repair also accepts 1.
+_rootfs_run_tool() {
+    local accepted=$1 output status
+    shift
+    if output=$(LC_ALL=C "$@" 2>&1); then
+        status=0
+    else
+        status=$?
+    fi
+    # debugfs may report a write error and still exit zero. The injector keeps
+    # this transcript until its independent payload verification succeeds.
+    if [[ -n ${_rootfs_tool_transcript:-} ]]; then
+        {
+            printf 'rootfs: tool status=%s command=' "$status"
+            printf '%q ' "$@"
+            printf '\n%s\n' "$output"
+        } >>"$_rootfs_tool_transcript" || {
+            printf 'rootfs: cannot retain tool diagnostics: %s\n' "$_rootfs_tool_transcript" >&2
+            printf 'rootfs: tool status=%s command=' "$status" >&2
+            printf '%q ' "$@" >&2
+            printf '\n%s\n' "$output" >&2
+            ((status == 0)) || return "$status"
+            return 1
+        }
+    fi
+    if [[ " $accepted " == *" $status "* ]]; then
+        printf '%s\n' "$output"
+        return 0
+    fi
+    printf 'rootfs: command failed status=%s command=' "$status" >&2
+    printf '%q ' "$@" >&2
+    printf '\n%s\n' "$output" >&2
+    return "$status"
+}
+
 rootfs_stage_guest_tree() {
     local stage_dir="$1"
     local source_dir="$2"
@@ -114,8 +150,13 @@ _rootfs_debugfs_quote() {
 _rootfs_debugfs_stat() {
     local image=$1 path=$2 quoted output
     quoted=$(_rootfs_debugfs_quote "$path") || return 1
-    output=$(LC_ALL=C debugfs -R "stat ${quoted}" "$image" 2>&1) || return 1
-    [[ "$output" != *'File not found'* && "$output" == *'Inode:'* ]] || return 1
+    output=$(_rootfs_run_tool 0 debugfs -R "stat ${quoted}" "$image") || return 1
+    if [[ "$output" == *'File not found'* || "$output" != *'Inode:'* ]]; then
+        if [[ ${3:-} == required ]]; then
+            printf 'rootfs: payload verification failed image=%s path=%s\n%s\n' "$image" "$path" "$output" >&2
+        fi
+        return 1
+    fi
     printf '%s\n' "$output"
 }
 
@@ -146,6 +187,7 @@ _rootfs_inject_tree_via_debugfs() (
     local -A captured_mode=() captured_uid=() captured_gid=() captured_atime=() captured_mtime=()
     local -A captured_identity=()
     local timestamp_text fraction atime_raw mtime_raw scan_dir scan_path scan_index=0 snapshot_path
+    local _rootfs_tool_transcript= injection_status
 
     for tool in awk basename cat chmod cp debugfs dirname find getfacl getfattr grep head mkdir mktemp readlink rm sed sha256sum sort stat touch; do
         command -v "$tool" >/dev/null 2>&1 || {
@@ -159,12 +201,27 @@ _rootfs_inject_tree_via_debugfs() (
     inventory_raw=
     inventory=
     verify_dir=
-    trap 'if [[ -n ${snapshot:-} ]]; then chmod -R u+w -- "$snapshot" 2>/dev/null || true; rm -rf -- "$snapshot"; fi; [[ -z ${verify_dir:-} ]] || rm -rf -- "$verify_dir"; [[ -z ${inventory_raw:-} ]] || rm -f -- "$inventory_raw"; [[ -z ${inventory:-} ]] || rm -f -- "$inventory"' EXIT
+    trap '
+        injection_status=$?
+        if ((injection_status != 0)) && [[ -s ${_rootfs_tool_transcript:-} ]]; then
+            printf "rootfs: debugfs transcript for failed injection image=%s source=%s\n" "$image_path" "$source_dir" >&2
+            cat "$_rootfs_tool_transcript" >&2 || true
+        fi
+        if [[ -n ${snapshot:-} ]]; then
+            chmod -R u+w -- "$snapshot" 2>/dev/null || true
+            rm -rf -- "$snapshot"
+        fi
+        [[ -z ${verify_dir:-} ]] || rm -rf -- "$verify_dir"
+        [[ -z ${inventory_raw:-} ]] || rm -f -- "$inventory_raw"
+        [[ -z ${inventory:-} ]] || rm -f -- "$inventory"
+        exit "$injection_status"
+    ' EXIT
     trap 'exit 130' INT TERM
     snapshot=$(mktemp -d "${image_dir}/.rootfs-payload.XXXXXX") || return 1
     inventory_raw=$(mktemp "${image_dir}/.rootfs-inventory.raw.XXXXXX") || return 1
     inventory=$(mktemp "${image_dir}/.rootfs-inventory.sorted.XXXXXX") || return 1
     verify_dir=$(mktemp -d "${image_dir}/.rootfs-verify.XXXXXX") || return 1
+    _rootfs_tool_transcript="$verify_dir/debugfs.log"
 
     # Capture metadata and reject unsupported entries before any content read.
     : >"$inventory_raw"
@@ -274,7 +331,7 @@ _rootfs_inject_tree_via_debugfs() (
         rel=${path#"$snapshot/"}; target="/${rel}"
         if ! _rootfs_debugfs_stat "$image_path" "$target" >/dev/null; then
             quoted_target=$(_rootfs_debugfs_quote "$target") || return 1
-            LC_ALL=C debugfs -w -R "mkdir ${quoted_target}" "$image_path" >/dev/null 2>&1 || return 1
+            _rootfs_run_tool 0 debugfs -w -R "mkdir ${quoted_target}" "$image_path" >/dev/null || return 1
         fi
     done
 
@@ -286,23 +343,23 @@ _rootfs_inject_tree_via_debugfs() (
             link_target=$(readlink -- "$path") || return 1
             quoted_target=$(_rootfs_debugfs_quote "$target") || return 1
             if _rootfs_debugfs_stat "$image_path" "$target" >/dev/null; then
-                LC_ALL=C debugfs -w -R "rm ${quoted_target}" "$image_path" >/dev/null 2>&1 || return 1
+                _rootfs_run_tool 0 debugfs -w -R "rm ${quoted_target}" "$image_path" >/dev/null || return 1
             fi
-            LC_ALL=C debugfs -w -R "symlink ${quoted_target} $(_rootfs_debugfs_quote "$link_target")" \
-                "$image_path" >/dev/null 2>&1 || return 1
+            _rootfs_run_tool 0 debugfs -w -R "symlink ${quoted_target} $(_rootfs_debugfs_quote "$link_target")" \
+                "$image_path" >/dev/null || return 1
         elif [[ -f "$path" ]]; then
             key=$(stat -c '%d:%i' -- "$path") || return 1
             quoted_target=$(_rootfs_debugfs_quote "$target") || return 1
             if _rootfs_debugfs_stat "$image_path" "$target" >/dev/null; then
-                LC_ALL=C debugfs -w -R "rm ${quoted_target}" "$image_path" >/dev/null 2>&1 || return 1
+                _rootfs_run_tool 0 debugfs -w -R "rm ${quoted_target}" "$image_path" >/dev/null || return 1
             fi
             first=${hardlink_first[$key]-}
             if [[ -n "$first" ]]; then
                 quoted_first=$(_rootfs_debugfs_quote "$first") || return 1
-                LC_ALL=C debugfs -w -R "ln ${quoted_first} ${quoted_target}" "$image_path" >/dev/null 2>&1 || return 1
+                _rootfs_run_tool 0 debugfs -w -R "ln ${quoted_first} ${quoted_target}" "$image_path" >/dev/null || return 1
             else
                 quoted_source=$(_rootfs_debugfs_quote "$path") || return 1
-                LC_ALL=C debugfs -w -R "write ${quoted_source} ${quoted_target}" "$image_path" >/dev/null 2>&1 || return 1
+                _rootfs_run_tool 0 debugfs -w -R "write ${quoted_source} ${quoted_target}" "$image_path" >/dev/null || return 1
                 hardlink_first[$key]=$target
             fi
         fi
@@ -323,14 +380,14 @@ _rootfs_inject_tree_via_debugfs() (
         full_mode=$((type_bits + 8#$mode))
         printf -v full_mode '0%o' "$full_mode"
         quoted_target=$(_rootfs_debugfs_quote "$target") || return 1
-        LC_ALL=C debugfs -w -R "set_inode_field ${quoted_target} mode ${full_mode}" "$image_path" >/dev/null 2>&1 || return 1
-        LC_ALL=C debugfs -w -R "set_inode_field ${quoted_target} uid ${uid}" "$image_path" >/dev/null 2>&1 || return 1
-        LC_ALL=C debugfs -w -R "set_inode_field ${quoted_target} gid ${gid}" "$image_path" >/dev/null 2>&1 || return 1
-        LC_ALL=C debugfs -w -R "set_inode_field ${quoted_target} atime @${atime}" "$image_path" >/dev/null 2>&1 || return 1
-        LC_ALL=C debugfs -w -R "set_inode_field ${quoted_target} mtime @${mtime}" "$image_path" >/dev/null 2>&1 || return 1
+        _rootfs_run_tool 0 debugfs -w -R "set_inode_field ${quoted_target} mode ${full_mode}" "$image_path" >/dev/null || return 1
+        _rootfs_run_tool 0 debugfs -w -R "set_inode_field ${quoted_target} uid ${uid}" "$image_path" >/dev/null || return 1
+        _rootfs_run_tool 0 debugfs -w -R "set_inode_field ${quoted_target} gid ${gid}" "$image_path" >/dev/null || return 1
+        _rootfs_run_tool 0 debugfs -w -R "set_inode_field ${quoted_target} atime @${atime}" "$image_path" >/dev/null || return 1
+        _rootfs_run_tool 0 debugfs -w -R "set_inode_field ${quoted_target} mtime @${mtime}" "$image_path" >/dev/null || return 1
         if [[ -f "$path" && ! -L "$path" ]]; then
-            LC_ALL=C debugfs -w -R "set_inode_field ${quoted_target} links_count $(stat -c %h -- "$path")" \
-                "$image_path" >/dev/null 2>&1 || return 1
+            _rootfs_run_tool 0 debugfs -w -R "set_inode_field ${quoted_target} links_count $(stat -c %h -- "$path")" \
+                "$image_path" >/dev/null || return 1
         fi
     done
 
@@ -338,7 +395,7 @@ _rootfs_inject_tree_via_debugfs() (
     # return zero while reporting semantic errors.
     for path in "${paths[@]}"; do
         index=$((index + 1)); rel=${path#"$snapshot/"}; target="/${rel}"
-        stat_output=$(_rootfs_debugfs_stat "$image_path" "$target") || return 1
+        stat_output=$(_rootfs_debugfs_stat "$image_path" "$target" required) || return 1
         actual_mode=$(sed -n 's/.*Mode:[[:space:]]*\([0-7][0-7]*\).*/\1/p' <<<"$stat_output" | head -n1)
         read -r actual_uid actual_gid < <(awk '/^User:/ {print $2, $4; exit}' <<<"$stat_output")
         actual_atime=$(sed -n 's/.*atime: 0x\([0-9a-fA-F]*\):.*/\1/p' <<<"$stat_output" | head -n1)
@@ -353,8 +410,8 @@ _rootfs_inject_tree_via_debugfs() (
         if [[ -L "$path" ]]; then
             [[ "$stat_output" == *'Type: symlink'* ]] || return 1
             mkdir "$verify_dir/$index" || return 1
-            LC_ALL=C debugfs -R "rdump $(_rootfs_debugfs_quote "$target") $(_rootfs_debugfs_quote "$verify_dir/$index")" \
-                "$image_path" >/dev/null 2>&1 || return 1
+            _rootfs_run_tool 0 debugfs -R "rdump $(_rootfs_debugfs_quote "$target") $(_rootfs_debugfs_quote "$verify_dir/$index")" \
+                "$image_path" >/dev/null || return 1
             actual=$(readlink -- "$verify_dir/$index/$(basename -- "$path")") || return 1
             [[ "$actual" == "$(readlink -- "$path")" ]] || return 1
         elif [[ -f "$path" ]]; then
@@ -362,8 +419,8 @@ _rootfs_inject_tree_via_debugfs() (
             size=$(stat -c %s -- "$path"); sha=$(sha256sum -- "$path" | awk '{print $1}')
             actual_size=$(awk '/ Project: / {print $NF; exit}' <<<"$stat_output")
             verify_file="$verify_dir/file.$index"
-            LC_ALL=C debugfs -R "dump $(_rootfs_debugfs_quote "$target") $(_rootfs_debugfs_quote "$verify_file")" \
-                "$image_path" >/dev/null 2>&1 || return 1
+            _rootfs_run_tool 0 debugfs -R "dump $(_rootfs_debugfs_quote "$target") $(_rootfs_debugfs_quote "$verify_file")" \
+                "$image_path" >/dev/null || return 1
             [[ -f "$verify_file" && "$(stat -c %s -- "$verify_file")" == "$size" ]] || return 1
             verify_sha=$(sha256sum -- "$verify_file" | awk '{print $1}')
             [[ "$verify_sha" == "$sha" ]] || return 1

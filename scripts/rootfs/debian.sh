@@ -220,22 +220,41 @@ debian_pack_rootfs_volume() {
         --mount "$(debian_output_mount_arg)" \
         "${DEBIAN_DOCKER_IMAGE}" \
         bash -lc '
-            set -euo pipefail
-            apt-get update
-            apt-get install -y e2fsprogs
-            cd /output
+            set -Eeuo pipefail
             image_name=$1
             image_size=$2
+            arch=$3
+            stage=install-tools
+            pack_error() {
+                local status=$1 command=$2
+                printf "rootfs: FAILED debian/%s stage=%s status=%s command=%s\n" \
+                    "$arch" "$stage" "$status" "$command" >&2
+            }
+            trap "pack_error \$? \"\$BASH_COMMAND\"" ERR
+            apt-get update
+            apt-get install -y e2fsprogs
+            stage=create-image
+            cd /output
             rm -f -- "$image_name"
-            dd if=/dev/zero of="$image_name" bs=1 count=0 seek="$image_size" 2>/dev/null
+            dd if=/dev/zero of="$image_name" bs=1 count=0 seek="$image_size" status=none
+            stage=format-image
             mkfs.ext4 -O ^orphan_file,^metadata_csum_seed -F -L starry-rootfs "$image_name"
+            stage=mount-image
             mkdir -p /mnt/rootfs
             mount -o loop "$image_name" /mnt/rootfs
+            stage=copy-rootfs
             cp -a /rootfs/. /mnt/rootfs/
+            stage=sync-image
             sync
+            stage=unmount-image
             umount /mnt/rootfs
             rmdir /mnt/rootfs
-        ' bash "$image_name" "$DEBIAN_IMG_SIZE"
+        ' bash "$image_name" "$DEBIAN_IMG_SIZE" "$DEBIAN_ARCH" || {
+            local status=$?
+            printf 'rootfs: FAILED debian/%s stage=pack-base-image status=%s image=%s\n' \
+                "$DEBIAN_ARCH" "$status" "$debian_rootfs_tmp" >&2
+            return "$status"
+        }
 }
 
 debian_build_rootfs() {
@@ -379,6 +398,7 @@ EOF_RESOLV
 }
 
 debian() (
+    report_build_arch "$DEBIAN_ARCH"
     debian_init_config
     rootfs_builder_load_test_options debian DEBIAN_OUTER_TESTS DEBIAN_GUEST_TESTS \
         DEBIAN_GUEST_FREE_SIZE DEBIAN_OUTER_FREE_SIZE
