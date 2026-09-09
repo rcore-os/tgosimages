@@ -293,6 +293,8 @@ _rootfs_resize_for_capacity_in_place() {
         ((current_size <= 9223372036854775807 - addition)) || return 1
         new_size=$((current_size + addition))
         truncate -s "$new_size" -- "$image" || return 1
+        # Offline resize requires a check after the filesystem was last mounted.
+        _rootfs_repair_ext4 "$image" || return 1
         _rootfs_run_tool 0 resize2fs "$image" >/dev/null || return 1
         free=$(rootfs_ext4_free_bytes "$image") || return 1
         free_inodes=$(rootfs_ext4_free_inodes "$image") || return 1
