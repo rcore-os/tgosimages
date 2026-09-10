@@ -266,7 +266,35 @@ QEMU 流程会透传相同选项：
 特殊节点与额外的元数据路径会被拒绝。下载缓存与解压源码按已校验的 checksum
 区分并记录 checksum 来源，构建容器则由配置中的镜像版本固定。
 
+四个内置插件默认还会缓存已构建并校验的完整 overlay，保存到
+`build/rootfs-tests/artifacts/<plugin>/<key>/`（随 `ROOTFS_TEST_BUILD_ROOT` 调整）。
+缓存键包含源码 checksum、目标架构、rootfs 类型、安装范围、实际 Docker 镜像 ID、
+编译与过滤参数，以及插件、共享构建脚本和补丁的内容。命中时校验归档 SHA256
+并恢复文件权限、时间和链接；缓存损坏时重新构建。同一缓存键的并发构建通过锁
+共享结果，失败的构建不会发布缓存。
+
+缓存使用未压缩 tar，首次构建会增加存储开销，重复构建可跳过编译。
+设置 `ROOTFS_TEST_CACHE=0` 可禁用产物缓存，例如：
+
+```bash
+ROOTFS_TEST_CACHE=0 scripts/rootfs/alpine.sh aarch64
+```
+
+离线测试夹具和设置了 `ROOTFS_TEST_ALPINE_BUILDER` 的自定义构建器自动跳过产物缓存。
+没有构建运行时，可删除 `build/rootfs-tests/artifacts/` 中的缓存条目释放空间；
+下次构建会重新生成。命中缓存仍需要 Docker 识别构建镜像，但不再编译测试程序。
+发布压缩继续使用 `xz -T0 -9e`。
+
 ### BusyBox
+
+默认在 `build/busybox-builds/` 保留增量编译工作目录，可用 `BUSYBOX_BUILD_ROOT`
+更换位置。源码、补丁、目标架构、配置、编译参数或工具链变化会使用新的目录；
+相同输入复用目录并运行 `make` 检查依赖，避免重复 `distclean` 和配置。
+同一目录的编译通过锁串行执行，打包使用本次构建私有的可执行文件副本。
+设置 `BUSYBOX_INCREMENTAL=0` 可恢复每次从头编译。
+
+源码仍按原有流程强制检出和清理；增量编译不会改变这个行为。
+工作目录会额外占用空间，没有构建运行时可删除以回收空间。
 
 - 同时生成 initramfs 和 ext4 rootfs 镜像
 - 被 `scripts/platform/qemu.sh` 用于 QEMU 的 Linux / ArceOS 流程
@@ -284,6 +312,22 @@ QEMU 流程会透传相同选项：
 
 ### Debian
 
+默认缓存未包含测试插件或平台文件的干净基础镜像，位置为
+`build/debian/base-cache/`。缓存按架构、suite、镜像源、大小、密码摘要、
+预装包、构建脚本和实际 Docker 镜像 ID 区分；每次使用前检查 SHA256 和 ext4，
+再复制到本次构建的私有路径进行组合。修改测试选择或 `/guest` 内容不会重做基础系统。
+
+APT 仓库会更新，命中旧缓存不会自动升级系统包。需要重新获取基础系统包时使用：
+
+```bash
+DEBIAN_BASE_CACHE_REFRESH=1 scripts/rootfs/debian.sh aarch64
+# 完全绕过基础镜像缓存
+DEBIAN_BASE_CACHE=0 scripts/rootfs/debian.sh aarch64
+```
+
+刷新不会自动拉取已存在的 Docker 标签；需要更新构建容器时，应先拉取相应镜像。
+刷新失败保留旧缓存。同样，没有构建运行时可删除缓存条目释放空间。
+
 - 基于 Docker + `debootstrap`
 - 生成 ext4 rootfs 镜像
 - 默认 suite 为 `trixie`
@@ -291,14 +335,17 @@ QEMU 流程会透传相同选项：
 
 ### Rootfs 验证
 
-耗时镜像构建前先运行不触发构建的快速测试：
+按修改范围选择对应的快速回归测试，无需每次全部运行：
 
 ```bash
 scripts/tests/rootfs-nested-content-test.sh
 scripts/tests/qemu-rootfs-test-options.sh
 scripts/tests/rootfs-builder-options.sh
 scripts/tests/rootfs-test-plugins.sh
+scripts/tests/rootfs-test-cache.sh
 scripts/tests/rootfs-compose.sh
+scripts/tests/debian-base-cache.sh
+scripts/tests/busybox-incremental.sh
 scripts/tests/starry-release-smoke.sh
 ```
 

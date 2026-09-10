@@ -10,6 +10,7 @@ source_top=lmbench-5a386c1c32a84898151dade7754031813e33994e
 plugin_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$plugin_dir/../../.." && pwd)
 source "$plugin_dir/../lib/common.sh"
+source "$plugin_dir/../lib/cache.sh"
 die() { echo "$name: $*" >&2; exit 1; }
 plugin_work_dir=''
 cleanup_work() { [[ -z $plugin_work_dir ]] || rm -rf -- "$plugin_work_dir"; }
@@ -57,10 +58,10 @@ select_source() {
 }
 prepare_source() (
     local build_root=$1 archive source_dir lock_fd actual extract_tmp='' candidate=''
-    cleanup_source() { local cleanup_status=$?; trap - EXIT INT TERM; [[ -z $extract_tmp ]] || rm -rf -- "$extract_tmp"; [[ -z $candidate ]] || rm -rf -- "$candidate"; exit "$cleanup_status"; }
+    cleanup_source() { local cleanup_status=$?; trap - EXIT INT TERM; [[ -z $extract_tmp ]] || rm -rf -- "$extract_tmp"; [[ -z $candidate ]] || rm -rf -- "$candidate"; build_lock_release_all; exit "$cleanup_status"; }
     trap cleanup_source EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
     archive="$build_root/downloads/$name-$version-$source_sha256.tar"; source_dir="$build_root/sources/$name-$version-$source_sha256"
-    mkdir -p "$build_root/downloads" "$build_root/sources"; exec {lock_fd}>"$source_dir.lock"; flock -x "$lock_fd"
+    mkdir -p "$build_root/downloads" "$build_root/sources"; build_lock_acquire lock_fd "$source_dir.lock"
     if [[ -d $source_dir ]]; then
         [[ -f $source_dir/.rootfs-test-source-sha256 ]] || die "cached source lacks checksum provenance: $source_dir"
         read -r actual <"$source_dir/.rootfs-test-source-sha256"; [[ $actual == "$source_sha256" ]] || die "cached source checksum provenance mismatch: $source_dir"
@@ -73,7 +74,7 @@ prepare_source() (
         printf '%s\n' "$source_sha256" >"$candidate/.rootfs-test-source-sha256"
         mv -T -- "$candidate" "$source_dir"; candidate=''; rm -rf -- "$extract_tmp"; extract_tmp=''
     fi
-    flock -u "$lock_fd"; exec {lock_fd}>&-; printf '%s\n' "$source_dir"; trap - EXIT INT TERM
+    build_lock_release "$lock_fd"; printf '%s\n' "$source_dir"; trap - EXIT INT TERM
 )
 build_plugin() {
     local arch= rootfs= scope= output= build_root source_dir platform uid gid file script script_source builder_image smoke_config found=0
@@ -86,7 +87,12 @@ build_plugin() {
     [[ -n $arch && -n $rootfs && -n $scope && -n $output ]] || die 'arch, rootfs, scope, and output are required'
     platform=$(platform_for_arch "$arch") || die "unsupported arch: $arch"; case $rootfs in busybox|alpine|debian);; *) die "unsupported rootfs: $rootfs";; esac
     [[ $scope == guest ]] || die "unsupported scope: $scope"; [[ -d $output && -z $(find "$output" -mindepth 1 -print -quit) ]] || die 'output must be an empty directory'
-    select_source; build_root=${ROOTFS_TEST_BUILD_ROOT:-"$repo_root/build/rootfs-tests"}; source_dir=$(prepare_source "$build_root")
+    select_source; build_root=${ROOTFS_TEST_BUILD_ROOT:-"$repo_root/build/rootfs-tests"}; rootfs_test_with_artifact_cache "$output" build_uncached
+}
+
+# Invoked with the validated build_plugin context by the cache transaction.
+build_uncached() {
+    source_dir=$(prepare_source "$build_root")
     mkdir -p "$build_root/work/$name/$version/$arch/$rootfs"; plugin_work_dir=$(mktemp -d "$build_root/work/$name/$version/$arch/$rootfs/run.XXXXXX")
     trap cleanup_work EXIT; trap 'exit 130' INT; trap 'exit 143' TERM; cp -a "$source_dir/." "$plugin_work_dir/"
     sanitize_runtime_launcher "$plugin_work_dir/scripts/lmbench"
@@ -95,7 +101,7 @@ build_plugin() {
     else
         command -v docker >/dev/null 2>&1 || die 'docker is required for real source builds'; uid=$(id -u); gid=$(id -g)
         patch -d "$plugin_work_dir" -p1 <"$repo_root/patches/rootfs-tests/lmbench/5a386c1c32a84898151dade7754031813e33994e-no-portmapper.patch"
-        builder_image=$(ROOTFS_TEST_BUILD_ROOT="$build_root" "$plugin_dir/../alpine-builder.sh" prepare --arch "$arch")
+        builder_image=$(rootfs_test_get_builder_image "$arch")
         docker run --rm --platform "$platform" -v "$plugin_work_dir:/work" -w /work "$builder_image" sh -ec \
             "trap 'chown -R $uid:$gid /work' EXIT; make -C src OS=Linux CC=gcc CFLAGS='-O2 -static' LDFLAGS='-static'"
     fi

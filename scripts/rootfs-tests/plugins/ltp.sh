@@ -13,6 +13,7 @@ plugin_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$plugin_dir/../../.." && pwd)
 # shellcheck source=../lib/common.sh
 source "$plugin_dir/../lib/common.sh"
+source "$plugin_dir/../lib/cache.sh"
 
 die() { echo "$name: $*" >&2; exit 1; }
 plugin_work_dir=''
@@ -101,6 +102,7 @@ prepare_source() (
         trap - EXIT INT TERM
         [[ -z $extract_tmp ]] || rm -rf -- "$extract_tmp"
         [[ -z $candidate ]] || rm -rf -- "$candidate"
+        build_lock_release_all
         exit "$cleanup_status"
     }
     trap cleanup_source EXIT
@@ -109,8 +111,7 @@ prepare_source() (
     archive="$build_root/downloads/$name-$version-$source_sha256.tar.xz"
     source_dir="$build_root/sources/$name-$version-$source_sha256"
     mkdir -p "$build_root/downloads" "$build_root/sources"
-    exec {lock_fd}>"$build_root/downloads/$name-$version-$source_sha256.lock"
-    flock -x "$lock_fd"
+    build_lock_acquire lock_fd "$build_root/downloads/$name-$version-$source_sha256.lock"
     if [[ -f $archive ]]; then
         actual=$(sha256sum "$archive" | awk '{print $1}')
         [[ $actual == "$source_sha256" ]] || die "cached archive checksum mismatch: $archive"
@@ -118,10 +119,9 @@ prepare_source() (
         rootfs_test_download_checked "$source_url" "$source_sha256" "$archive" ||
             die 'checked source download failed'
     fi
-    flock -u "$lock_fd"; exec {lock_fd}>&-
+    build_lock_release "$lock_fd"
 
-    exec {lock_fd}>"$source_dir.lock"
-    flock -x "$lock_fd"
+    build_lock_acquire lock_fd "$source_dir.lock"
     if [[ -d $source_dir ]]; then
         [[ -f $source_dir/.rootfs-test-source-sha256 ]] ||
             die "cached source lacks checksum provenance: $source_dir"
@@ -140,7 +140,7 @@ prepare_source() (
         rm -rf -- "$extract_tmp"
         extract_tmp=''
     fi
-    flock -u "$lock_fd"; exec {lock_fd}>&-
+    build_lock_release "$lock_fd"
     printf '%s\n' "$source_dir"
     trap - EXIT INT TERM
 )
@@ -204,11 +204,10 @@ build_fixture() {
 }
 
 build_real() {
-    local arch=$1 build_root=$2 source_dir=$3 stage_dir=$4 platform=$5 image uid gid builder
+    local arch=$1 build_root=$2 source_dir=$3 stage_dir=$4 platform=$5 image uid gid
     command -v docker >/dev/null 2>&1 || die 'docker is required for real source builds'
     [[ -x $source_dir/configure ]] || die 'LTP release archive lacks executable configure'
-    builder=${ROOTFS_TEST_ALPINE_BUILDER:-"$plugin_dir/../alpine-builder.sh"}
-    image=$(ROOTFS_TEST_BUILD_ROOT="$build_root" "$builder" prepare --arch "$arch")
+    image=$(rootfs_test_get_builder_image "$arch")
     uid=$(id -u); gid=$(id -g)
     docker run --rm --platform "$platform" \
         --env ALPINE_LTP_CFLAGS --env ALPINE_LTP_LDFLAGS \
@@ -232,13 +231,13 @@ build_real() {
                 sed -i -e 's@^#define HAVE_STRUCT_AF_ALG_IV .*@/* #undef HAVE_STRUCT_AF_ALG_IV */@' \\
                     -e 's@^#define HAVE_STRUCT_SOCKADDR_ALG .*@/* #undef HAVE_STRUCT_SOCKADDR_ALG */@' include/config.h
             fi
-            make -C testcases/kernel/syscalls top_srcdir=/ltp top_builddir=/ltp \\
+            make -j\"\$(nproc)\" -C testcases/kernel/syscalls top_srcdir=/ltp top_builddir=/ltp \\
                 FILTER_OUT_DIRS=\"\$ALPINE_LTP_FILTER_OUT_DIRS\"
             make -C testcases/kernel/syscalls top_srcdir=/ltp top_builddir=/ltp \\
                 FILTER_OUT_DIRS=\"\$ALPINE_LTP_FILTER_OUT_DIRS\" DESTDIR=/stage install
-            make -C testcases/kernel/ipc/pipeio top_srcdir=/ltp top_builddir=/ltp
+            make -j\"\$(nproc)\" -C testcases/kernel/ipc/pipeio top_srcdir=/ltp top_builddir=/ltp
             make -C testcases/kernel/ipc/pipeio top_srcdir=/ltp top_builddir=/ltp DESTDIR=/stage install
-            make -C testcases/kernel/sched top_srcdir=/ltp top_builddir=/ltp
+            make -j\"\$(nproc)\" -C testcases/kernel/sched top_srcdir=/ltp top_builddir=/ltp
             make -C testcases/kernel/sched top_srcdir=/ltp top_builddir=/ltp DESTDIR=/stage install
         "
 }
@@ -265,6 +264,11 @@ build_plugin() {
     configure_build_environment
     select_source
     build_root=${ROOTFS_TEST_BUILD_ROOT:-"$repo_root/build/rootfs-tests"}
+    rootfs_test_with_artifact_cache "$output" build_uncached
+}
+
+# Invoked with the validated build_plugin context by the cache transaction.
+build_uncached() {
     source_dir=$(prepare_source "$build_root")
     mkdir -p "$build_root/work/$name/$version/$arch/$rootfs"
     plugin_work_dir=$(mktemp -d "$build_root/work/$name/$version/$arch/$rootfs/run.XXXXXX")

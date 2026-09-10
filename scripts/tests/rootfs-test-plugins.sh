@@ -853,7 +853,7 @@ run_fail 'interrupted LTP extraction preserves failure' \
         --output "$work/ltp-interrupted-output"
 [[ -z $(find "$work/ltp-interrupted-build/sources" -mindepth 1 -type d -name '.*' -print -quit) ]] ||
     fail 'interrupted LTP extraction leaked a temporary directory'
-run_ok 'ltp uses the checksum-verified shared Alpine builder' grep -F 'alpine-builder.sh' "$builtin_plugins/ltp.sh"
+run_ok 'ltp uses the checksum-verified shared Alpine builder' grep -F 'rootfs_test_get_builder_image' "$builtin_plugins/ltp.sh"
 run_ok 'standalone Alpine base no longer installs LTP' \
     bash -c '! grep -Eq "alpine_install_ltp_tests|alpine_ltp_prepare_source|alpine_ensure_ltp_docker_image" "$1"' _ \
         "$repo_root/scripts/rootfs/alpine.sh"
@@ -950,7 +950,7 @@ builder_description=$(cat "$work/stdout")
 [[ $builder_description == *'package_set=build-base-0.5-r3_linux-headers-6.16.12-r0_numactl-dev-2.0.18-r0_python3-3.12.14-r0'* ]] || fail 'builder package set is not version-addressed'
 [[ $builder_description == *'archive_cache=alpine-minirootfs-3.23.5-loongarch64-92185135af8b8694f9732c4cdc0dae7f26f72059fd79e9bef6d5dbafd05898ea.tar.gz'* ]] || fail 'builder archive cache is not checksum-addressed'
 for plugin in cyclictest lmbench iozone; do
-    run_ok "$plugin uses the checksum-verified shared builder" grep -F 'alpine-builder.sh' "$builtin_plugins/$plugin.sh"
+    run_ok "$plugin uses the checksum-verified shared builder" grep -F 'rootfs_test_get_builder_image' "$builtin_plugins/$plugin.sh"
     ! grep -Fq 'alpine:3.23' "$builtin_plugins/$plugin.sh" || fail "$plugin still uses a mutable Alpine image reference"
 done
 
@@ -971,4 +971,9 @@ run_fail 'built-in plugin rejects a fixture that fails its sidecar checksum' \
         bash "$build_script" build --arch x86_64 --rootfs alpine --scope guest \
         --tests cyclictest --output "$work/bad-fixture-overlay"
 
+
+[[ -z $(find "$work" -type f -name '*.lock' -print -quit) ]] || {
+    echo 'FAIL: completed operations leave lock files behind' >&2
+    exit 1
+}
 echo "1..$tests"

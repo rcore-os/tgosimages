@@ -5,6 +5,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
+# shellcheck source=rootfs-metadata.sh
+source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/rootfs-metadata.sh"
+
 # Keep successful tool output available to parsers, but preserve all diagnostics
 # on failure even when callers discard stdout. e2fsck repair also accepts 1.
 _rootfs_run_tool() {
@@ -160,6 +163,57 @@ _rootfs_debugfs_stat() {
     printf '%s\n' "$output"
 }
 
+# Query all target paths in one read-only session. Echoed commands delimit the
+# results; require their exact order/count so missing output cannot shift paths.
+_rootfs_debugfs_stat_many() {
+    local image=$1 directory=$2 required=$5
+    local -n query_paths=$3 query_results=$4
+    local commands="$directory/stat.commands" output line target expected block
+    local index=-1 count=${#query_paths[@]} i
+    local -a blocks=() inode_counts=() missing_counts=()
+    query_results=()
+    [[ $required == required || $required == optional ]] || return 1
+    ((count)) || return 0
+    for target in "${query_paths[@]}"; do
+        [[ "$target" != *[$'\001'-$'\037'$'\177']* && "$target" != *['"'\\]* ]] || return 1
+        printf 'stat "%s"\n' "$target" || return 1
+    done >"$commands" || return 1
+    output=$(_rootfs_run_tool 0 debugfs -f "$commands" "$image") || return 1
+    while IFS= read -r line; do
+        if [[ $line == 'debugfs: '* ]]; then
+            index=$((index + 1))
+            ((index < count)) || return 1
+            expected="debugfs: stat \"${query_paths[$index]}\""
+            [[ $line == "$expected" ]] || return 1
+            blocks[$index]=''
+            inode_counts[$index]=0
+            missing_counts[$index]=0
+        elif ((index < 0)); then
+            [[ -z $line || $line == debugfs\ [0-9]* ]] || return 1
+        else
+            blocks[$index]+="$line"$'\n'
+            if [[ $line =~ ^Inode:[[:space:]]+[0-9]+[[:space:]] ]]; then
+                inode_counts[$index]=$((inode_counts[$index] + 1))
+            elif [[ $line == "${query_paths[$index]}: File not found"* ]]; then
+                missing_counts[$index]=$((missing_counts[$index] + 1))
+            fi
+        fi
+    done <<<"$output"
+    ((index + 1 == count)) || return 1
+    for ((i=0; i<count; i++)); do
+        target=${query_paths[$i]}
+        block=${blocks[$i]}
+        if ((inode_counts[$i] == 1 && missing_counts[$i] == 0)); then
+            query_results[$target]=$block
+        elif [[ $required == optional ]] && ((inode_counts[$i] == 0 && missing_counts[$i] == 1)); then
+            continue
+        else
+            printf 'rootfs: payload verification failed image=%s path=%s\n%s\n' "$image" "$target" "$block" >&2
+            return 1
+        fi
+    done
+}
+
 _rootfs_payload_has_unpreserved_metadata() {
     local path=$1 output
     output=$(getfattr -h -d -m- -- "$path" 2>/dev/null) || return 2
@@ -180,16 +234,16 @@ _rootfs_inject_tree_via_debugfs() (
     local path rel target type mode uid gid atime mtime size sha link_target key first
     local quoted_source quoted_target quoted_first stat_output actual actual_mode actual_uid actual_gid
     local actual_size actual_atime actual_mtime actual_links verify_dir verify_file verify_sha full_mode type_bits index=0
-    local -a paths=()
+    local -a paths=() query_targets=()
     local -a source_paths=()
-    local -a scan_dirs=()
-    local -A hardlink_first=()
+    local -a metadata_records=()
+    local -A hardlink_first=() image_stats=()
     local -A captured_mode=() captured_uid=() captured_gid=() captured_atime=() captured_mtime=()
-    local -A captured_identity=()
-    local timestamp_text fraction atime_raw mtime_raw scan_dir scan_path scan_index=0 snapshot_path
-    local _rootfs_tool_transcript= injection_status
+    local -A captured_identity=() checked_identity=() snapshot_keys=() snapshot_sizes=() snapshot_links=()
+    local timestamp_text fraction atime_raw mtime_raw snapshot_path identity meta_index before_fields
+    local _rootfs_tool_transcript= injection_status content_commands metadata_commands export_commands links_count
 
-    for tool in awk basename cat chmod cp debugfs dirname find getfacl getfattr grep head mkdir mktemp readlink rm sed sha256sum sort stat touch; do
+    for tool in awk basename cat chmod cp debugfs dirname find getfacl getfattr grep head mkdir mktemp mv readlink rm sed sha256sum sort stat touch; do
         command -v "$tool" >/dev/null 2>&1 || {
             warn "${tool} not found, cannot safely inject ext filesystem image: ${image_path}"
             return 1
@@ -223,29 +277,30 @@ _rootfs_inject_tree_via_debugfs() (
     verify_dir=$(mktemp -d "${image_dir}/.rootfs-verify.XXXXXX") || return 1
     _rootfs_tool_transcript="$verify_dir/debugfs.log"
 
-    # Capture metadata and reject unsupported entries before any content read.
-    : >"$inventory_raw"
-    scan_dirs=("$source_dir")
-    while ((scan_index < ${#scan_dirs[@]})); do
-        scan_dir=${scan_dirs[$scan_index]}
-        scan_index=$((scan_index + 1))
-        LC_ALL=C find "$scan_dir" -mindepth 1 -maxdepth 1 \
-            -printf '%A@\034%T@\034%m\034%U\034%G\034%p\0' >"$inventory" || return 1
-        cat "$inventory" >>"$inventory_raw" || return 1
-        while IFS=$'\034' read -r -d '' _ _ _ _ _ scan_path; do
-            [[ -d "$scan_path" && ! -L "$scan_path" ]] && scan_dirs+=("$scan_path")
-        done <"$inventory"
-    done
-    while IFS=$'\034' read -r -d '' atime_raw mtime_raw mode uid gid path; do
-        source_paths+=("$path")
-        rel=${path#"$source_dir/"}
+    # Capture every field in one preorder traversal, before any content read.
+    _rootfs_collect_metadata "$source_dir" "$verify_dir/source-before" || return 1
+    mapfile -d '' -t metadata_records <"$verify_dir/source-before" || return 1
+    before_fields=${#metadata_records[@]}
+    ((before_fields >= 12 && before_fields % 12 == 0)) || return 1
+    for ((meta_index=0; meta_index<before_fields; meta_index+=12)); do
+        rel=${metadata_records[meta_index]}
         [[ "$rel" != *[$'\001'-$'\037'$'\177']* && "$rel" != *['"'\\]* ]] || return 1
+        printf -v identity '%s:' "${metadata_records[@]:meta_index+2:10}"
+        [[ -z ${captured_identity["./$rel"]+x} ]] || return 1
+        captured_identity["./$rel"]=$identity
+        [[ -n $rel ]] || continue
+        path="$source_dir/$rel"
+        source_paths+=("$path")
+        atime_raw=${metadata_records[meta_index+1]}
+        mtime_raw=${metadata_records[meta_index+2]}
+        mode=${metadata_records[meta_index+3]}
+        uid=${metadata_records[meta_index+4]}
+        gid=${metadata_records[meta_index+5]}
         captured_mode[$rel]=$mode
         captured_uid[$rel]=$uid
         captured_gid[$rel]=$gid
         captured_atime[$rel]=${atime_raw%%.*}
         captured_mtime[$rel]=${mtime_raw%%.*}
-        captured_identity[$rel]=$(stat -c '%d:%i:%s:%f:%z' -- "$path") || return 1
         # Traversing a directory to inventory its children can itself update
         # directory atime under relatime. Directory mtime and all file/symlink
         # timestamps remain immutable and are checked exactly.
@@ -269,14 +324,25 @@ _rootfs_inject_tree_via_debugfs() (
             return 1
         fi
         if _rootfs_payload_has_unpreserved_metadata "$path"; then return 1; else [[ $? -eq 1 ]] || return 1; fi
-    done <"$inventory_raw"
+    done
 
     cp -a --reflink=auto -- "$source_dir/." "$snapshot/" || return 1
-    # Never write caller-owned payload paths. Verify identity after the copy,
-    # then apply the pre-read manifest only to the private snapshot.
+    # A fresh traversal detects added/deleted paths as well as changed identity.
+    # Ignore only atime: reading the source may legitimately update it.
+    _rootfs_collect_metadata "$source_dir" "$verify_dir/source-after" || return 1
+    mapfile -d '' -t metadata_records <"$verify_dir/source-after" || return 1
+    ((${#metadata_records[@]} == before_fields)) || return 1
+    for ((meta_index=0; meta_index<before_fields; meta_index+=12)); do
+        rel=${metadata_records[meta_index]}
+        printf -v identity '%s:' "${metadata_records[@]:meta_index+2:10}"
+        [[ -n ${captured_identity["./$rel"]+x} && -z ${checked_identity["./$rel"]+x} &&
+           $identity == "${captured_identity["./$rel"]}" ]] || return 1
+        checked_identity["./$rel"]=1
+    done
+    # Never write caller-owned payload paths. Apply pre-read timestamps only
+    # to the private snapshot after source identity has been checked.
     for path in "${source_paths[@]}"; do
         rel=${path#"$source_dir/"}
-        [[ "$(stat -c '%d:%i:%s:%f:%z' -- "$path")" == "${captured_identity[$rel]}" ]] || return 1
         snapshot_path="$snapshot/$rel"
         if [[ -L "$snapshot_path" ]]; then
             touch -h -a -d "@${captured_atime[$rel]}" -- "$snapshot_path" || return 1
@@ -286,7 +352,19 @@ _rootfs_inject_tree_via_debugfs() (
             touch -m -d "@${captured_mtime[$rel]}" -- "$snapshot_path" || return 1
         fi
     done
-    find "$snapshot" -mindepth 1 -print0 >"$inventory_raw" || return 1
+    # Reuse private-snapshot inode, size and link data for writes and verification.
+    _rootfs_collect_metadata "$snapshot" "$verify_dir/snapshot-metadata" || return 1
+    mapfile -d '' -t metadata_records <"$verify_dir/snapshot-metadata" || return 1
+    ((${#metadata_records[@]} == before_fields)) || return 1
+    for ((meta_index=0; meta_index<before_fields; meta_index+=12)); do
+        rel=${metadata_records[meta_index]}
+        [[ -n $rel ]] || continue
+        [[ -n ${captured_identity["./$rel"]+x} && -z ${snapshot_keys[$rel]+x} ]] || return 1
+        snapshot_keys[$rel]="${metadata_records[meta_index+6]}:${metadata_records[meta_index+7]}"
+        snapshot_sizes[$rel]=${metadata_records[meta_index+8]}
+        snapshot_links[$rel]=${metadata_records[meta_index+11]}
+        printf '%s\0' "$snapshot/$rel" || return 1
+    done >"$inventory_raw" || return 1
     sort -z "$inventory_raw" >"$inventory" || return 1
     while IFS= read -r -d '' path; do
         paths+=("$path")
@@ -325,15 +403,20 @@ _rootfs_inject_tree_via_debugfs() (
         fi
     done
 
-    # Create directory topology first. Existing directories are overlay roots.
+    # Plan against the unchanged image, then execute the ordered mutations in
+    # one session. Sorted paths place parent directories before their children.
+    # Existing directories remain overlay roots.
+    for path in "${paths[@]}"; do query_targets+=("/${path#"$snapshot/"}"); done
+    _rootfs_debugfs_stat_many "$image_path" "$verify_dir" query_targets image_stats optional || return 1
+    content_commands="$verify_dir/content.commands"
     for path in "${paths[@]}"; do
         [[ -d "$path" && ! -L "$path" ]] || continue
         rel=${path#"$snapshot/"}; target="/${rel}"
-        if ! _rootfs_debugfs_stat "$image_path" "$target" >/dev/null; then
+        if [[ -z ${image_stats[$target]+x} ]]; then
             quoted_target=$(_rootfs_debugfs_quote "$target") || return 1
-            _rootfs_run_tool 0 debugfs -w -R "mkdir ${quoted_target}" "$image_path" >/dev/null || return 1
+            printf '%s\n' "mkdir ${quoted_target}" || return 1
         fi
-    done
+    done >"$content_commands" || return 1
 
     # Write data and construct hardlinks. Final verification, not debugfs's
     # process status, decides whether each semantic operation succeeded.
@@ -342,30 +425,38 @@ _rootfs_inject_tree_via_debugfs() (
         if [[ -L "$path" ]]; then
             link_target=$(readlink -- "$path") || return 1
             quoted_target=$(_rootfs_debugfs_quote "$target") || return 1
-            if _rootfs_debugfs_stat "$image_path" "$target" >/dev/null; then
-                _rootfs_run_tool 0 debugfs -w -R "rm ${quoted_target}" "$image_path" >/dev/null || return 1
+            if [[ -n ${image_stats[$target]+x} ]]; then
+                printf '%s\n' "rm ${quoted_target}" || return 1
             fi
-            _rootfs_run_tool 0 debugfs -w -R "symlink ${quoted_target} $(_rootfs_debugfs_quote "$link_target")" \
-                "$image_path" >/dev/null || return 1
+            printf '%s\n' "symlink ${quoted_target} $(_rootfs_debugfs_quote "$link_target")" || return 1
         elif [[ -f "$path" ]]; then
-            key=$(stat -c '%d:%i' -- "$path") || return 1
+            key=${snapshot_keys[$rel]}
             quoted_target=$(_rootfs_debugfs_quote "$target") || return 1
-            if _rootfs_debugfs_stat "$image_path" "$target" >/dev/null; then
-                _rootfs_run_tool 0 debugfs -w -R "rm ${quoted_target}" "$image_path" >/dev/null || return 1
+            if [[ -n ${image_stats[$target]+x} ]]; then
+                printf '%s\n' "rm ${quoted_target}" || return 1
             fi
             first=${hardlink_first[$key]-}
             if [[ -n "$first" ]]; then
                 quoted_first=$(_rootfs_debugfs_quote "$first") || return 1
-                _rootfs_run_tool 0 debugfs -w -R "ln ${quoted_first} ${quoted_target}" "$image_path" >/dev/null || return 1
+                printf '%s\n' "ln ${quoted_first} ${quoted_target}" || return 1
             else
                 quoted_source=$(_rootfs_debugfs_quote "$path") || return 1
-                _rootfs_run_tool 0 debugfs -w -R "write ${quoted_source} ${quoted_target}" "$image_path" >/dev/null || return 1
+                printf '%s\n' "write ${quoted_source} ${quoted_target}" || return 1
                 hardlink_first[$key]=$target
             fi
         fi
-    done
+    done >>"$content_commands" || return 1
+    if [[ -s "$content_commands" ]]; then
+        # Retain the planned operations even if debugfs fails before reading
+        # its command file; the private command file is removed during cleanup.
+        printf 'rootfs: content batch commands\n' >>"$_rootfs_tool_transcript" || return 1
+        cat "$content_commands" >>"$_rootfs_tool_transcript" || return 1
+        _rootfs_run_tool 0 debugfs -w -f "$content_commands" "$image_path" >/dev/null || return 1
+    fi
 
     # Apply inode metadata only after all children and links have been created.
+    # Batch updates so all entries share one debugfs process and image open.
+    metadata_commands="$verify_dir/metadata.commands"
     for path in "${paths[@]}"; do
         rel=${path#"$snapshot/"}; target="/${rel}"
         mode=${captured_mode[$rel]}
@@ -380,22 +471,50 @@ _rootfs_inject_tree_via_debugfs() (
         full_mode=$((type_bits + 8#$mode))
         printf -v full_mode '0%o' "$full_mode"
         quoted_target=$(_rootfs_debugfs_quote "$target") || return 1
-        _rootfs_run_tool 0 debugfs -w -R "set_inode_field ${quoted_target} mode ${full_mode}" "$image_path" >/dev/null || return 1
-        _rootfs_run_tool 0 debugfs -w -R "set_inode_field ${quoted_target} uid ${uid}" "$image_path" >/dev/null || return 1
-        _rootfs_run_tool 0 debugfs -w -R "set_inode_field ${quoted_target} gid ${gid}" "$image_path" >/dev/null || return 1
-        _rootfs_run_tool 0 debugfs -w -R "set_inode_field ${quoted_target} atime @${atime}" "$image_path" >/dev/null || return 1
-        _rootfs_run_tool 0 debugfs -w -R "set_inode_field ${quoted_target} mtime @${mtime}" "$image_path" >/dev/null || return 1
+        printf '%s\n' \
+            "set_inode_field ${quoted_target} mode ${full_mode}" \
+            "set_inode_field ${quoted_target} uid ${uid}" \
+            "set_inode_field ${quoted_target} gid ${gid}" \
+            "set_inode_field ${quoted_target} atime @${atime}" \
+            "set_inode_field ${quoted_target} mtime @${mtime}" || return 1
         if [[ -f "$path" && ! -L "$path" ]]; then
-            _rootfs_run_tool 0 debugfs -w -R "set_inode_field ${quoted_target} links_count $(stat -c %h -- "$path")" \
-                "$image_path" >/dev/null || return 1
+            links_count=${snapshot_links[$rel]}
+            printf '%s\n' "set_inode_field ${quoted_target} links_count ${links_count}" || return 1
         fi
-    done
+    done >"$metadata_commands" || return 1
+    if [[ -s "$metadata_commands" ]]; then
+        _rootfs_run_tool 0 debugfs -w -f "$metadata_commands" "$image_path" >/dev/null || return 1
+    fi
 
     # Verify a complete post-write manifest. This catches debugfs commands that
-    # return zero while reporting semantic errors.
+    # return zero while reporting semantic errors. This is a fresh post-write
+    # batch, independent of the pre-write existence queries.
+    _rootfs_debugfs_stat_many "$image_path" "$verify_dir" query_targets image_stats required || return 1
+    # Export to fresh, private destinations in one read-only session. A zero
+    # tool status is not proof of success: every file/target is checked below.
+    export_commands="$verify_dir/export.commands"
     for path in "${paths[@]}"; do
         index=$((index + 1)); rel=${path#"$snapshot/"}; target="/${rel}"
-        stat_output=$(_rootfs_debugfs_stat "$image_path" "$target" required) || return 1
+        if [[ -L "$path" ]]; then
+            [[ ${image_stats[$target]} == *'Type: symlink'* ]] || return 1
+            mkdir "$verify_dir/$index" || return 1
+            printf 'rdump %s %s\n' "$(_rootfs_debugfs_quote "$target")" \
+                "$(_rootfs_debugfs_quote "$verify_dir/$index")" || return 1
+        elif [[ -f "$path" ]]; then
+            [[ ${image_stats[$target]} == *'Type: regular'* ]] || return 1
+            printf 'dump %s %s\n' "$(_rootfs_debugfs_quote "$target")" \
+                "$(_rootfs_debugfs_quote "$verify_dir/file.$index")" || return 1
+        fi
+    done >"$export_commands" || return 1
+    if [[ -s "$export_commands" ]]; then
+        printf 'rootfs: export batch commands\n' >>"$_rootfs_tool_transcript" || return 1
+        cat "$export_commands" >>"$_rootfs_tool_transcript" || return 1
+        _rootfs_run_tool 0 debugfs -f "$export_commands" "$image_path" >/dev/null || return 1
+    fi
+    index=0
+    for path in "${paths[@]}"; do
+        index=$((index + 1)); rel=${path#"$snapshot/"}; target="/${rel}"
+        stat_output=${image_stats[$target]}
         actual_mode=$(sed -n 's/.*Mode:[[:space:]]*\([0-7][0-7]*\).*/\1/p' <<<"$stat_output" | head -n1)
         read -r actual_uid actual_gid < <(awk '/^User:/ {print $2, $4; exit}' <<<"$stat_output")
         actual_atime=$(sed -n 's/.*atime: 0x\([0-9a-fA-F]*\):.*/\1/p' <<<"$stat_output" | head -n1)
@@ -409,24 +528,19 @@ _rootfs_inject_tree_via_debugfs() (
         [[ "${actual_atime,,}" == "${atime,,}" && "${actual_mtime,,}" == "${mtime,,}" ]] || return 1
         if [[ -L "$path" ]]; then
             [[ "$stat_output" == *'Type: symlink'* ]] || return 1
-            mkdir "$verify_dir/$index" || return 1
-            _rootfs_run_tool 0 debugfs -R "rdump $(_rootfs_debugfs_quote "$target") $(_rootfs_debugfs_quote "$verify_dir/$index")" \
-                "$image_path" >/dev/null || return 1
             actual=$(readlink -- "$verify_dir/$index/$(basename -- "$path")") || return 1
             [[ "$actual" == "$(readlink -- "$path")" ]] || return 1
         elif [[ -f "$path" ]]; then
-            [[ "$stat_output" == *'Type: regular'* && "$actual_links" == "$(stat -c %h -- "$path")" ]] || return 1
-            size=$(stat -c %s -- "$path"); sha=$(sha256sum -- "$path" | awk '{print $1}')
+            [[ "$stat_output" == *'Type: regular'* && "$actual_links" == "${snapshot_links[$rel]}" ]] || return 1
+            size=${snapshot_sizes[$rel]}; sha=$(sha256sum -- "$path" | awk '{print $1}')
             actual_size=$(awk '/ Project: / {print $NF; exit}' <<<"$stat_output")
             verify_file="$verify_dir/file.$index"
-            _rootfs_run_tool 0 debugfs -R "dump $(_rootfs_debugfs_quote "$target") $(_rootfs_debugfs_quote "$verify_file")" \
-                "$image_path" >/dev/null || return 1
             [[ -f "$verify_file" && "$(stat -c %s -- "$verify_file")" == "$size" ]] || return 1
             verify_sha=$(sha256sum -- "$verify_file" | awk '{print $1}')
             [[ "$verify_sha" == "$sha" ]] || return 1
-            key=$(stat -c '%d:%i' -- "$path"); first=${hardlink_first[$key]}
+            key=${snapshot_keys[$rel]}; first=${hardlink_first[$key]}
             if [[ "$first" != "$target" ]]; then
-                actual=$(_rootfs_debugfs_stat "$image_path" "$first" | awk '/^Inode:/ {print $2; exit}')
+                actual=$(awk '/^Inode:/ {print $2; exit}' <<<"${image_stats[$first]}")
                 [[ "$actual" == "$(awk '/^Inode:/ {print $2; exit}' <<<"$stat_output")" ]] || return 1
             fi
         elif [[ -d "$path" ]]; then

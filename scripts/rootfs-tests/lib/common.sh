@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../lib" && pwd -P)/build-lock.sh"
+
 rootfs_test_csv_contains() {
     local value=$1 csv=$2 item
     local -a items=()

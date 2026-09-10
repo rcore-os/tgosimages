@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
+BUSYBOX_SCRIPT_DIR=$SCRIPT_DIR
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
 BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
 
@@ -54,6 +55,9 @@ mkfs_usage() {
     printf '  BUSYBOX_REF                   BusyBox git commit/ref\n'
     printf '  BUSYBOX_SRC_DIR               BusyBox source directory\n'
     printf '  BUSYBOX_PATCH_DIR             BusyBox patch directory\n'
+    printf '  BUSYBOX_BUILD_ROOT            Persistent workspaces (default: build/busybox-builds)\n'
+    printf '  BUSYBOX_INCREMENTAL           Set 0 to configure and build from scratch\n'
+    printf '  BUSYBOX_CONFIG                Optional complete base config (static/TC/SHA1 fixes apply)\n'
     printf '\n'
     printf 'Notes:\n'
     printf '  * If BusyBox is dynamically linked, required shared libraries are copied automatically.\n'
@@ -129,29 +133,98 @@ mkfs_parse_args() {
     done
 }
 
-mkfs_build_busybox() {
-    local cross=""
-    if [[ "$MKFS_ARCH" == "x86_64" ]]; then
-        cross=""
+# Hash source inputs rather than git metadata or ignored compiler products. The
+# checkout/patch operation and this snapshot remain under the source lock.
+mkfs_busybox_source_key() {
+    python3 "${BUSYBOX_SCRIPT_DIR}/../lib/busybox-source-key.py" "$BUSYBOX_SRC_DIR" "$BUSYBOX_PATCH_DIR"
+}
+
+mkfs_configure_busybox() {
+    make distclean || return 1
+    if [[ -n ${BUSYBOX_CONFIG:-} ]]; then
+        cp -- "$composition_dir/busybox.config" .config || return 1
+        make oldconfig </dev/null || return 1
     else
-        cross="${MKFS_ARCH}-linux-gnu-"
+        make defconfig || return 1
     fi
-    pushd "${BUSYBOX_BUILD_SRC_DIR:-$BUSYBOX_SRC_DIR}" >/dev/null
-    info "Cleaning: make distclean"
-    make distclean
-
-    info "Configuring: make defconfig"
-    make defconfig
-
-    info "Building: make -j$(nproc) CROSS_COMPILE=$cross"
     sed -i 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
     sed -i 's/^CONFIG_TC=y$/# CONFIG_TC is not set/' .config
-    # BusyBox defconfig may enable x86 SHA-NI acceleration, which breaks
-    # non-x86 cross builds because the matching assembly implementation is not used.
+    # SHA-NI acceleration requires assembly unavailable to non-x86 builds.
     sed -i 's/^CONFIG_SHA1_HWACCEL=y$/# CONFIG_SHA1_HWACCEL is not set/' .config
-    make -j$(nproc) CROSS_COMPILE="$cross"
-    popd >/dev/null
 }
+
+mkfs_busybox_build_key() (
+    local cross=$1 tool path variable
+    printf '%s\0' busybox-incremental-v1 "$MKFS_ARCH" "$BUSYBOX_SOURCE_KEY"
+    sha256sum "${BUSYBOX_SCRIPT_DIR}/busybox.sh" "${BUSYBOX_SCRIPT_DIR}/../lib/busybox-source-key.py" | cut -d ' ' -f1 || return 1
+    if [[ -n ${BUSYBOX_CONFIG:-} ]]; then
+        sha256sum "$composition_dir/busybox.config" | cut -d ' ' -f1 || return 1
+    fi
+    # Include build flags and the resolved target/host toolchain, including
+    # executable contents so upgrades at the same path invalidate the workspace.
+    for variable in PATH CC HOSTCC HOSTCXX CFLAGS CPPFLAGS LDFLAGS HOSTCFLAGS \
+        HOSTLDFLAGS KBUILD_CFLAGS KBUILD_CPPFLAGS KBUILD_LDFLAGS MAKEFLAGS \
+        ARCH CONFIG_PREFIX SOURCE_DATE_EPOCH KCFLAGS KCPPFLAGS CONFIG_SHELL; do
+        printf '%s=%s\0' "$variable" "${!variable-}"
+    done
+    for tool in "${cross}gcc" "${cross}ld" "${cross}as" "${cross}ar" \
+        "${cross}strip" gcc make; do
+        path=$(command -v "$tool") || return 1
+        printf '%s\0' "$tool" "$path"
+        sha256sum "$path" || return 1
+        "$path" --version || return 1
+    done
+    "${cross}gcc" -dumpmachine || return 1
+    "${cross}gcc" -print-sysroot || return 1
+    "${cross}gcc" -print-search-dirs || return 1
+)
+
+mkfs_validate_busybox_options() {
+    case ${BUSYBOX_INCREMENTAL:-1} in
+        0|1) ;;
+        *) die "BUSYBOX_INCREMENTAL must be 0 or 1"; return 1 ;;
+    esac
+}
+
+mkfs_build_busybox() (
+    local cross="" key workspace lock_fd cache_root
+    mkfs_validate_busybox_options || return 1
+    [[ $MKFS_ARCH == x86_64 ]] || cross="${MKFS_ARCH}-linux-gnu-"
+    local prepared="${BUSYBOX_BUILD_SRC_DIR:-$BUSYBOX_SRC_DIR}"
+    if [[ ${BUSYBOX_INCREMENTAL:-1} == 0 ]]; then
+        cd -- "$prepared" || return 1
+        mkfs_configure_busybox || return 1
+        make -j"$(nproc)" CROSS_COMPILE="$cross" || return 1
+        return 0
+    fi
+    key=$(mkfs_busybox_build_key "$cross" | sha256sum) || return 1
+    key=${key%% *}
+    cache_root=${BUSYBOX_BUILD_ROOT:-${BUILD_DIR}/busybox-builds}
+    mkdir -p -- "$cache_root" || return 1
+    cache_root=$(cd -- "$cache_root" && pwd -P) || return 1
+    workspace="$cache_root/$key"
+    trap 'build_lock_release_all' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    build_lock_acquire lock_fd "${workspace}.lock" || return 1
+    if [[ ! -f $workspace/.build-complete ]]; then
+        rm -rf -- "$workspace" || return 1
+        cp -a --reflink=auto -- "$prepared" "$workspace" || return 1
+        cd -- "$workspace" || return 1
+        info "Configuring BusyBox workspace for $MKFS_ARCH"
+        mkfs_configure_busybox || return 1
+    else
+        cd -- "$workspace" || return 1
+        info "Reusing BusyBox workspace for $MKFS_ARCH"
+    fi
+    # An interrupted/failed make must get a clean workspace on the next try.
+    rm -f -- .build-complete || return 1
+    info "Building: make -j$(nproc) CROSS_COMPILE=$cross"
+    make -j"$(nproc)" CROSS_COMPILE="$cross" || return 1
+    # Extraction after unlocking uses this private copy, never the mutable cache.
+    cp -- busybox "$prepared/busybox" || return 1
+    touch .build-complete || return 1
+)
 
 mkfs_pair_checkpoint() { :; }
 
@@ -159,8 +232,10 @@ mkfs_publish_pair() (
     local init_candidate=$1 init_final=$2 image_candidate=$3 image_final=$4
     local lock_path="${init_final}.pair.lock" init_backup="${init_final}.old.$$" image_backup="${image_final}.old.$$"
     local init_old=0 image_old=0 init_new=0 image_new=0 committed=0 lock_fd status=0 pending_signal=0
-    exec {lock_fd}>"$lock_path" || return 1
-    flock -x "$lock_fd" || return 1
+    trap 'build_lock_release_all' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    build_lock_acquire lock_fd "$lock_path" || return 1
     # Signal handlers only record intent throughout the critical section. This
     # prevents delivery between a filesystem operation and its state update.
     trap 'pending_signal=130' INT
@@ -228,8 +303,7 @@ mkfs_publish_pair() (
     init_new=0 image_new=0
     mkfs_pair_checkpoint
     rm -f -- "$init_candidate" "$image_candidate" "$init_backup" "$image_backup"
-    flock -u "$lock_fd" || status=$?
-    exec {lock_fd}>&-
+    build_lock_release "$lock_fd" || status=$?
     trap - INT TERM
     ((pending_signal == 0)) || return "$pending_signal"
     return "$status"
@@ -259,21 +333,31 @@ mkfs_add_ext4_devices() {
 }
 
 mkfs_prepare_busybox_source() {
-    local lock_fd prepared="$composition_dir/busybox-source"
-    exec {lock_fd}>"${BUSYBOX_SRC_DIR}.lock"
-    flock -x "$lock_fd"
-    info "Cloning busybox source repository $BUSYBOX_REPO_URL -> $BUSYBOX_SRC_DIR"
-    clone_repository "$BUSYBOX_REPO_URL" "$BUSYBOX_SRC_DIR" || return 1
-    info "Checking out busybox ref ${BUSYBOX_REF}"
-    checkout_ref "$BUSYBOX_SRC_DIR" "$BUSYBOX_REF" || return 1
-    if [[ -d "$BUSYBOX_PATCH_DIR" ]]; then
-        info "Applying patches..."
-        apply_patches "$BUSYBOX_PATCH_DIR" "$BUSYBOX_SRC_DIR" || return 1
-    fi
-    rm -rf -- "$prepared"
-    cp -a --reflink=auto -- "$BUSYBOX_SRC_DIR" "$prepared" || return 1
-    flock -u "$lock_fd"
-    exec {lock_fd}>&-
+    local prepared="$composition_dir/busybox-source"
+    # A subshell closes the source lock on every failure as well as success.
+    (
+        local lock_fd
+        mkdir -p -- "$(dirname -- "$BUSYBOX_SRC_DIR")" || exit 1
+        trap 'build_lock_release_all' EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        build_lock_acquire lock_fd "${BUSYBOX_SRC_DIR}.lock" || exit 1
+        info "Cloning busybox source repository $BUSYBOX_REPO_URL -> $BUSYBOX_SRC_DIR"
+        clone_repository "$BUSYBOX_REPO_URL" "$BUSYBOX_SRC_DIR" || exit 1
+        info "Checking out busybox ref ${BUSYBOX_REF}"
+        checkout_ref "$BUSYBOX_SRC_DIR" "$BUSYBOX_REF" || exit 1
+        if [[ -d "$BUSYBOX_PATCH_DIR" ]]; then
+            info "Applying patches..."
+            apply_patches "$BUSYBOX_PATCH_DIR" "$BUSYBOX_SRC_DIR" || exit 1
+        fi
+        mkfs_busybox_source_key > "$composition_dir/busybox-source.key" || exit 1
+        rm -rf -- "$prepared" || exit 1
+        cp -a --reflink=auto -- "$BUSYBOX_SRC_DIR" "$prepared" || exit 1
+        if [[ -n ${BUSYBOX_CONFIG:-} ]]; then
+            cp -- "$BUSYBOX_CONFIG" "$composition_dir/busybox.config" || exit 1
+        fi
+    ) || return 1
+    BUSYBOX_SOURCE_KEY=$(cat "$composition_dir/busybox-source.key")
     BUSYBOX_BUILD_SRC_DIR=$prepared
 }
 
@@ -483,10 +567,11 @@ mkfs() (
     _rootfs_validate_protected_outer_path "$MKFS_OUTER_GUEST_DIR" "$MKFS_OUTER_TEST_OVERLAY" \
         "rootfs-${MKFS_ARCH}-busybox.img"
 
+    mkfs_validate_busybox_options || return 1
     mkfs_prepare_busybox_source || return 1
 
     info "Starting to build busybox..."
-    mkfs_build_busybox
+    mkfs_build_busybox || return 1
 
     info "Packing filesystem..."
     mkfs_pack_fs

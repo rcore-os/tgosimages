@@ -272,7 +272,39 @@ special nodes and out-of-band metadata paths are rejected. Download caches and
 extracted sources are keyed by the verified checksum and record checksum
 provenance, while builder containers are pinned by their configured image.
 
+The four built-in plugins also cache their complete, validated overlays under
+`build/rootfs-tests/artifacts/<plugin>/<key>/` (relative to
+`ROOTFS_TEST_BUILD_ROOT` when set). Keys include the source checksum, architecture,
+rootfs and scope, actual Docker image ID, compiler/filter options, and the contents
+of plugin/shared build scripts and patches. Hits verify the archive SHA256 and
+restore file modes, timestamps and links. Corrupt entries are rebuilt; per-key
+locks serialize concurrent producers, and failed builds do not publish entries.
+
+Artifacts use uncompressed tar archives, adding storage on the first build and
+skipping compilation on repeat builds. Set `ROOTFS_TEST_CACHE=0` to disable them:
+
+```bash
+ROOTFS_TEST_CACHE=0 scripts/rootfs/alpine.sh aarch64
+```
+
+Offline fixtures and custom builders selected with `ROOTFS_TEST_ALPINE_BUILDER`
+bypass artifact caching. When no builds are running, entries under
+`build/rootfs-tests/artifacts/` can be removed to reclaim space; subsequent builds
+regenerate them. Cache hits still require Docker to identify the builder image.
+Release compression remains `xz -T0 -9e`.
+
 ### BusyBox
+
+Incremental workspaces are kept under `build/busybox-builds/` by default; override
+the location with `BUSYBOX_BUILD_ROOT`. Source, patch, architecture, configuration,
+build-option or toolchain changes select a new workspace. Unchanged inputs reuse
+the workspace and run `make` to check dependencies, avoiding repeated cleaning
+and configuration. A per-workspace lock serializes compilation; packaging uses
+a private copy of the resulting executable. Set `BUSYBOX_INCREMENTAL=0` to build
+from scratch each time.
+
+The existing forced source checkout and cleanup behavior remains in effect.
+Workspaces use additional disk space and may be removed while no builds run.
 
 - Generates both initramfs and ext4 rootfs images
 - Used by `scripts/platform/qemu.sh` for QEMU Linux and ArceOS flows
@@ -294,6 +326,24 @@ provenance, while builder containers are pinned by their configured image.
 
 ### Debian
 
+Clean base images, before adding tests or platform payloads, are cached under
+`build/debian/base-cache/`. Keys include architecture, suite, mirror, image size,
+password digest, preinstalled packages, recipes and the actual Docker image ID.
+Hits verify SHA256 and ext4 before copying into private composition staging.
+Changing test selections or `/guest` content does not rebuild the base system.
+
+APT repositories change over time; a cache hit does not upgrade system packages.
+To refresh the base packages or bypass caching entirely:
+
+```bash
+DEBIAN_BASE_CACHE_REFRESH=1 scripts/rootfs/debian.sh aarch64
+DEBIAN_BASE_CACHE=0 scripts/rootfs/debian.sh aarch64
+```
+
+Refresh does not pull an already present Docker tag; pull the corresponding
+image first when updating the builder container. A failed refresh retains the
+previous cache. Cache entries may be removed while no builds run to reclaim space.
+
 - Uses Docker plus `debootstrap`
 - Generates an ext4 rootfs image
 - Defaults to Debian `trixie`
@@ -301,14 +351,18 @@ provenance, while builder containers are pinned by their configured image.
 
 ### Rootfs validation
 
-Run the fast, build-free suites before a costly image build:
+Select the fast regression suites relevant to the change; running every suite
+is not required for each build:
 
 ```bash
 scripts/tests/rootfs-nested-content-test.sh
 scripts/tests/qemu-rootfs-test-options.sh
 scripts/tests/rootfs-builder-options.sh
 scripts/tests/rootfs-test-plugins.sh
+scripts/tests/rootfs-test-cache.sh
 scripts/tests/rootfs-compose.sh
+scripts/tests/debian-base-cache.sh
+scripts/tests/busybox-incremental.sh
 scripts/tests/starry-release-smoke.sh
 ```
 

@@ -8,6 +8,7 @@ BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
 
 source "${SCRIPT_DIR}/../lib/utils.sh"
 source "${SCRIPT_DIR}/../lib/rootfs-compose.sh"
+source "${SCRIPT_DIR}/../lib/debian-base-cache.sh"
 
 DEBIAN_ARCH=""
 DEBIAN_OUT_DIR=""
@@ -70,6 +71,8 @@ debian_usage() {
     printf '  DEBIAN_SUITE                  Debian suite\n'
     printf '  DEBIAN_PASSWORD               Root password\n'
     printf '  DEBIAN_MIRROR                 Debian mirror URL\n'
+    printf '  DEBIAN_BASE_CACHE             Set to 0 to bypass clean base cache\n'
+    printf '  DEBIAN_BASE_CACHE_REFRESH     Set to 1 to rebuild cached base\n'
     printf '\n'
     printf 'Notes:\n'
     printf '  * Uses Docker + debootstrap to generate an ext4 rootfs image.\n'
@@ -257,20 +260,22 @@ debian_pack_rootfs_volume() {
         }
 }
 
-debian_build_rootfs() {
+debian_create_base() (
+    local debian_rootfs_tmp=$1
     local volume_name="starry-debian-rootfs-${DEBIAN_ARCH}-$$"
 
     info "Building Debian ${DEBIAN_SUITE} rootfs for ${DEBIAN_ARCH} (${DEBIAN_DPKG_ARCH})"
     info "Docker image: ${DEBIAN_DOCKER_IMAGE} (${DEBIAN_DOCKER_PLATFORM})"
     info "Output image: ${DEBIAN_ROOTFS_IMG}"
 
-    docker volume create "${volume_name}" >/dev/null
+    docker volume create "${volume_name}" >/dev/null || return $?
 
     cleanup_volume() {
         docker volume rm "${volume_name}" >/dev/null 2>&1 || true
-        rm -rf -- "${composition_dir:-}"
     }
     trap cleanup_volume EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
 
     info "Configuring Debian rootfs contents via debootstrap..."
     docker run --rm \
@@ -375,24 +380,28 @@ EOF_RESOLV
             chroot \"\$ROOTFS\" apt-get clean
             rm -rf \"\$ROOTFS/var/lib/apt/lists/\"*
             rm -rf \"\$ROOTFS/var/cache/apt/archives/\"*.deb
-        "
+        " || return $?
 
     info "Packing ext4 image ${DEBIAN_ROOTFS_IMG} (${DEBIAN_IMG_SIZE})..."
+    debian_pack_rootfs_volume "$volume_name" "$debian_rootfs_tmp"
+)
+
+debian_build_rootfs() {
     local debian_rootfs_tmp="${DEBIAN_ROOTFS_IMG}.base.tmp.$$"
     cleanup_rootfs_tmp() {
-        rm -f "${debian_rootfs_tmp}" "${debian_rootfs_tmp}.lock"
-        cleanup_volume
+        rm -f -- "$debian_rootfs_tmp" "$debian_rootfs_tmp.lock"
+        rm -rf -- "${composition_dir:-}"
     }
     trap cleanup_rootfs_tmp EXIT
-    rm -f "${debian_rootfs_tmp}"
-    debian_pack_rootfs_volume "$volume_name" "$debian_rootfs_tmp"
+    debian_resolve_docker_image
+    debian_acquire_base "$debian_rootfs_tmp"
     rootfs_compose_test_images "${debian_rootfs_tmp}" "${DEBIAN_OUTER_TEST_OVERLAY}" \
         "${DEBIAN_GUEST_TEST_OVERLAY}" "${DEBIAN_OUTER_GUEST_DIR}" "${DEBIAN_ARCH}" debian \
         "${DEBIAN_GUEST_FREE_SIZE}" "${DEBIAN_OUTER_FREE_SIZE}" "${DEBIAN_ROOTFS_IMG}"
     rm -f -- "${debian_rootfs_tmp}" "${debian_rootfs_tmp}.lock"
 
     trap - EXIT
-    cleanup_volume
+    cleanup_rootfs_tmp
 
     success "Debian rootfs created: ${DEBIAN_ROOTFS_IMG}"
 }

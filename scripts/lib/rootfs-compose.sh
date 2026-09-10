@@ -6,6 +6,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 fi
 
 _rootfs_compose_lib_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "${_rootfs_compose_lib_dir}/build-lock.sh"
 ROOTFS_TEST_BUILD=${ROOTFS_TEST_BUILD:-"${_rootfs_compose_lib_dir}/../rootfs-tests/build.sh"}
 if ! declare -F _rootfs_inject_tree_via_debugfs >/dev/null; then
     # shellcheck source=rootfs.sh
@@ -199,30 +200,50 @@ rootfs_ext4_free_inodes() {
     printf '%s\n' "$free_inodes"
 }
 
-_rootfs_overlay_required_inodes() (
-    local directory=$1 inventory path key count=1
+# For a stable payload snapshot, collect both capacity estimates in one walk.
+# find supplies lstat metadata directly; filenames never enter the record format.
+rootfs_overlay_capacity_stats() (
+    local directory=$1 inventory type size device inode extra key
+    local total=4096 count=1 max=9223372036854775807
     local -A regular_inodes=()
     [[ -d "$directory" ]] || return 1
+    _rootfs_require_tools find mktemp rm || return 1
     inventory=$(mktemp) || return 1
     trap 'rm -f -- "$inventory"' EXIT
-    find "$directory" -mindepth 1 -print0 >"$inventory" || return 1
-    while IFS= read -r -d '' path; do
-        if [[ -L "$path" || -d "$path" ]]; then
-            ((count < 9223372036854775807)) || return 1
-            count=$((count + 1))
-        elif [[ -f "$path" ]]; then
-            key=$(stat -c '%d:%i' -- "$path") || return 1
-            if [[ -z ${regular_inodes[$key]+x} ]]; then
-                regular_inodes[$key]=1
-                ((count < 9223372036854775807)) || return 1
-                count=$((count + 1))
-            fi
-        else
-            return 1
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    find "$directory" -mindepth 1 -printf '%y %s %D %i\n' >"$inventory" || return 1
+    while read -r type size device inode extra; do
+        [[ -z "$extra" && $device =~ ^[0-9]+$ && $inode =~ ^[0-9]+$ ]] || return 1
+        case $type in
+            d) size=0 ;;
+            f|l) ;;
+            *) _rootfs_compose_error "unsupported payload entry type: ${type}"; return 1 ;;
+        esac
+        [[ $size =~ ^(0|[1-9][0-9]*)$ ]] || return 1
+        ((${#size} <= ${#max})) || return 1
+        if ((${#size} == ${#max})) && [[ $size > $max ]]; then return 1; fi
+        ((size <= max - total - 4096)) || return 1
+        total=$((total + size + 4096))
+        # Match the previous conservative byte estimate: every pathname reserves
+        # its apparent size, while regular hardlinks share an inode allocation.
+        if [[ $type == f ]]; then
+            key="$device:$inode"
+            [[ -z ${regular_inodes[$key]+x} ]] || continue
+            regular_inodes[$key]=1
         fi
+        ((count < max)) || return 1
+        count=$((count + 1))
     done <"$inventory"
-    printf '%s\n' "$count"
+    printf '%s %s\n' "$total" "$count"
 )
+
+_rootfs_overlay_required_inodes() {
+    local stats bytes inodes
+    stats=$(rootfs_overlay_capacity_stats "$1") || return 1
+    read -r bytes inodes <<<"$stats"
+    printf '%s\n' "$inodes"
+}
 
 rootfs_ext4_free_bytes() {
     _rootfs_require_tools awk dumpe2fs || return 1
@@ -234,26 +255,10 @@ rootfs_ext4_free_bytes() {
 }
 
 rootfs_overlay_apparent_bytes() {
-    local directory=$1 path size total=0
-    [[ -d "$directory" ]] || return 1
-    _rootfs_require_tools find stat || return 1
-    while IFS= read -r -d '' path; do
-        if [[ -L "$path" ]]; then
-            size=$(stat -c %s -- "$path") || return 1
-        elif [[ -f "$path" ]]; then
-            size=$(stat -c %s -- "$path") || return 1
-        elif [[ -d "$path" ]]; then
-            size=0
-        else
-            _rootfs_compose_error "unsupported payload entry: ${path}"
-            return 1
-        fi
-        ((size <= 9223372036854775807 - total - 4096)) || return 1
-        total=$((total + size + 4096))
-    done < <(find "$directory" -mindepth 1 -print0)
-    # Account for the root directory inode/block even for an empty overlay.
-    ((total <= 9223372036854771711)) || return 1
-    printf '%s\n' "$((total + 4096))"
+    local stats bytes inodes
+    stats=$(rootfs_overlay_capacity_stats "$1") || return 1
+    read -r bytes inodes <<<"$stats"
+    printf '%s\n' "$bytes"
 }
 
 _rootfs_check_clean() {
@@ -313,15 +318,17 @@ rootfs_ensure_ext4_capacity() (
     ((reserve <= 9223372036854775807 - pending - headroom)) || return 1
     directory=$(dirname -- "$image")
     base=$(basename -- "$image")
-    exec {lock_fd}>"${image}.lock" || return 1
-    flock -x "$lock_fd" || return 1
+    trap 'build_lock_release_all' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    build_lock_acquire lock_fd "${image}.lock" || return 1
     _rootfs_ext4_stats "$image" >/dev/null || return 1
     _rootfs_check_clean "$image" || {
         _rootfs_compose_error "ext4 image is dirty or unrepairable: ${image}"
         return 1
     }
     temp=
-    trap '[[ -z ${temp:-} ]] || rm -f -- "$temp"' EXIT
+    trap '[[ -z ${temp:-} ]] || rm -f -- "$temp"; build_lock_release_all' EXIT
     trap 'exit 130' INT TERM
     temp=$(mktemp "${directory}/.${base}.capacity.XXXXXX") || return 1
     if ! cp --preserve=all --reflink=auto --sparse=always -- "$image" "$temp" ||
@@ -329,13 +336,11 @@ rootfs_ensure_ext4_capacity() (
        ! touch -r "$image" "$temp" ||
        ! mv -T -- "$temp" "$image"; then
         rm -f -- "$temp"
-        flock -u "$lock_fd"
-        exec {lock_fd}>&-
+        build_lock_release "$lock_fd"
         return 1
     fi
     temp=
-    flock -u "$lock_fd"
-    exec {lock_fd}>&-
+    build_lock_release "$lock_fd"
 )
 
 _rootfs_repair_ext4() {
@@ -385,11 +390,13 @@ rootfs_compact_ext4() (
     reserve=$(rootfs_parse_size_bytes "$reserve_value") || return 1
     directory=$(dirname -- "$image")
     base=$(basename -- "$image")
-    exec {lock_fd}>"${image}.lock" || return 1
-    flock -x "$lock_fd" || return 1
+    trap 'build_lock_release_all' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    build_lock_acquire lock_fd "${image}.lock" || return 1
     _rootfs_ext4_stats "$image" >/dev/null || return 1
     temp=
-    trap '[[ -z ${temp:-} ]] || rm -f -- "$temp"' EXIT
+    trap '[[ -z ${temp:-} ]] || rm -f -- "$temp"; build_lock_release_all' EXIT
     trap 'exit 130' INT TERM
     temp=$(mktemp "${directory}/.${base}.compact.XXXXXX") || return 1
     if ! cp --preserve=all --reflink=auto --sparse=always -- "$image" "$temp" ||
@@ -397,13 +404,11 @@ rootfs_compact_ext4() (
        ! touch -r "$image" "$temp" ||
        ! mv -T -- "$temp" "$image"; then
         rm -f -- "$temp"
-        flock -u "$lock_fd"
-        exec {lock_fd}>&-
+        build_lock_release "$lock_fd"
         return 1
     fi
     temp=
-    flock -u "$lock_fd"
-    exec {lock_fd}>&-
+    build_lock_release "$lock_fd"
 )
 
 _rootfs_validate_payload_tree() {
@@ -517,7 +522,7 @@ _rootfs_paths_alias() {
 _rootfs_finish_outer_in_place() (
     local image=$1 guest_source=$2 overlay_source=$3 reserve=$4 protected=${5-}
     local guest_bytes overlay_bytes guest_inodes overlay_inodes pending pending_inodes stage free guest_snapshot overlay_snapshot image_dir
-    local iterations=0
+    local iterations=0 capacity_stats
     image_dir=$(dirname -- "$image")
     stage=
     guest_snapshot=
@@ -534,18 +539,19 @@ _rootfs_finish_outer_in_place() (
     if [[ -n "$protected" ]]; then
         _rootfs_validate_protected_outer_path "$guest_snapshot" "$overlay_snapshot" "$protected" || return 1
     fi
-    guest_bytes=$(rootfs_overlay_apparent_bytes "$guest_snapshot") || return 1
-    overlay_bytes=$(rootfs_overlay_apparent_bytes "$overlay_snapshot") || return 1
-    guest_inodes=$(_rootfs_overlay_required_inodes "$guest_snapshot") || return 1
-    overlay_inodes=$(_rootfs_overlay_required_inodes "$overlay_snapshot") || return 1
+    capacity_stats=$(rootfs_overlay_capacity_stats "$guest_snapshot") || return 1
+    read -r guest_bytes guest_inodes <<<"$capacity_stats"
+    capacity_stats=$(rootfs_overlay_capacity_stats "$overlay_snapshot") || return 1
+    read -r overlay_bytes overlay_inodes <<<"$capacity_stats"
     ((guest_bytes <= 9223372036854775807 - overlay_bytes)) || return 1
     ((guest_inodes <= 9223372036854775807 - overlay_inodes)) || return 1
     pending=$((guest_bytes + overlay_bytes))
     pending_inodes=$((guest_inodes + overlay_inodes))
     _rootfs_resize_for_capacity_in_place "$image" "$pending" "$reserve" "$pending_inodes" || return 1
     stage=$(mktemp -d "${image_dir}/.outer-stage.XXXXXX") || return 1
-    mkdir -p "$stage/guest"
-    cp -a -- "$guest_snapshot/." "$stage/guest/" || { rm -rf -- "$stage"; return 1; }
+    # The validated snapshot is private and shares the stage filesystem.
+    mv -T -- "$guest_snapshot" "$stage/guest" || return 1
+    guest_snapshot=
     touch -d @0 "$stage/guest" || return 1
     _rootfs_inject_tree_via_debugfs "$image" "$stage" || { rm -rf -- "$stage"; return 1; }
     rm -rf -- "$stage"
@@ -571,12 +577,14 @@ rootfs_inject_outer_payload_atomic() (
     _rootfs_validate_protected_outer_path "$guest_source" "$overlay_source" "$protected" || return 1
     directory=$(dirname -- "$image")
     base=$(basename -- "$image")
-    exec {lock_fd}>"${image}.lock" || return 1
-    flock -x "$lock_fd" || return 1
+    trap 'build_lock_release_all' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    build_lock_acquire lock_fd "${image}.lock" || return 1
     _rootfs_ext4_stats "$image" >/dev/null || return 1
     _rootfs_check_clean "$image" || return 1
     temp=
-    trap '[[ -z ${temp:-} ]] || rm -f -- "$temp"' EXIT
+    trap '[[ -z ${temp:-} ]] || rm -f -- "$temp"; build_lock_release_all' EXIT
     trap 'exit 130' INT TERM
     temp=$(mktemp "${directory}/.${base}.inject.XXXXXX") || return 1
     if ! cp --preserve=all --reflink=auto --sparse=always -- "$image" "$temp" ||
@@ -584,13 +592,11 @@ rootfs_inject_outer_payload_atomic() (
        ! touch -r "$image" "$temp" ||
        ! mv -T -- "$temp" "$image"; then
         rm -f -- "$temp"
-        flock -u "$lock_fd"
-        exec {lock_fd}>&-
+        build_lock_release "$lock_fd"
         return 1
     fi
     temp=
-    flock -u "$lock_fd"
-    exec {lock_fd}>&-
+    build_lock_release "$lock_fd"
 )
 
 rootfs_compose_test_images() (
@@ -598,10 +604,10 @@ rootfs_compose_test_images() (
     export LC_ALL
     local base=$1 outer_overlay=$2 guest_overlay=$3 outer_guest=$4 arch=$5 rootfs_type=$6
     local guest_free_value=$7 outer_free_value=$8 output=$9 guest_free outer_free nested_name
-    local output_dir output_base guest_image outer_image nested_stage empty_overlay guest_overlay_snapshot base_snapshot
-    local base_lock output_lock lock_fd1 lock_fd2
+    local output_dir output_base guest_image outer_image nested_stage guest_overlay_snapshot base_snapshot nested_bytes nested_inodes
+    local base_lock output_lock lock_fd1 lock_fd2 capacity_stats guest_bytes guest_inodes
     local stage=validate-inputs exit_status
-    guest_image= outer_image= nested_stage= empty_overlay= guest_overlay_snapshot= base_snapshot=
+    guest_image= outer_image= nested_stage= guest_overlay_snapshot= base_snapshot=
     trap '
         exit_status=$?
         if ((exit_status != 0)); then
@@ -611,9 +617,9 @@ rootfs_compose_test_images() (
         [[ -z ${guest_image:-} ]] || rm -f -- "$guest_image"
         [[ -z ${outer_image:-} ]] || rm -f -- "$outer_image"
         [[ -z ${nested_stage:-} ]] || rm -rf -- "$nested_stage"
-        [[ -z ${empty_overlay:-} ]] || rm -rf -- "$empty_overlay"
         [[ -z ${guest_overlay_snapshot:-} ]] || rm -rf -- "$guest_overlay_snapshot"
         [[ -z ${base_snapshot:-} ]] || rm -f -- "$base_snapshot"
+        build_lock_release_all
         exit "$exit_status"
     ' EXIT
     trap 'exit 130' INT TERM
@@ -636,16 +642,14 @@ rootfs_compose_test_images() (
         _rootfs_compose_error "base and output resolve to the same lock path: ${base_lock}"
         return 1
     }
-    # All two-image operations acquire persistent lock paths lexicographically.
+    # All two-image operations acquire lock paths lexicographically.
     if [[ "$base_lock" < "$output_lock" ]]; then
-        exec {lock_fd1}>"$base_lock" || return 1
-        exec {lock_fd2}>"$output_lock" || return 1
+        build_lock_acquire lock_fd1 "$base_lock" || return 1
+        build_lock_acquire lock_fd2 "$output_lock" || return 1
     else
-        exec {lock_fd1}>"$output_lock" || return 1
-        exec {lock_fd2}>"$base_lock" || return 1
+        build_lock_acquire lock_fd1 "$output_lock" || return 1
+        build_lock_acquire lock_fd2 "$base_lock" || return 1
     fi
-    flock -x "$lock_fd1" || return 1
-    flock -x "$lock_fd2" || return 1
     stage=validate-payloads
     guest_free=$(rootfs_parse_size_bytes "$guest_free_value") || return 1
     outer_free=$(rootfs_parse_size_bytes "$outer_free_value") || return 1
@@ -669,13 +673,12 @@ rootfs_compose_test_images() (
     nested_stage=$(mktemp -d "${output_dir}/.${output_base}.nested.XXXXXX") || {
         rm -f -- "$guest_image" "$outer_image"; return 1;
     }
-    empty_overlay=$(mktemp -d "${output_dir}/.${output_base}.empty.XXXXXX") || {
-        rm -rf -- "$nested_stage"; rm -f -- "$guest_image" "$outer_image"; return 1;
-    }
     stage=prepare-guest-image
     cp --preserve=all --reflink=auto --sparse=always -- "$base_snapshot" "$guest_image" || return 1
     stage=grow-guest-image
-    _rootfs_resize_for_capacity_in_place "$guest_image" "$(rootfs_overlay_apparent_bytes "$guest_overlay_snapshot")" "$guest_free" "$(_rootfs_overlay_required_inodes "$guest_overlay_snapshot")" || return 1
+    capacity_stats=$(rootfs_overlay_capacity_stats "$guest_overlay_snapshot") || return 1
+    read -r guest_bytes guest_inodes <<<"$capacity_stats"
+    _rootfs_resize_for_capacity_in_place "$guest_image" "$guest_bytes" "$guest_free" "$guest_inodes" || return 1
     stage=inject-guest-tests
     _rootfs_inject_tree_via_debugfs "$guest_image" "$guest_overlay_snapshot" || return 1
     stage=compact-guest-image
@@ -689,11 +692,19 @@ rootfs_compose_test_images() (
     # do not carry host-only xattrs/ACLs that the debugfs policy rejects.
     cp --preserve=mode,ownership,timestamps --reflink=auto --sparse=always -- \
         "$guest_image" "$nested_stage/guest/$nested_name" || {
-        rm -rf -- "$nested_stage" "$empty_overlay"; rm -f -- "$guest_image" "$outer_image"
+        rm -rf -- "$nested_stage"; rm -f -- "$guest_image" "$outer_image"
         return 1
     }
     stage=inject-nested-image
-    _rootfs_finish_outer_in_place "$outer_image" "$nested_stage/guest" "$empty_overlay" 0 || return 1
+    # This tree is already private; the injector retains its own checked
+    # snapshot. Avoid the generic outer-payload helper's extra guest snapshot.
+    touch -d @0 "$nested_stage/guest" || return 1
+    _rootfs_validate_payload_tree "$nested_stage" || return 1
+    capacity_stats=$(rootfs_overlay_capacity_stats "$nested_stage") || return 1
+    read -r nested_bytes nested_inodes <<<"$capacity_stats"
+    _rootfs_resize_for_capacity_in_place "$outer_image" "$nested_bytes" 0 "$nested_inodes" || return 1
+    _rootfs_inject_tree_via_debugfs "$outer_image" "$nested_stage" || return 1
+    _rootfs_repair_ext4 "$outer_image" || return 1
     stage=inject-outer-payload
     _rootfs_finish_outer_in_place "$outer_image" "$outer_guest" "$outer_overlay" "$outer_free" "$nested_name" || return 1
     stage=compact-outer-image
@@ -701,16 +712,13 @@ rootfs_compose_test_images() (
     stage=publish-outer-image
     touch -r "$base_snapshot" "$outer_image" || return 1
     mv -T -- "$outer_image" "$output" || return 1
-    rm -rf -- "$nested_stage" "$empty_overlay" "$guest_overlay_snapshot"
+    rm -rf -- "$nested_stage" "$guest_overlay_snapshot"
     rm -f -- "$guest_image" "$base_snapshot"
     guest_image=
     outer_image=
     nested_stage=
-    empty_overlay=
     guest_overlay_snapshot=
     base_snapshot=
-    flock -u "$lock_fd2"
-    flock -u "$lock_fd1"
-    exec {lock_fd2}>&-
-    exec {lock_fd1}>&-
+    build_lock_release "$lock_fd2"
+    build_lock_release "$lock_fd1"
 )

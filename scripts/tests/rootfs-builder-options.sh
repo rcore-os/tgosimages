@@ -492,6 +492,7 @@ test_busybox_source_preparation_serializes() (
     local area="$work/source-lock" state="$work/source-state" overlap="$work/source-overlap"
     mkdir -p "$area/cache"
     printf source >"$area/cache/README"
+    git -C "$area/cache" init -q
     BUSYBOX_SRC_DIR="$area/cache"
     BUSYBOX_PATCH_DIR="$area/patches"
     mkdir "$BUSYBOX_PATCH_DIR"
@@ -506,7 +507,10 @@ test_busybox_source_preparation_serializes() (
     local first=$!
     (composition_dir="$area/run-two"; mkdir "$composition_dir"; mkfs_prepare_busybox_source) &
     local second=$!
-    wait "$first" && wait "$second"
+    local first_status=0 second_status=0
+    wait "$first" || first_status=$?
+    wait "$second" || second_status=$?
+    ((first_status == 0 && second_status == 0)) || return 1
     [[ ! -e $overlap && -f $area/run-one/busybox-source/README && -f $area/run-two/busybox-source/README ]]
 )
 run_ok 'BusyBox cache preparation serializes and produces per-run source copies' test_busybox_source_preparation_serializes

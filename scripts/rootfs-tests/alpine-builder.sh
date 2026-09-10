@@ -74,6 +74,7 @@ prepare_builder() (
         local cleanup_status=$?
         trap - EXIT INT TERM
         [[ -z $context ]] || rm -rf -- "$context"
+        build_lock_release_all
         exit "$cleanup_status"
     }
     trap cleanup_context EXIT
@@ -86,18 +87,16 @@ prepare_builder() (
     build_root=${ROOTFS_TEST_BUILD_ROOT:-"$repo_root/build/rootfs-tests"}
     mkdir -p "$build_root/builders/downloads" "$build_root/builders/locks" "$build_root/builders/work"
     archive_path="$build_root/builders/downloads/$archive_cache"
-    exec {lock_fd}>"$build_root/builders/locks/minirootfs-$sha256.lock"
-    flock -x "$lock_fd"
+    build_lock_acquire lock_fd "$build_root/builders/locks/minirootfs-$sha256.lock"
     if [[ -f $archive_path ]]; then
         actual=$(sha256sum "$archive_path" | awk '{print $1}')
         [[ $actual == "$sha256" ]] || die "cached minirootfs checksum mismatch: $archive_path"
     else
         rootfs_test_download_checked "$url" "$sha256" "$archive_path" || die 'checked minirootfs download failed'
     fi
-    flock -u "$lock_fd"; exec {lock_fd}>&-
+    build_lock_release "$lock_fd"
 
-    exec {lock_fd}>"$build_root/builders/locks/image-$arch-$sha256-$manifest_sha.lock"
-    flock -x "$lock_fd"
+    build_lock_acquire lock_fd "$build_root/builders/locks/image-$arch-$sha256-$manifest_sha.lock"
     if ! image_has_label "$base_image" org.tgos.rootfs-tests.minirootfs-sha256 "$sha256"; then
         context=$(mktemp -d "$build_root/builders/work/base-$arch.XXXXXX")
         cp "$archive_path" "$context/$archive"
@@ -109,7 +108,7 @@ prepare_builder() (
     fi
     if [[ $base_only == 1 ]]; then
         printf '%s\n' "$base_image"
-        flock -u "$lock_fd"; exec {lock_fd}>&-; trap - EXIT INT TERM
+        build_lock_release "$lock_fd"; trap - EXIT INT TERM
         exit 0
     fi
     if ! image_has_label "$builder_image" org.tgos.rootfs-tests.package-manifest-sha256 "$manifest_sha" ||
@@ -126,7 +125,7 @@ prepare_builder() (
         rm -rf -- "$context"; context=''
     fi
     printf '%s\n' "$builder_image"
-    flock -u "$lock_fd"; exec {lock_fd}>&-; trap - EXIT INT TERM
+    build_lock_release "$lock_fd"; trap - EXIT INT TERM
 )
 
 (($#)) || die 'command required: describe or prepare'
