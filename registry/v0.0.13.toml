@@ -1,0 +1,190 @@
+# Guest image list for TGOS images (v0.0.13)
+
+[[images]]
+name = "initramfs-aarch64-busybox.cpio.gz"
+version = "0.0.13"
+description = "BusyBox initramfs for aarch64"
+sha256 = "c5b7eae0eac9a56b5a341c96a207222606058c83a3a777e33ee1b209a136d4df"
+arch = "aarch64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/initramfs-aarch64-busybox.cpio.gz.tar.xz"
+released_at = "2026-09-11T06:27:07Z"
+
+[[images]]
+name = "initramfs-loongarch64-busybox.cpio.gz"
+version = "0.0.13"
+description = "BusyBox initramfs for loongarch64"
+sha256 = "cbc4072344f954fda6febc1997f9dc7cad7811368fc2020d9748932d29310f21"
+arch = "loongarch64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/initramfs-loongarch64-busybox.cpio.gz.tar.xz"
+released_at = "2026-09-11T06:27:47Z"
+
+[[images]]
+name = "initramfs-riscv64-busybox.cpio.gz"
+version = "0.0.13"
+description = "BusyBox initramfs for riscv64"
+sha256 = "9de350b08cb48514ab546ae874d5da53d53580c948fb1b9f8047fcfd4d7d83d4"
+arch = "riscv64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/initramfs-riscv64-busybox.cpio.gz.tar.xz"
+released_at = "2026-09-11T06:27:54Z"
+
+[[images]]
+name = "initramfs-x86_64-busybox.cpio.gz"
+version = "0.0.13"
+description = "BusyBox initramfs for x86_64"
+sha256 = "309f0b3d1b78cda215c29a610dca93fa8d7ccb0654aba2d3685e62eb6b3b30c5"
+arch = "x86_64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/initramfs-x86_64-busybox.cpio.gz.tar.xz"
+released_at = "2026-09-11T06:28:04Z"
+
+[[images]]
+name = "orangepi-5-plus-starry"
+version = "0.0.13"
+description = "StarryOS for Orange Pi development board"
+sha256 = "78974bbded1bd73da6030a876be8e246d88062b709df9cd31496af01298198b9"
+arch = "aarch64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/orangepi-5-plus-starry.tar.xz"
+released_at = "2026-09-11T06:51:49Z"
+
+[[images]]
+name = "phytiumpi"
+version = "0.0.13"
+description = "Guest image bundle for Phytium Pi development board"
+sha256 = "2f588c4a6b6172a07145917f98dd75a2a6dfd2ff3b273bb765e41d38641b9d82"
+arch = "aarch64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/phytiumpi.tar.xz"
+released_at = "2026-09-11T06:51:55Z"
+
+[[images]]
+name = "qemu-aarch64"
+version = "0.0.13"
+description = "Guest image bundle for QEMU aarch64 virtualization"
+sha256 = "4078a53cbcafaa0576d65f3149fd94e3e28f3fcff3ed57a15233e4b1de9a5465"
+arch = "aarch64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/qemu-aarch64.tar.xz"
+released_at = "2026-09-11T06:52:32Z"
+
+[[images]]
+name = "qemu-loongarch64"
+version = "0.0.13"
+description = "Guest image bundle for QEMU LoongArch64 virtualization"
+sha256 = "da53fde968aec9f3a8933d5a88bb2260c6ff20ad2e22d954d360cbe86b520c92"
+arch = "loongarch64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/qemu-loongarch64.tar.xz"
+released_at = "2026-09-11T06:53:26Z"
+
+[[images]]
+name = "qemu-riscv64"
+version = "0.0.13"
+description = "Guest image bundle for QEMU riscv64 virtualization"
+sha256 = "19bb9bb1e44031c6ae3d7a585809d70c36e6e6f8f714e8fb1287e390e94fb11f"
+arch = "riscv64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/qemu-riscv64.tar.xz"
+released_at = "2026-09-11T06:53:36Z"
+
+[[images]]
+name = "qemu-x86_64"
+version = "0.0.13"
+description = "Guest image bundle for QEMU x86_64 virtualization"
+sha256 = "42b734272f0041adb8ff6e62f2b77d06279f6953fef2d9abf6d6877252f70aea"
+arch = "x86_64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/qemu-x86_64.tar.xz"
+released_at = "2026-09-11T06:53:41Z"
+
+[[images]]
+name = "rootfs-aarch64-alpine.img"
+version = "0.0.13"
+description = "Alpine rootfs image for aarch64"
+sha256 = "813ef465e3137f79b093dc66372c318e39c9f87fd84ce9cb8f68aa68ec7cf236"
+arch = "aarch64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/rootfs-aarch64-alpine.img.tar.xz"
+released_at = "2026-09-11T06:31:28Z"
+
+[[images]]
+name = "rootfs-aarch64-busybox.img"
+version = "0.0.13"
+description = "BusyBox rootfs image for aarch64"
+sha256 = "288d7b66f9e466a4fa0581e54ca15652828a33e18b28e4cb67f7a8d1ab9073ca"
+arch = "aarch64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/rootfs-aarch64-busybox.img.tar.xz"
+released_at = "2026-09-11T06:32:28Z"
+
+[[images]]
+name = "rootfs-aarch64-debian.img"
+version = "0.0.13"
+description = "Debian rootfs image for aarch64"
+sha256 = "ce2e945a0549dc1497fe365d0b228a554fefdd92a3a1ae98cb6d374d34bcf4c6"
+arch = "aarch64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/rootfs-aarch64-debian.img.tar.xz"
+released_at = "2026-09-11T06:34:30Z"
+
+[[images]]
+name = "rootfs-loongarch64-alpine.img"
+version = "0.0.13"
+description = "Alpine rootfs image for loongarch64"
+sha256 = "aad3548d2bfb488ec458bfda217b64df3ae2491257373b5d40f210da05bdeb6a"
+arch = "loongarch64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/rootfs-loongarch64-alpine.img.tar.xz"
+released_at = "2026-09-11T06:36:54Z"
+
+[[images]]
+name = "rootfs-loongarch64-busybox.img"
+version = "0.0.13"
+description = "BusyBox rootfs image for loongarch64"
+sha256 = "ed6b4820d3411406b1336fefa33ea9123086ae59eeda000647ea97dc18a65c3e"
+arch = "loongarch64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/rootfs-loongarch64-busybox.img.tar.xz"
+released_at = "2026-09-11T06:38:58Z"
+
+[[images]]
+name = "rootfs-riscv64-alpine.img"
+version = "0.0.13"
+description = "Alpine rootfs image for riscv64"
+sha256 = "fa85de87265278963a486da999e7fa63a1c6c3312fbfa9a5da788d24794b4402"
+arch = "riscv64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/rootfs-riscv64-alpine.img.tar.xz"
+released_at = "2026-09-11T06:41:52Z"
+
+[[images]]
+name = "rootfs-riscv64-busybox.img"
+version = "0.0.13"
+description = "BusyBox rootfs image for riscv64"
+sha256 = "bb8802b61d825b1251f4386d3ad507be9b80e59b35e47e093c0ae0f9b14efe22"
+arch = "riscv64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/rootfs-riscv64-busybox.img.tar.xz"
+released_at = "2026-09-11T06:42:27Z"
+
+[[images]]
+name = "rootfs-riscv64-debian.img"
+version = "0.0.13"
+description = "Debian rootfs image for riscv64"
+sha256 = "7b657f6c31abf14216e4d367b2a03ba79343802cc7d77e2fbe79cac0b99f814e"
+arch = "riscv64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/rootfs-riscv64-debian.img.tar.xz"
+released_at = "2026-09-11T06:45:44Z"
+
+[[images]]
+name = "rootfs-x86_64-alpine.img"
+version = "0.0.13"
+description = "Alpine rootfs image for x86_64"
+sha256 = "9dab5253f224d65aaaed3d5d42dbf6447af1befa976e36d0b62799cefa2a7215"
+arch = "x86_64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/rootfs-x86_64-alpine.img.tar.xz"
+released_at = "2026-09-11T06:48:50Z"
+
+[[images]]
+name = "rootfs-x86_64-busybox.img"
+version = "0.0.13"
+description = "BusyBox rootfs image for x86_64"
+sha256 = "a8d6c6ab843b6a90dc3df1bdbe93576a685e4fdd6a9970fdf3533b683bae6e4d"
+arch = "x86_64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/rootfs-x86_64-busybox.img.tar.xz"
+released_at = "2026-09-11T06:49:19Z"
+
+[[images]]
+name = "rootfs-x86_64-debian.img"
+version = "0.0.13"
+description = "Debian rootfs image for x86_64"
+sha256 = "42046a6a7659ddcfb9c456047e97f52422017f6d1dec179bf83c3123d502b6cc"
+arch = "x86_64"
+url = "https://github.com/rcore-os/tgosimages/releases/download/v0.0.13/rootfs-x86_64-debian.img.tar.xz"
+released_at = "2026-09-11T06:51:31Z"
