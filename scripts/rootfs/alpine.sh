@@ -33,6 +33,7 @@ ALPINE_DEFAULT_PACKAGES=(
     libusb-dev
     git
     vim
+    pciutils
 )
 
 # Global variables for parsed arguments
