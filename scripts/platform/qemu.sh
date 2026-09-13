@@ -304,13 +304,42 @@ qemu_ivc_build_arceos_guest() {
 
 qemu_ivc_ensure_linux_guest() {
     local linux_image="${PLATFORM_IMAGES_DIR}/linux/linux-qemu"
+    local reusable=0
+    local config setting kernel_image
+    local required_settings=()
 
-    [[ "${ARCH}" == "aarch64" ]] || die "Axvisor IVC Linux guest is currently only supported for qemu aarch64"
-    if [[ -f "${linux_image}" ]]; then
+    case "${ARCH}" in
+        aarch64)
+            kernel_image="${LINUX_SRC_DIR}/arch/arm64/boot/Image"
+            required_settings=(CONFIG_ARM64=y CONFIG_MODULES=y CONFIG_UIO=m
+                CONFIG_PCI_MSI=y CONFIG_ARM_GIC_V3_ITS=y)
+            ;;
+        *)
+            die "Axvisor IVC Linux guest is currently only supported for qemu aarch64"
+            ;;
+    esac
+    # An image alone is insufficient: IVC/UIO modules need its configured
+    # build tree. Rebuild old caches rather than changing config underneath
+    # an already published kernel image.
+    if [[ -s "${linux_image}" && -s "${LINUX_SRC_DIR}/Makefile" &&
+          -s "${LINUX_SRC_DIR}/Module.symvers" ]] &&
+        cmp -s "${linux_image}" "${kernel_image}"; then
+        reusable=1
+        for config in .config include/config/auto.conf; do
+            for setting in "${required_settings[@]}"; do
+                if ! grep -qxF "${setting}" "${LINUX_SRC_DIR}/${config}" 2>/dev/null; then
+                    reusable=0
+                    break 2
+                fi
+            done
+        done
+    fi
+    if [[ "${reusable}" == "1" ]]; then
         info "Using existing qemu aarch64 Linux guest image: ${linux_image}"
         return 0
     fi
 
+    info "Building qemu aarch64 Linux guest: cached image/build tree is missing, mismatched, or lacks required IVC/UIO configuration"
     linux
 }
 
