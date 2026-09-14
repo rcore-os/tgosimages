@@ -163,6 +163,10 @@ linux() {
                 popd >/dev/null
                 return "$status"
             }
+            info "Enabling Linux VirtIO MMIO command-line devices"
+            scripts/config --file .config \
+                --enable VIRTIO_MMIO \
+                --enable VIRTIO_MMIO_CMDLINE_DEVICES
             case "${ARCH}" in
                 aarch64)
                     # UIO framework and MSI-X support for the ivshmem guest
@@ -171,13 +175,13 @@ linux() {
                         --module UIO \
                         --enable PCI_MSI \
                         --enable ARM_GIC_V3_ITS
-                    make ARCH="${linux_arch}" CROSS_COMPILE="${cross_compile}" olddefconfig || {
-                        local status=$?
-                        popd >/dev/null
-                        return "$status"
-                    }
                     ;;
             esac
+            make ARCH="${linux_arch}" CROSS_COMPILE="${cross_compile}" olddefconfig || {
+                local status=$?
+                popd >/dev/null
+                return "$status"
+            }
         fi
         
         if [[ (${#commands[@]} -eq 0 || "${commands[0]}" == "all") && ${#image_targets[@]} -gt 0 ]]; then
