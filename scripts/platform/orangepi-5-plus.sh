@@ -301,6 +301,15 @@ orangepi_build_guest_rootfs() (
     mkdir -p "$tree" "$overlay_parent"
     rootfs_builder_prepare_test_overlays aarch64 "$ORANGEPI_ROOTFS_TYPE" none \
         "$ORANGEPI_GUEST_TESTS" "$overlay_parent" outer_overlay guest_overlay || return 1
+    mkdir -p "$guest_overlay/etc/systemd/system/serial-getty@ttyS0.service.d"
+    cat >"$guest_overlay/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf" <<'EOF'
+[Service]
+ExecStartPre=/bin/sh -c 'exec /bin/sleep 10'
+ExecStart=
+ExecStart=-/sbin/agetty --noissue --autologin root %I $TERM
+Type=idle
+EOF
+    _rootfs_builder_normalize_overlay_seconds "$guest_overlay" || return 1
     bash -euo pipefail -c '
         archive=$1
         tree=$2
