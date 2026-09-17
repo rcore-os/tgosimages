@@ -20,6 +20,9 @@ fi
 if [[ \${FAIL_DEBUGFS_WRITES:-} == zero && \${1:-} == -w ]]; then
     exit 0
 fi
+if [[ \${SKIP_DEBUGFS_METADATA:-} == 1 && \${1:-} == -w && \${2:-} == -f && \${3##*/} == metadata.commands ]]; then
+    exit 0
+fi
 exec "$real_debugfs" "\$@"
 EOF
 cat >"$fault_bin/mv" <<EOF
@@ -453,6 +456,14 @@ run_ok 'hardlink relationships are preserved' test "$inode_a" = "$inode_b"
 link_stat=$(debugfs -R 'stat "/link with space"' "$metadata_image" 2>/dev/null)
 run_ok 'symlink target with spaces is preserved' test "$link_stat" != "${link_stat/Fast link dest: \"target with space\"/}"
 
+test_skipped_metadata_batch() {
+    local image="$work/skipped-metadata.img"
+    make_ext4 "$image" || return 1
+    PATH="$fault_bin:$PATH" SKIP_DEBUGFS_METADATA=1 \
+        _rootfs_inject_tree_via_debugfs "$image" "$metadata_source"
+}
+run_fail 'manifest rejects a skipped metadata batch even when debugfs exits zero' test_skipped_metadata_batch
+
 bad_payload_image="$work/bad-payload.img"
 make_ext4 "$bad_payload_image"
 bad_payload_hash=$(sha256sum "$bad_payload_image" | awk '{print $1}')
@@ -672,4 +683,73 @@ test_mixed_locale_lock_order() {
 }
 run_ok 'mixed-locale inverse publishers use one bounded lock order' test_mixed_locale_lock_order
 
+# Keep batching/manifest regressions here instead of separate optimization suites.
+test_source_copy_mutations() (
+    local change mutation_source before
+    cp() {
+        command cp "$@" || return
+        [[ ${@: -2:1} == "$mutation_source/." ]] || return 0
+        case $change in
+            add) printf added > "$mutation_source/new" ;;
+            delete) rm "$mutation_source/other" ;;
+            content) printf changed! > "$mutation_source/file"; touch -m -d @1700000000 "$mutation_source/file" ;;
+        esac
+    }
+    for change in add delete content; do
+        mutation_source=$(mktemp -d "$work/mutation.XXXXXX")
+        printf original > "$mutation_source/file"
+        printf other > "$mutation_source/other"
+        normalize_tree_seconds "$mutation_source"
+        before=$(sha256sum "$bad_payload_image")
+        if _rootfs_inject_tree_via_debugfs "$bad_payload_image" "$mutation_source"; then return 1; fi
+        [[ $(sha256sum "$bad_payload_image") == "$before" ]] || return 1
+    done
+)
+run_ok 'source additions, deletions and content changes during copy fail before image writes' test_source_copy_mutations
+
+test_invalid_query_batches() (
+    local reply
+    local -a targets=(/ /missing)
+    local -A results=()
+    debugfs() { printf '%s\n' "$reply"; }
+    for reply in '' $'debugfs: stat "/"\nInode: 2 Type: directory' \
+        $'debugfs: stat "/missing"\n/missing: File not found by ext2_lookup' \
+        $'debugfs: stat "/"\nInode: 2 Type: directory\ndebugfs: stat "/"'; do
+        if _rootfs_debugfs_stat_many "$bad_payload_image" "$work" targets results optional; then return 1; fi
+    done
+)
+run_ok 'empty, truncated, reordered and duplicate query batches are rejected' test_invalid_query_batches
+
+test_bad_exports_rollback() (
+    local fault image="$work/export-atomic.img" before file
+    local source="$work/export-source" empty="$work/export-empty"
+    mkdir "$source" "$empty"
+    printf original > "$source/file"
+    debugfs() {
+        if [[ ${1:-} == -f && ${2##*/} == export.commands ]]; then
+            [[ $fault != skip ]] || return 0
+            "$real_debugfs" "$@" || return
+            for file in "$(dirname -- "$2")"/file.*; do
+                [[ -f $file ]] || continue
+                printf changed! > "$file"
+            done
+            return 0
+        fi
+        "$real_debugfs" "$@"
+    }
+    for fault in skip corrupt; do
+        normalize_tree_seconds "$source"
+        make_ext4 "$image"
+        before=$(sha256sum "$image")
+        if rootfs_inject_outer_payload_atomic "$image" "$source" "$empty" rootfs-x86_64-busybox.img 0; then return 1; fi
+        [[ $(sha256sum "$image") == "$before" && -z $(rootfs_temp_residue) ]] || return 1
+    done
+)
+run_ok 'missing or same-size corrupted exports cannot publish an image' test_bad_exports_rollback
+
+
+[[ -z $(find "$work" -type f -name '*.lock' -print -quit) ]] || {
+    echo 'FAIL: completed operations leave lock files behind' >&2
+    exit 1
+}
 printf '1..%s\n' "$tests"
