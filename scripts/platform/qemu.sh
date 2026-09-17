@@ -71,7 +71,7 @@ usage() {
     printf '  * Build outputs from all selected OS targets are staged together into /guest/<os>/ inside one rootfs.\n'
     printf '  * ext4 outputs contain a nested rootfs image; platform payload is added only to the outer image.\n'
     printf '  * BusyBox initramfs receives platform payload only; nested images and guest tests are excluded.\n'
-    printf '  * qemu-aarch64 Alpine rootfs also receives the Axvisor IVC Linux kernel module when available.\n'
+    printf '  * qemu-aarch64 Alpine rootfs receives one axvisor.ko (IVC + IVSHMEM); UIO is built into Linux.\n'
     printf '  * Generated rootfs artifacts are stored directly under IMAGES/rootfs.\n'
     printf '\n'
     printf 'Examples:\n'
@@ -169,10 +169,10 @@ linux() {
                 --enable VIRTIO_MMIO_CMDLINE_DEVICES
             case "${ARCH}" in
                 aarch64)
-                    # UIO framework and MSI-X support for the ivshmem guest
-                    # payloads; the default arm64 config leaves UIO unset.
+                    # Enable UIO and PCI/MSI-X support for axvisor.ko.
                     scripts/config --file .config \
-                        --module UIO \
+                        --enable UIO \
+                        --enable PCI \
                         --enable PCI_MSI \
                         --enable ARM_GIC_V3_ITS
                     ;;
@@ -315,16 +315,16 @@ qemu_ivc_ensure_linux_guest() {
     case "${ARCH}" in
         aarch64)
             kernel_image="${LINUX_SRC_DIR}/arch/arm64/boot/Image"
-            required_settings=(CONFIG_ARM64=y CONFIG_MODULES=y CONFIG_UIO=m
-                CONFIG_PCI_MSI=y CONFIG_ARM_GIC_V3_ITS=y)
+            required_settings=(CONFIG_ARM64=y CONFIG_MODULES=y CONFIG_UIO=y
+                CONFIG_PCI=y CONFIG_PCI_MSI=y CONFIG_ARM_GIC_V3_ITS=y)
             ;;
         *)
             die "Axvisor IVC Linux guest is currently only supported for qemu aarch64"
             ;;
     esac
-    # An image alone is insufficient: IVC/UIO modules need its configured
-    # build tree. Rebuild old caches rather than changing config underneath
-    # an already published kernel image.
+    # An image alone is insufficient: axvisor.ko needs a matching configured
+    # build tree. Rebuild incompatible caches rather than changing config
+    # underneath an already published kernel image.
     if [[ -s "${linux_image}" && -s "${LINUX_SRC_DIR}/Makefile" &&
           -s "${LINUX_SRC_DIR}/Module.symvers" ]] &&
         cmp -s "${linux_image}" "${kernel_image}"; then
@@ -348,45 +348,43 @@ qemu_ivc_ensure_linux_guest() {
 }
 
 qemu_ivc_build_linux_tools() {
-    local ivc_dir="${AXVISOR_TOOLS_SRC_DIR}/ivc"
     local overlay_dir="$1"
-    local module="${ivc_dir}/kernel_driver/axvisor.ko"
-    local subscriber="${ivc_dir}/subscribe-aarch64"
-    local built_subscriber="${ivc_dir}/build/demo/subscribe"
+    local module="${AXVISOR_TOOLS_SRC_DIR}/axvisor.ko"
+    local subscriber="${AXVISOR_TOOLS_SRC_DIR}/build/demo/subscribe"
+    local cross_compile="${AARCH64_CROSS_COMPILE:-aarch64-linux-gnu-}"
 
     if [[ "${AXVISOR_TOOLS_SKIP_CHECKOUT}" == "1" ]]; then
         [[ -d "${AXVISOR_TOOLS_SRC_DIR}" ]] || die "AXVISOR_TOOLS_SRC_DIR does not exist: ${AXVISOR_TOOLS_SRC_DIR}"
         info "Using existing axvisor-tools source tree without checkout: ${AXVISOR_TOOLS_SRC_DIR}"
     else
         clone_repository "${AXVISOR_TOOLS_REPO_URL}" "${AXVISOR_TOOLS_SRC_DIR}"
-        checkout_ref "${AXVISOR_TOOLS_SRC_DIR}" "${AXVISOR_TOOLS_REF}"
+        # Update the requested ref before checkout.
+        git -C "${AXVISOR_TOOLS_SRC_DIR}" fetch origin "${AXVISOR_TOOLS_REF}" || return 1
+        checkout_ref "${AXVISOR_TOOLS_SRC_DIR}" FETCH_HEAD || return 1
     fi
+    [[ -f "${AXVISOR_TOOLS_SRC_DIR}/Kbuild" ]] || die "axvisor-tools must provide a top-level Kbuild for the unified axvisor.ko"
 
-    if [[ ! -f "${subscriber}" ]]; then
-        info "Building Axvisor IVC Linux subscriber demo"
-        make -C "${ivc_dir}" \
-            ARCH=arm64 \
-            CROSS="${AARCH64_MUSL_CROSS:-aarch64-linux-musl-}" \
-            demo
-        [[ -f "${built_subscriber}" ]] || die "Linux IVC subscriber demo was not produced: ${built_subscriber}"
-        cp -f "${built_subscriber}" "${subscriber}"
-        chmod +x "${subscriber}"
-    else
-        info "Using existing Axvisor IVC Linux subscriber demo: ${subscriber}"
-    fi
-
-    info "Building Axvisor IVC Linux kernel module"
-    make -C "${ivc_dir}/kernel_driver" \
+    info "Building unified Axvisor IVC/IVSHMEM Linux kernel module"
+    # Use Kbuild clean, not the tools' top-level clean (which also removes
+    # userspace demos). UIO symbols come from the guest kernel's Module.symvers.
+    make -C "${LINUX_SRC_DIR}" \
         ARCH=arm64 \
-        CROSS_COMPILE="${AARCH64_CROSS_COMPILE:-aarch64-linux-gnu-}" \
+        CROSS_COMPILE="${cross_compile}" \
+        M="${AXVISOR_TOOLS_SRC_DIR}" \
+        clean || return 1
+    make -C "${AXVISOR_TOOLS_SRC_DIR}" \
+        ARCH=arm64 \
+        CROSS_COMPILE="${cross_compile}" \
         KDIR="${LINUX_SRC_DIR}" \
-        clean
-    make -C "${ivc_dir}/kernel_driver" \
+        kernel_module || return 1
+    [[ -s "${module}" ]] || die "Unified axvisor.ko was not produced: ${module}"
+
+    info "Building Axvisor IVC Linux subscriber demo"
+    make -C "${AXVISOR_TOOLS_SRC_DIR}" \
         ARCH=arm64 \
-        CROSS_COMPILE="${AARCH64_CROSS_COMPILE:-aarch64-linux-gnu-}" \
-        KDIR="${LINUX_SRC_DIR}"
-    [[ -f "${module}" ]] || die "Linux IVC kernel module was not produced: ${module}"
-    qemu_ivc_require_file "${subscriber}" "Linux IVC subscriber demo"
+        CROSS="${AARCH64_MUSL_CROSS:-aarch64-linux-musl-}" \
+        demo || return 1
+    [[ -s "${subscriber}" ]] || die "Linux IVC subscriber demo was not produced: ${subscriber}"
 
     mkdir -p "${overlay_dir}/root"
     cp -f "${module}" "${overlay_dir}/root/axvisor.ko"
@@ -395,45 +393,6 @@ qemu_ivc_build_linux_tools() {
 
     qemu_ivc_require_file "${overlay_dir}/root/axvisor.ko" "rootfs overlay axvisor kernel module"
     qemu_ivc_require_file "${overlay_dir}/root/ivc-subscribe" "rootfs overlay Linux IVC subscriber demo"
-}
-
-# Builds uio.ko from the guest kernel tree and uio_ivshmem.ko from the
-# axvisor-tools checkout, then stages both into the rootfs overlay.
-qemu_ivshmem_uio_build_modules() {
-    local overlay_dir="$1"
-    local source_dir="${AXVISOR_TOOLS_SRC_DIR}/uio_ivshmem"
-    local cross_compile="${AARCH64_CROSS_COMPILE:-aarch64-linux-gnu-}"
-    local uio_ko="${LINUX_SRC_DIR}/drivers/uio/uio.ko"
-    local ivshmem_ko="${source_dir}/uio_ivshmem.ko"
-
-    [[ -f "${source_dir}/uio_ivshmem.c" ]] || die "uio_ivshmem source not found: ${source_dir}"
-
-    make -C "${LINUX_SRC_DIR}" ARCH=arm64 \
-        CROSS_COMPILE="${cross_compile}" M=drivers/uio modules
-    [[ -s "${uio_ko}" ]] || die "uio.ko was not produced: ${uio_ko}"
-
-    # The root Module.symvers holds vmlinux symbols only; the UIO module's
-    # exported symbols are generated beside the module by the M= build above
-    # and feed the external driver's modpost through KBUILD_EXTRA_SYMBOLS.
-    if [[ -s "${LINUX_SRC_DIR}/vmlinux.symvers" && ! -s "${LINUX_SRC_DIR}/Module.symvers" ]]; then
-        cp -f "${LINUX_SRC_DIR}/vmlinux.symvers" "${LINUX_SRC_DIR}/Module.symvers"
-    fi
-
-    make -C "${source_dir}" ARCH=arm64 \
-        CROSS_COMPILE="${cross_compile}" \
-        KDIR="${LINUX_SRC_DIR}" \
-        clean
-    make -C "${source_dir}" ARCH=arm64 \
-        CROSS_COMPILE="${cross_compile}" \
-        KDIR="${LINUX_SRC_DIR}" \
-        KBUILD_EXTRA_SYMBOLS="${LINUX_SRC_DIR}/drivers/uio/Module.symvers"
-    [[ -s "${ivshmem_ko}" ]] || die "uio_ivshmem.ko was not produced: ${ivshmem_ko}"
-
-    mkdir -p "${overlay_dir}/root"
-    cp -f "${uio_ko}" "${overlay_dir}/root/uio.ko"
-    cp -f "${ivshmem_ko}" "${overlay_dir}/root/uio_ivshmem.ko"
-    qemu_ivc_require_file "${overlay_dir}/root/uio.ko" "rootfs overlay uio kernel module"
-    qemu_ivc_require_file "${overlay_dir}/root/uio_ivshmem.ko" "rootfs overlay uio_ivshmem kernel module"
 }
 
 qemu_ivc_validate_payloads() {
@@ -454,8 +413,6 @@ qemu_ivc_validate_staged_payloads() {
     qemu_ivc_require_file "${stage_dir}/guest/arceos/arceos-ivc-subscriber.bin" "staged Axvisor IVC ArceOS subscriber image"
     qemu_ivc_require_file "${overlay_dir}/root/axvisor.ko" "staged Axvisor IVC Linux kernel module overlay"
     qemu_ivc_require_file "${overlay_dir}/root/ivc-subscribe" "staged Axvisor IVC Linux subscriber overlay"
-    qemu_ivc_require_file "${overlay_dir}/root/uio.ko" "staged uio kernel module overlay"
-    qemu_ivc_require_file "${overlay_dir}/root/uio_ivshmem.ko" "staged uio_ivshmem kernel module overlay"
 }
 
 qemu_prepare_ivc_payloads() {
@@ -469,7 +426,6 @@ qemu_prepare_ivc_payloads() {
     qemu_ivc_build_arceos_guest "arceos-ivc-publisher" "arceos-ivc-publisher.bin"
     qemu_ivc_build_arceos_guest "arceos-ivc-subscriber" "arceos-ivc-subscriber.bin"
     qemu_ivc_build_linux_tools "${overlay_dir}"
-    qemu_ivshmem_uio_build_modules "${overlay_dir}"
     qemu_ivc_validate_payloads "${overlay_dir}"
 }
 
