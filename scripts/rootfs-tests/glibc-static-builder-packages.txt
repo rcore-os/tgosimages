@@ -1,0 +1,11 @@
+autoconf=2.71-3
+automake=1:1.16.5-1.3ubuntu1
+build-essential=12.10ubuntu1
+gcc-aarch64-linux-gnu=4:13.2.0-7ubuntu1
+gcc-riscv64-linux-gnu=4:13.2.0-7ubuntu1
+gcc-14-loongarch64-linux-gnu=14.2.0-4ubuntu2~24.04cross1
+libc6-dev-arm64-cross=2.39-0ubuntu8cross1
+libc6-dev-riscv64-cross=2.39-0ubuntu8cross1
+libc6-dev-loong64-cross=2.39-0ubuntu8.2cross1
+libtool=2.4.7-7build1
+pkg-config=1.8.1-2build1
