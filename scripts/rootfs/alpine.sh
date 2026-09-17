@@ -27,6 +27,7 @@ ALPINE_APK_DOCKER_ARCH="${ALPINE_APK_DOCKER_ARCH:-x86_64}"
 ALPINE_APK_DOCKER_IMAGE="${ALPINE_APK_DOCKER_IMAGE:-}"
 ALPINE_ARCHES=("aarch64" "loongarch64" "riscv64" "x86_64")
 ALPINE_DEFAULT_PACKAGES=(
+    openrc
     binutils
     gcc
     musl-dev
@@ -574,8 +575,10 @@ alpine_cleanup_rootfs_dir() {
 
 alpine_download_archive() (
     local lock_fd candidate actual
-    exec {lock_fd}>"${ALPINE_ARCHIVE}.lock"
-    flock -x "$lock_fd"
+    trap 'rm -f -- "${candidate:-}"; build_lock_release_all' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    build_lock_acquire lock_fd "${ALPINE_ARCHIVE}.lock"
     if [[ -f "${ALPINE_ARCHIVE}" ]]; then
         actual=$(sha256sum "$ALPINE_ARCHIVE" | awk '{print $1}')
     fi
@@ -588,19 +591,14 @@ alpine_download_archive() (
         info "Time: ${ALPINE_METADATA_TIME}"
         info "Size: $(numfmt --to=iec "${ALPINE_METADATA_SIZE}") (${ALPINE_METADATA_SIZE} bytes)"
         candidate=$(mktemp "${ALPINE_ARCHIVE}.tmp.XXXXXX")
-        trap 'rm -f -- "${candidate:-}"' EXIT
-        trap 'exit 130' INT
-        trap 'exit 143' TERM
         curl -# -L -o "$candidate" "${ALPINE_URL}/${ALPINE_METADATA_FILE}" || return 1
         echo "${ALPINE_METADATA_SHA256}  ${candidate}" | sha256sum -c - || return 1
         mv -T -- "$candidate" "$ALPINE_ARCHIVE" || return 1
         candidate=
-        trap - EXIT INT TERM
     else
         info "Using cached Alpine minirootfs archive: ${ALPINE_ARCHIVE}"
     fi
-    flock -u "$lock_fd"
-    exec {lock_fd}>&-
+    build_lock_release "$lock_fd"
 )
 
 alpine_validate_legacy_ltp_environment() {
@@ -701,7 +699,11 @@ alpine_clean_outputs() {
         "${output_dir}/rootfs-loongarch64-alpine.img" \
         "${output_dir}/rootfs-riscv64-alpine.img" \
         "${output_dir}/rootfs-x86_64-alpine.img"
-    rm -f -- "${output_dir}"/rootfs-*-alpine.img.base.tmp.*
+    rm -f -- "${output_dir}"/rootfs-*-alpine.img.base.tmp.* \
+        "${output_dir}"/rootfs-*-alpine.img.lock
+    if [[ -d $BUILD_DIR/alpine ]]; then
+        find "$BUILD_DIR/alpine" -type f -name '*.lock' -delete
+    fi
     success "Alpine rootfs outputs cleaned in ${output_dir}"
 }
 

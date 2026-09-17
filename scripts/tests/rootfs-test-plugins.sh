@@ -448,6 +448,22 @@ run_ok 'list reports compatible plugin names' \
 assert_eq $'alpha\nzed' "$(cat "$work/stdout")" 'list output is sorted'
 
 new_plugins
+make_plugin orangepi-compatible orangepi-compatible aarch64 orangepi-jammy guest \
+    'mkdir -p "$output/guest-tests"; : >"$output/guest-tests/orangepi-compatible"'
+run_ok 'Orange Pi Jammy is accepted as a plugin capability' \
+    env ROOTFS_TEST_PLUGIN_DIR="$plugins" bash "$build_script" list \
+        --arch aarch64 --rootfs orangepi-jammy --scope guest
+assert_eq orangepi-compatible "$(cat "$work/stdout")" \
+    'Orange Pi Jammy compatible plugin is listed'
+run_ok 'Orange Pi Jammy context is forwarded to plugins' \
+    env ROOTFS_TEST_PLUGIN_DIR="$plugins" FAKE_EXPECT_ARCH=aarch64 \
+        FAKE_EXPECT_ROOTFS=orangepi-jammy FAKE_EXPECT_SCOPE=guest \
+        bash "$build_script" build --arch aarch64 --rootfs orangepi-jammy \
+        --scope guest --tests orangepi-compatible --output "$work/orangepi-compatible"
+assert_exists "$work/orangepi-compatible/guest-tests/orangepi-compatible" \
+    'Orange Pi Jammy plugin output is published'
+
+new_plugins
 make_plugin alpha alpha aarch64 alpine outer ':'
 make_plugin z-last z-last x86_64 alpine outer ':'
 run_ok 'list succeeds when its lexicographically last plugin is incompatible' \
@@ -495,7 +511,9 @@ run_fail 'invalid scope is rejected' bash "$build_script" list \
 for case in 'alpine outer ltp' 'busybox outer none' 'debian outer none' \
             'busybox guest cyclictest,lmbench,iozone' \
             'alpine guest cyclictest,lmbench,iozone' \
-            'debian guest cyclictest,lmbench,iozone'; do
+            'debian guest cyclictest,lmbench,iozone' \
+            'orangepi-jammy outer none' \
+            'orangepi-jammy guest cyclictest,lmbench,iozone'; do
     read -r rootfs scope expected <<<"$case"
     run_ok "defaults resolve $rootfs $scope" bash "$build_script" defaults --rootfs "$rootfs" --scope "$scope"
     assert_eq "$expected" "$(cat "$work/stdout")" "defaults value for $rootfs $scope"
@@ -580,7 +598,7 @@ for plugin in cyclictest lmbench iozone; do
     run_ok "$plugin describes its guest-only capabilities" "$builtin_plugins/$plugin.sh" describe
     assert_eq "name=$plugin
 arches=aarch64,riscv64,x86_64,loongarch64
-rootfs=busybox,alpine,debian
+rootfs=busybox,alpine,debian,orangepi-jammy
 scopes=guest" "$(cat "$work/stdout")" "$plugin metadata"
 done
 run_ok 'lmbench real launcher smoke is explicitly bounded' grep -F 'timeout 15' "$builtin_plugins/lmbench.sh"
@@ -610,7 +628,7 @@ grep -Fq 'rootfs-x86_64-alpine.img' "$work/stderr" || fail 'content check did no
 
 fixtures="$work/offline-fixtures"
 fixture_sources="$work/fixture-sources"
-mkdir -p "$fixtures" "$fixture_sources/rt-tests-2.10" \
+mkdir -p "$fixtures" "$fixture_sources/rt-tests-2.11" \
     "$fixture_sources/lmbench-5a386c1c32a84898151dade7754031813e33994e/src" \
     "$fixture_sources/lmbench-5a386c1c32a84898151dade7754031813e33994e/scripts" \
     "$fixture_sources/iozone3_511/src/current" \
@@ -619,8 +637,8 @@ mkdir -p "$fixtures" "$fixture_sources/rt-tests-2.10" \
 cat >"$fixture_sources/tiny.c" <<'EOF'
 int main(void) { return 0; }
 EOF
-cp "$fixture_sources/tiny.c" "$fixture_sources/rt-tests-2.10/cyclictest.c"
-cat >"$fixture_sources/rt-tests-2.10/Makefile" <<'EOF'
+cp "$fixture_sources/tiny.c" "$fixture_sources/rt-tests-2.11/cyclictest.c"
+cat >"$fixture_sources/rt-tests-2.11/Makefile" <<'EOF'
 cyclictest:
 	$(CC) $(CFLAGS) cyclictest.c $(LDFLAGS) -o cyclictest
 EOF
@@ -696,7 +714,7 @@ install: all
 	touch $(DESTDIR)$(PREFIX)/testcases/bin/fmtmsg02
 EOF
 
-tar -cJf "$fixtures/rt-tests-2.10.tar.xz" -C "$fixture_sources" rt-tests-2.10
+tar -cJf "$fixtures/rt-tests-2.11.tar.xz" -C "$fixture_sources" rt-tests-2.11
 tar -czf "$fixtures/lmbench-5a386c1c32a84898151dade7754031813e33994e.tar.gz" \
     -C "$fixture_sources" lmbench-5a386c1c32a84898151dade7754031813e33994e
 tar -czf "$fixtures/iozone3_511.tgz" -C "$fixture_sources" iozone3_511
@@ -853,7 +871,8 @@ run_fail 'interrupted LTP extraction preserves failure' \
         --output "$work/ltp-interrupted-output"
 [[ -z $(find "$work/ltp-interrupted-build/sources" -mindepth 1 -type d -name '.*' -print -quit) ]] ||
     fail 'interrupted LTP extraction leaked a temporary directory'
-run_ok 'ltp uses the checksum-verified shared Alpine builder' grep -F 'alpine-builder.sh' "$builtin_plugins/ltp.sh"
+run_ok 'ltp uses the checksum-verified shared Alpine builder' \
+    grep -F 'alpine-builder.sh"' "$builtin_plugins/ltp.sh"
 run_ok 'standalone Alpine base no longer installs LTP' \
     bash -c '! grep -Eq "alpine_install_ltp_tests|alpine_ltp_prepare_source|alpine_ensure_ltp_docker_image" "$1"' _ \
         "$repo_root/scripts/rootfs/alpine.sh"
@@ -898,11 +917,11 @@ done
 override_fixture_a="$work/override-fixture-a"
 override_fixture_b="$work/override-fixture-b"
 mkdir "$override_fixture_a" "$override_fixture_b"
-override_a="$override_fixture_a/rt-tests-2.10.tar.xz"
-override_b="$override_fixture_b/rt-tests-2.10.tar.xz"
-tar -cJf "$override_a" -C "$fixture_sources" rt-tests-2.10
-printf variant-b >"$fixture_sources/rt-tests-2.10/variant"
-tar -cJf "$override_b" -C "$fixture_sources" rt-tests-2.10
+override_a="$override_fixture_a/rt-tests-2.11.tar.xz"
+override_b="$override_fixture_b/rt-tests-2.11.tar.xz"
+tar -cJf "$override_a" -C "$fixture_sources" rt-tests-2.11
+printf variant-b >"$fixture_sources/rt-tests-2.11/variant"
+tar -cJf "$override_b" -C "$fixture_sources" rt-tests-2.11
 sum_override_a=$(sha256sum "$override_a" | awk '{print $1}')
 sum_override_b=$(sha256sum "$override_b" | awk '{print $1}')
 printf '%s\n' "$sum_override_a" >"$override_a.sha256"
@@ -915,14 +934,14 @@ run_ok 'first valid same-version source override builds' env ROOTFS_TEST_BUILD_R
 run_ok 'second valid same-version source override coexists' env ROOTFS_TEST_BUILD_ROOT="$override_build" \
     ROOTFS_TEST_OFFLINE_FIXTURE_DIR="$override_fixture_b" \
     "$builtin_plugins/cyclictest.sh" build --arch x86_64 --rootfs alpine --scope guest --output "$work/override-output-b"
-assert_exists "$override_build/sources/cyclictest-2.10-$sum_override_a" 'first checksum-keyed source directory remains'
-assert_exists "$override_build/sources/cyclictest-2.10-$sum_override_b" 'second checksum-keyed source directory exists'
+assert_exists "$override_build/sources/cyclictest-2.11-$sum_override_a" 'first checksum-keyed source directory remains'
+assert_exists "$override_build/sources/cyclictest-2.11-$sum_override_b" 'second checksum-keyed source directory exists'
 
 # Failed or interrupted extraction removes all owned temporary directories.
 malformed_fixtures="$work/malformed-fixtures"
 mkdir "$malformed_fixtures"
-printf 'not a tar archive' >"$malformed_fixtures/rt-tests-2.10.tar.xz"
-sha256sum "$malformed_fixtures/rt-tests-2.10.tar.xz" | awk '{print $1}' >"$malformed_fixtures/rt-tests-2.10.tar.xz.sha256"
+printf 'not a tar archive' >"$malformed_fixtures/rt-tests-2.11.tar.xz"
+sha256sum "$malformed_fixtures/rt-tests-2.11.tar.xz" | awk '{print $1}' >"$malformed_fixtures/rt-tests-2.11.tar.xz.sha256"
 malformed_build="$work/malformed-build"
 mkdir "$work/malformed-output"
 run_fail 'malformed plugin archive fails extraction' env ROOTFS_TEST_OFFLINE_FIXTURE_DIR="$malformed_fixtures" \
@@ -949,8 +968,11 @@ builder_description=$(cat "$work/stdout")
 [[ $builder_description == *$'platform=linux/loong64\n'* ]] || fail 'LoongArch builder platform is wrong'
 [[ $builder_description == *'package_set=build-base-0.5-r3_linux-headers-6.16.12-r0_numactl-dev-2.0.18-r0_python3-3.12.14-r0'* ]] || fail 'builder package set is not version-addressed'
 [[ $builder_description == *'archive_cache=alpine-minirootfs-3.23.5-loongarch64-92185135af8b8694f9732c4cdc0dae7f26f72059fd79e9bef6d5dbafd05898ea.tar.gz'* ]] || fail 'builder archive cache is not checksum-addressed'
-for plugin in cyclictest lmbench iozone; do
-    run_ok "$plugin uses the checksum-verified shared builder" grep -F 'alpine-builder.sh' "$builtin_plugins/$plugin.sh"
+run_ok 'cyclictest uses the pinned unified glibc static builder' \
+    grep -F 'glibc-static-builder.sh"' "$builtin_plugins/cyclictest.sh"
+for plugin in lmbench iozone; do
+    run_ok "$plugin uses the checksum-verified shared builder" \
+        grep -F 'alpine-builder.sh"' "$builtin_plugins/$plugin.sh"
     ! grep -Fq 'alpine:3.23' "$builtin_plugins/$plugin.sh" || fail "$plugin still uses a mutable Alpine image reference"
 done
 
@@ -964,11 +986,17 @@ run_fail 'built-in guest plugin rejects unknown build arguments' \
 
 bad_fixtures="$work/bad-offline-fixtures"
 cp -a "$fixtures" "$bad_fixtures"
-printf corrupt >>"$bad_fixtures/rt-tests-2.10.tar.xz"
+printf corrupt >>"$bad_fixtures/rt-tests-2.11.tar.xz"
 run_fail 'built-in plugin rejects a fixture that fails its sidecar checksum' \
     env ROOTFS_TEST_OFFLINE_FIXTURE_DIR="$bad_fixtures" \
         ROOTFS_TEST_BUILD_ROOT="$plugin_build_root" \
         bash "$build_script" build --arch x86_64 --rootfs alpine --scope guest \
         --tests cyclictest --output "$work/bad-fixture-overlay"
+
+tests=$((tests + 1))
+if find "$work" -type f -name '*.lock' -print -quit | grep -q .; then
+    fail 'rootfs test framework left runtime lock files behind'
+fi
+pass 'rootfs test framework cleans runtime lock files'
 
 echo "1..$tests"

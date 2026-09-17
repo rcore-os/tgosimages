@@ -8,7 +8,7 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export TZ="${TZ:-Etc/UTC}"
 
-WORKDIR="${PWD}/build/orangepi/u-boot-work"
+WORKDIR="${ORANGEPI_UBOOT_WORKDIR:-${PWD}/build/orangepi-u-boot}"
 
 TMPROOT="${WORKDIR}/tmp"
 mkdir -p "${TMPROOT}"

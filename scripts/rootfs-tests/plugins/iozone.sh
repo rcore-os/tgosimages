@@ -40,10 +40,10 @@ select_source() {
 }
 prepare_source() (
     local build_root=$1 archive source_dir lock_fd actual extract_tmp='' candidate=''
-    cleanup_source() { local cleanup_status=$?; trap - EXIT INT TERM; [[ -z $extract_tmp ]] || rm -rf -- "$extract_tmp"; [[ -z $candidate ]] || rm -rf -- "$candidate"; exit "$cleanup_status"; }
+    cleanup_source() { local cleanup_status=$?; trap - EXIT INT TERM; [[ -z $extract_tmp ]] || rm -rf -- "$extract_tmp"; [[ -z $candidate ]] || rm -rf -- "$candidate"; build_lock_release_all || true; exit "$cleanup_status"; }
     trap cleanup_source EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
     archive="$build_root/downloads/$name-$version-$source_sha256.tar"; source_dir="$build_root/sources/$name-$version-$source_sha256"
-    mkdir -p "$build_root/downloads" "$build_root/sources"; exec {lock_fd}>"$source_dir.lock"; flock -x "$lock_fd"
+    mkdir -p "$build_root/downloads" "$build_root/sources"; build_lock_acquire lock_fd "$source_dir.lock"
     if [[ -d $source_dir ]]; then
         [[ -f $source_dir/.rootfs-test-source-sha256 ]] || die "cached source lacks checksum provenance: $source_dir"
         read -r actual <"$source_dir/.rootfs-test-source-sha256"; [[ $actual == "$source_sha256" ]] || die "cached source checksum provenance mismatch: $source_dir"
@@ -57,7 +57,7 @@ prepare_source() (
         mv -T -- "$candidate" "$source_dir"; candidate=''
         rm -rf -- "$extract_tmp"; extract_tmp=''
     fi
-    flock -u "$lock_fd"; exec {lock_fd}>&-; printf '%s\n' "$source_dir"; trap - EXIT INT TERM
+    build_lock_release "$lock_fd"; printf '%s\n' "$source_dir"; trap - EXIT INT TERM
 )
 build_plugin() {
     local arch= rootfs= scope= output= build_root source_dir platform uid gid builder_image
@@ -68,7 +68,7 @@ build_plugin() {
         --output) (($# >= 2)) || die 'missing --output value'; output=$2; shift 2;;
         *) die "unknown argument: $1";; esac; done
     [[ -n $arch && -n $rootfs && -n $scope && -n $output ]] || die 'arch, rootfs, scope, and output are required'
-    platform=$(platform_for_arch "$arch") || die "unsupported arch: $arch"; case $rootfs in busybox|alpine|debian);; *) die "unsupported rootfs: $rootfs";; esac
+    platform=$(platform_for_arch "$arch") || die "unsupported arch: $arch"; case $rootfs in busybox|alpine|debian|orangepi-jammy);; *) die "unsupported rootfs: $rootfs";; esac
     [[ $scope == guest ]] || die "unsupported scope: $scope"; [[ -d $output && -z $(find "$output" -mindepth 1 -print -quit) ]] || die 'output must be an empty directory'
     select_source; build_root=${ROOTFS_TEST_BUILD_ROOT:-"$repo_root/build/rootfs-tests"}; source_dir=$(prepare_source "$build_root")
     mkdir -p "$build_root/work/$name/$version/$arch/$rootfs"; plugin_work_dir=$(mktemp -d "$build_root/work/$name/$version/$arch/$rootfs/run.XXXXXX")
@@ -86,7 +86,7 @@ build_plugin() {
     cleanup_work; plugin_work_dir=''; trap - EXIT INT TERM
 }
 case ${1-} in
-describe) (($# == 1)) || die 'describe takes no arguments'; printf '%s\n' 'name=iozone' 'arches=aarch64,riscv64,x86_64,loongarch64' 'rootfs=busybox,alpine,debian' 'scopes=guest';;
+describe) (($# == 1)) || die 'describe takes no arguments'; printf '%s\n' 'name=iozone' 'arches=aarch64,riscv64,x86_64,loongarch64' 'rootfs=busybox,alpine,debian,orangepi-jammy' 'scopes=guest';;
 build) shift; build_plugin "$@";;
 *) die 'command required: describe or build';;
 esac

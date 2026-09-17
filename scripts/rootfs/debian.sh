@@ -428,7 +428,7 @@ debian_clean_outputs() {
     local output_dir="${DEBIAN_OUT_DIR:-${ROOT_DIR}/IMAGES/rootfs}"
 
     if [[ -n "${DEBIAN_OUTPUT}" ]]; then
-        rm -f "${DEBIAN_OUTPUT}" "${DEBIAN_OUTPUT}".base.tmp.*
+        rm -f "${DEBIAN_OUTPUT}" "${DEBIAN_OUTPUT}".base.tmp.* "${DEBIAN_OUTPUT}.lock"
         success "Debian rootfs output cleaned: ${DEBIAN_OUTPUT}"
         return 0
     fi
@@ -437,7 +437,8 @@ debian_clean_outputs() {
         "${output_dir}/rootfs-aarch64-debian.img" \
         "${output_dir}/rootfs-riscv64-debian.img" \
         "${output_dir}/rootfs-x86_64-debian.img"
-    rm -f -- "${output_dir}"/rootfs-*-debian.img.base.tmp.*
+    rm -f -- "${output_dir}"/rootfs-*-debian.img.base.tmp.* \
+        "${output_dir}"/rootfs-*-debian.img.lock
         # "${output_dir}/rootfs-loongarch64-debian.img"
     success "Debian rootfs outputs cleaned in ${output_dir}"
 }

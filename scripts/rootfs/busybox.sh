@@ -84,7 +84,10 @@ mkfs_clean_outputs() {
         "${output_dir}"/initramfs-*-busybox.cpio.gz.publish.* \
         "${output_dir}"/rootfs-*-busybox.img.base.tmp.* \
         "${output_dir}"/rootfs-*-busybox.img.publish.* \
+        "${output_dir}"/initramfs-*-busybox.cpio.gz.pair.lock \
+        "${output_dir}"/rootfs-*-busybox.img.lock \
         "${output_dir}"/{initramfs-*,rootfs-*}-busybox.*.old.*
+    rm -f -- "${BUSYBOX_SRC_DIR}.lock"
     success "BusyBox rootfs outputs cleaned in ${output_dir}"
 }
 
@@ -159,8 +162,8 @@ mkfs_publish_pair() (
     local init_candidate=$1 init_final=$2 image_candidate=$3 image_final=$4
     local lock_path="${init_final}.pair.lock" init_backup="${init_final}.old.$$" image_backup="${image_final}.old.$$"
     local init_old=0 image_old=0 init_new=0 image_new=0 committed=0 lock_fd status=0 pending_signal=0
-    exec {lock_fd}>"$lock_path" || return 1
-    flock -x "$lock_fd" || return 1
+    trap 'build_lock_release_all' EXIT
+    build_lock_acquire lock_fd "$lock_path" || return 1
     # Signal handlers only record intent throughout the critical section. This
     # prevents delivery between a filesystem operation and its state update.
     trap 'pending_signal=130' INT
@@ -228,8 +231,8 @@ mkfs_publish_pair() (
     init_new=0 image_new=0
     mkfs_pair_checkpoint
     rm -f -- "$init_candidate" "$image_candidate" "$init_backup" "$image_backup"
-    flock -u "$lock_fd" || status=$?
-    exec {lock_fd}>&-
+    build_lock_release "$lock_fd" || status=$?
+    trap - EXIT
     trap - INT TERM
     ((pending_signal == 0)) || return "$pending_signal"
     return "$status"
@@ -260,8 +263,8 @@ mkfs_add_ext4_devices() {
 
 mkfs_prepare_busybox_source() {
     local lock_fd prepared="$composition_dir/busybox-source"
-    exec {lock_fd}>"${BUSYBOX_SRC_DIR}.lock"
-    flock -x "$lock_fd"
+    trap 'build_lock_release_all' RETURN
+    build_lock_acquire lock_fd "${BUSYBOX_SRC_DIR}.lock" || return 1
     info "Cloning busybox source repository $BUSYBOX_REPO_URL -> $BUSYBOX_SRC_DIR"
     clone_repository "$BUSYBOX_REPO_URL" "$BUSYBOX_SRC_DIR" || return 1
     info "Checking out busybox ref ${BUSYBOX_REF}"
@@ -272,8 +275,8 @@ mkfs_prepare_busybox_source() {
     fi
     rm -rf -- "$prepared"
     cp -a --reflink=auto -- "$BUSYBOX_SRC_DIR" "$prepared" || return 1
-    flock -u "$lock_fd"
-    exec {lock_fd}>&-
+    build_lock_release "$lock_fd"
+    trap - RETURN
     BUSYBOX_BUILD_SRC_DIR=$prepared
 }
 

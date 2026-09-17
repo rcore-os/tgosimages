@@ -101,6 +101,7 @@ prepare_source() (
         trap - EXIT INT TERM
         [[ -z $extract_tmp ]] || rm -rf -- "$extract_tmp"
         [[ -z $candidate ]] || rm -rf -- "$candidate"
+        build_lock_release_all || true
         exit "$cleanup_status"
     }
     trap cleanup_source EXIT
@@ -109,8 +110,7 @@ prepare_source() (
     archive="$build_root/downloads/$name-$version-$source_sha256.tar.xz"
     source_dir="$build_root/sources/$name-$version-$source_sha256"
     mkdir -p "$build_root/downloads" "$build_root/sources"
-    exec {lock_fd}>"$build_root/downloads/$name-$version-$source_sha256.lock"
-    flock -x "$lock_fd"
+    build_lock_acquire lock_fd "$build_root/downloads/$name-$version-$source_sha256.lock"
     if [[ -f $archive ]]; then
         actual=$(sha256sum "$archive" | awk '{print $1}')
         [[ $actual == "$source_sha256" ]] || die "cached archive checksum mismatch: $archive"
@@ -118,10 +118,9 @@ prepare_source() (
         rootfs_test_download_checked "$source_url" "$source_sha256" "$archive" ||
             die 'checked source download failed'
     fi
-    flock -u "$lock_fd"; exec {lock_fd}>&-
+    build_lock_release "$lock_fd"
 
-    exec {lock_fd}>"$source_dir.lock"
-    flock -x "$lock_fd"
+    build_lock_acquire lock_fd "$source_dir.lock"
     if [[ -d $source_dir ]]; then
         [[ -f $source_dir/.rootfs-test-source-sha256 ]] ||
             die "cached source lacks checksum provenance: $source_dir"
@@ -140,7 +139,7 @@ prepare_source() (
         rm -rf -- "$extract_tmp"
         extract_tmp=''
     fi
-    flock -u "$lock_fd"; exec {lock_fd}>&-
+    build_lock_release "$lock_fd"
     printf '%s\n' "$source_dir"
     trap - EXIT INT TERM
 )

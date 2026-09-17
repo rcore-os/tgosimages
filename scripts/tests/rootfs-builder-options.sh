@@ -163,6 +163,23 @@ test_preparation_calls() (
 )
 run_ok 'common preparation preflights and builds isolated scope overlays' test_preparation_calls
 
+test_preparation_same_named_outputs() (
+    source "$repo_root/scripts/lib/rootfs-compose.sh"
+    local parent="$work/prep-same-names" outer_overlay guest_overlay
+    mkdir "$parent"
+    ROOTFS_TEST_BUILD="$work/same-name-build"
+    printf '%s\n' '#!/usr/bin/env bash' \
+        'if [[ $1 == list ]]; then printf "%s\\n" marker; exit; fi' \
+        'while (($#)); do if [[ $1 == --output ]]; then mkdir -p "$2"; exit; fi; shift; done' \
+        >"$ROOTFS_TEST_BUILD"
+    chmod +x "$ROOTFS_TEST_BUILD"
+    rootfs_builder_prepare_test_overlays x86_64 busybox none marker "$parent" \
+        outer_overlay guest_overlay
+    [[ -d $outer_overlay && -d $guest_overlay ]]
+)
+run_ok 'overlay preparation returns paths to same-named caller variables' \
+    test_preparation_same_named_outputs
+
 test_preparation_validation_cleanup() (
     source "$repo_root/scripts/lib/rootfs-compose.sh"
     local parent="$work/prep-clean"
@@ -629,5 +646,11 @@ if ((integration)); then
     run_ok 'integration nested retains at least 256M free' \
         test "$(rootfs_ext4_free_bytes "$nested_image")" -ge "$reserve_bytes"
 fi
+
+tests=$((tests + 1))
+if find "$work" -type f -name '*.lock' -print -quit | grep -q .; then
+    fail 'rootfs builders left runtime lock files behind'
+fi
+pass 'rootfs builders clean runtime lock files'
 
 printf '1..%s\n' "$tests"
