@@ -27,6 +27,7 @@ ALPINE_APK_DOCKER_ARCH="${ALPINE_APK_DOCKER_ARCH:-x86_64}"
 ALPINE_APK_DOCKER_IMAGE="${ALPINE_APK_DOCKER_IMAGE:-}"
 ALPINE_ARCHES=("aarch64" "loongarch64" "riscv64" "x86_64")
 ALPINE_DEFAULT_PACKAGES=(
+    openrc
     binutils
     gcc
     musl-dev
