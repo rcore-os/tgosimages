@@ -434,4 +434,10 @@ run_fail 'a final publication failure preserves the old disk image' compose_with
 assert_eq old-published-image "$(cat "$work/mv-failure-output.img")" \
     'failed final publication leaves old bytes intact'
 
+tests=$((tests + 1))
+if find "$work" -type f -name '*.lock' -print -quit | grep -q .; then
+    fail 'disk operations left lock files behind'
+fi
+pass 'disk operations clean lock files after success and failure'
+
 printf '1..%s\n' "$tests"

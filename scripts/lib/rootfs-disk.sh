@@ -338,14 +338,12 @@ rootfs_disk_replace_partition() (
 
     directory=$(dirname -- "$disk")
     base=$(basename -- "$disk")
-    exec {lock_fd}>"${disk}.lock" || return 1
-    flock -x "$lock_fd" || return 1
+    build_lock_acquire lock_fd "${disk}.lock" || return 1
     trap '
         status=$?
         [[ -z ${verify_image:-} ]] || rm -f -- "$verify_image"
         [[ -z ${temporary:-} ]] || rm -f -- "$temporary"
-        flock -u "$lock_fd" 2>/dev/null || true
-        exec {lock_fd}>&-
+        build_lock_release "$lock_fd" 2>/dev/null || true
         exit "$status"
     ' EXIT
     trap 'exit 130' INT TERM
@@ -388,8 +386,7 @@ rootfs_disk_replace_partition() (
     touch -r "$disk" "$temporary" || return 1
     mv -T -- "$temporary" "$disk" || return 1
     temporary=
-    flock -u "$lock_fd"
-    exec {lock_fd}>&-
+    build_lock_release "$lock_fd"
     trap - EXIT INT TERM
 )
 
@@ -421,8 +418,8 @@ rootfs_compose_disk_guest() (
         [[ -z $empty_overlay ]] || rm -rf -- "$empty_overlay"
         [[ -z $outer_disk ]] || rm -f -- "$outer_disk"
         [[ -z $validation_partition ]] || rm -f -- "$validation_partition"
-        if [[ -n ${lock_fd2:-} ]]; then flock -u "$lock_fd2" 2>/dev/null || true; exec {lock_fd2}>&-; fi
-        if [[ -n ${lock_fd1:-} ]]; then flock -u "$lock_fd1" 2>/dev/null || true; exec {lock_fd1}>&-; fi
+        if [[ -n ${lock_fd2:-} ]]; then build_lock_release "$lock_fd2" 2>/dev/null || true; fi
+        if [[ -n ${lock_fd1:-} ]]; then build_lock_release "$lock_fd1" 2>/dev/null || true; fi
         exit "$status"
     }
     trap cleanup_disk_compose EXIT
@@ -458,14 +455,12 @@ rootfs_compose_disk_guest() (
     output_lock=$(realpath -m -- "${output}.lock") || return 1
     [[ $base_lock != "$output_lock" ]] || return 1
     if [[ $base_lock < "$output_lock" ]]; then
-        exec {lock_fd1}>"$base_lock" || return 1
-        exec {lock_fd2}>"$output_lock" || return 1
+        build_lock_acquire lock_fd1 "$base_lock" || return 1
+        build_lock_acquire lock_fd2 "$output_lock" || return 1
     else
-        exec {lock_fd1}>"$output_lock" || return 1
-        exec {lock_fd2}>"$base_lock" || return 1
+        build_lock_acquire lock_fd1 "$output_lock" || return 1
+        build_lock_acquire lock_fd2 "$base_lock" || return 1
     fi
-    flock -x "$lock_fd1" || return 1
-    flock -x "$lock_fd2" || return 1
 
     stage=snapshot-inputs
     base_snapshot=$(mktemp "${output_dir}/.${output_base}.base.XXXXXX") || return 1
@@ -566,9 +561,7 @@ rootfs_compose_disk_guest() (
     nested_stage=
     empty_overlay=
     validation_partition=
-    flock -u "$lock_fd2"
-    flock -u "$lock_fd1"
-    exec {lock_fd2}>&-
-    exec {lock_fd1}>&-
+    build_lock_release "$lock_fd2"
+    build_lock_release "$lock_fd1"
     trap - EXIT INT TERM
 )

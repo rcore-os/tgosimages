@@ -142,6 +142,15 @@ rootfs_compose_disk_guest() {
 run_ok 'finalization stages every all payload and excludes unrelated content' \
     finalize_linux_image
 
+legacy_output="$PLATFORM_ROOTFS_DIR/orangepi-5-plus.img"
+legacy_temp_lock="$PLATFORM_ROOTFS_DIR/.orangepi-5-plus.img.disk.legacy.lock"
+: >"${legacy_output}.lock"
+: >"${ORANGEPI_BASE_IMAGE}.lock"
+: >"$legacy_temp_lock"
+run_ok 'final image clean removes legacy adjacent lock files' orangepi_clean_final_image
+[[ ! -e ${legacy_output}.lock && ! -e ${ORANGEPI_BASE_IMAGE}.lock &&
+   ! -e $legacy_temp_lock ]] || fail 'final image clean retained legacy lock files'
+
 : >"$call_log"
 linux() { printf 'linux\n' >>"$call_log"; }
 rootfs() { printf 'rootfs\n' >>"$call_log"; }

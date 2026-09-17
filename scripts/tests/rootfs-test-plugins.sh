@@ -991,5 +991,10 @@ run_fail 'built-in plugin rejects a fixture that fails its sidecar checksum' \
         bash "$build_script" build --arch x86_64 --rootfs alpine --scope guest \
         --tests cyclictest --output "$work/bad-fixture-overlay"
 
+tests=$((tests + 1))
+if find "$work" -type f -name '*.lock' -print -quit | grep -q .; then
+    fail 'rootfs test framework left runtime lock files behind'
+fi
+pass 'rootfs test framework cleans runtime lock files'
 
 echo "1..$tests"

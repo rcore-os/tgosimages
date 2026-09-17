@@ -21,6 +21,7 @@ cleanup_framework_temps() {
         rm -f -- "$producer_temp"
         producer_temp=''
     fi
+    build_lock_release_all || true
 }
 trap cleanup_framework_temps EXIT
 trap 'exit 130' INT
@@ -295,9 +296,7 @@ command_build() {
     for dir in "${stage_dirs[@]}"; do
         cp -a -- "$dir/." "$publish/"
     done
-    # Keep the lock inode: unlinking it could split concurrent waiters across different locks.
-    exec {publish_lock_fd}>"${output}.lock"
-    flock -x "$publish_lock_fd"
+    build_lock_acquire publish_lock_fd "${output}.lock"
     # Keep trap-visible ownership state synchronized with the two renames.
     trap '' INT TERM
     if [[ -e $output || -L $output ]]; then
@@ -329,8 +328,7 @@ command_build() {
         rm -rf -- "$backup"
         backup=
     fi
-    flock -u "$publish_lock_fd"
-    exec {publish_lock_fd}>&-
+    build_lock_release "$publish_lock_fd"
     rm -rf -- "$temporary_root"
     temporary_root=
     trap cleanup_framework_temps EXIT

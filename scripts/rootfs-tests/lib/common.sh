@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+_rootfs_test_common_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source=../../lib/build-lock.sh
+source "${_rootfs_test_common_dir}/../../lib/build-lock.sh"
+unset _rootfs_test_common_dir
+
 rootfs_test_csv_contains() {
     local value=$1 csv=$2 item
     local -a items=()

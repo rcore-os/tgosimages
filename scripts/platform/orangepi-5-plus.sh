@@ -502,6 +502,7 @@ orangepi_build_base_image() (
 
 orangepi_clean_final_image() (
     local output="${PLATFORM_ROOTFS_DIR}/orangepi-5-plus.img" output_lock base_lock lock_fd1 lock_fd2
+    local output_dir output_base legacy_lock
     info "Cleaning Orange Pi final image"
     mkdir -p "$(dirname -- "$output")" "$(dirname -- "$ORANGEPI_BASE_IMAGE")"
     output_lock=$(realpath -m -- "${output}.lock") || return 1
@@ -511,23 +512,25 @@ orangepi_clean_final_image() (
         return 1
     }
     trap '
-        if [[ -n ${lock_fd2:-} ]]; then flock -u "$lock_fd2" 2>/dev/null || true; exec {lock_fd2}>&-; fi
-        if [[ -n ${lock_fd1:-} ]]; then flock -u "$lock_fd1" 2>/dev/null || true; exec {lock_fd1}>&-; fi
+        if [[ -n ${lock_fd2:-} ]]; then build_lock_release "$lock_fd2" 2>/dev/null || true; fi
+        if [[ -n ${lock_fd1:-} ]]; then build_lock_release "$lock_fd1" 2>/dev/null || true; fi
     ' EXIT
     if [[ $output_lock < $base_lock ]]; then
-        exec {lock_fd1}>"$output_lock" || return 1
-        exec {lock_fd2}>"$base_lock" || return 1
+        build_lock_acquire lock_fd1 "$output_lock" || return 1
+        build_lock_acquire lock_fd2 "$base_lock" || return 1
     else
-        exec {lock_fd1}>"$base_lock" || return 1
-        exec {lock_fd2}>"$output_lock" || return 1
+        build_lock_acquire lock_fd1 "$base_lock" || return 1
+        build_lock_acquire lock_fd2 "$output_lock" || return 1
     fi
-    flock -x "$lock_fd1" || return 1
-    flock -x "$lock_fd2" || return 1
-    rm -f -- "$output" "$ORANGEPI_BASE_IMAGE"
-    flock -u "$lock_fd2"
-    flock -u "$lock_fd1"
-    exec {lock_fd2}>&-
-    exec {lock_fd1}>&-
+    rm -f -- "$output" "$ORANGEPI_BASE_IMAGE" "${output}.lock" "${ORANGEPI_BASE_IMAGE}.lock"
+    output_dir=$(dirname -- "$output")
+    output_base=$(basename -- "$output")
+    while IFS= read -r -d '' legacy_lock; do
+        rm -f -- "$legacy_lock" || return 1
+    done < <(find "$output_dir" -maxdepth 1 -type f \
+        -name ".${output_base}.disk.*.lock" -print0)
+    build_lock_release "$lock_fd2"
+    build_lock_release "$lock_fd1"
     lock_fd2=
     lock_fd1=
     trap - EXIT

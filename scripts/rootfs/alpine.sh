@@ -698,7 +698,11 @@ alpine_clean_outputs() {
         "${output_dir}/rootfs-loongarch64-alpine.img" \
         "${output_dir}/rootfs-riscv64-alpine.img" \
         "${output_dir}/rootfs-x86_64-alpine.img"
-    rm -f -- "${output_dir}"/rootfs-*-alpine.img.base.tmp.*
+    rm -f -- "${output_dir}"/rootfs-*-alpine.img.base.tmp.* \
+        "${output_dir}"/rootfs-*-alpine.img.lock
+    if [[ -d $BUILD_DIR/alpine ]]; then
+        find "$BUILD_DIR/alpine" -type f -name '*.lock' -delete
+    fi
     success "Alpine rootfs outputs cleaned in ${output_dir}"
 }
 

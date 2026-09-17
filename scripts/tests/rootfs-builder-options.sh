@@ -647,4 +647,10 @@ if ((integration)); then
         test "$(rootfs_ext4_free_bytes "$nested_image")" -ge "$reserve_bytes"
 fi
 
+tests=$((tests + 1))
+if find "$work" -type f -name '*.lock' -print -quit | grep -q .; then
+    fail 'rootfs builders left runtime lock files behind'
+fi
+pass 'rootfs builders clean runtime lock files'
+
 printf '1..%s\n' "$tests"
