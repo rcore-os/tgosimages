@@ -31,7 +31,7 @@ validate_arch() {
 }
 
 validate_rootfs() {
-    case $1 in busybox|alpine|debian) ;; *) die "unsupported rootfs: $1" ;; esac
+    case $1 in busybox|alpine|debian|orangepi-jammy) ;; *) die "unsupported rootfs: $1" ;; esac
 }
 
 validate_scope() {

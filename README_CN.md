@@ -172,6 +172,11 @@ sudo apt install \
 # Orange Pi 5 Plus StarryOS 客户机内核
 ./build.sh platform orangepi-5-plus starry
 
+# Orange Pi 分阶段构建及完整可烧写镜像
+./build.sh platform orangepi-5-plus linux
+./build.sh platform orangepi-5-plus rootfs
+./build.sh platform orangepi-5-plus all
+
 # rootfs 构建
 ./build.sh rootfs busybox aarch64 --out_dir IMAGES/rootfs
 ./build.sh rootfs alpine riscv64 --out_dir IMAGES/rootfs/alpine-riscv64.img
@@ -266,7 +271,13 @@ QEMU 流程会透传相同选项：
 特殊节点与额外的元数据路径会被拒绝。下载缓存与解压源码按已校验的 checksum
 区分并记录 checksum 来源，构建容器则由配置中的镜像版本固定。
 
+每次构建都会重新编译本次选中的插件。已校验的源码下载、解压源码目录和构建
+容器仍可复用，但不缓存已经完成的 overlay 产物。发布压缩继续使用 `xz -T0 -9e`。
+
 ### BusyBox
+
+每次构建都会执行 `make distclean`、重新配置并重新编译 BusyBox。下载后的 Git
+源码目录仍会复用，并在构建前恢复到固定 ref。
 
 - 同时生成 initramfs 和 ext4 rootfs 镜像
 - 被 `scripts/platform/qemu.sh` 用于 QEMU 的 Linux / ArceOS 流程
@@ -284,6 +295,10 @@ QEMU 流程会透传相同选项：
 
 ### Debian
 
+每次构建都会通过 `debootstrap` 重新创建 Debian 基础文件系统，不缓存已经完成的
+基础 ext4 镜像。Docker 仍会复用本地构建镜像，但 APT 软件包会在临时构建环境中
+重新下载。
+
 - 基于 Docker + `debootstrap`
 - 生成 ext4 rootfs 镜像
 - 默认 suite 为 `trixie`
@@ -291,7 +306,7 @@ QEMU 流程会透传相同选项：
 
 ### Rootfs 验证
 
-耗时镜像构建前先运行不触发构建的快速测试：
+按修改范围选择对应的快速回归测试，无需每次全部运行：
 
 ```bash
 scripts/tests/rootfs-nested-content-test.sh
@@ -299,6 +314,8 @@ scripts/tests/qemu-rootfs-test-options.sh
 scripts/tests/rootfs-builder-options.sh
 scripts/tests/rootfs-test-plugins.sh
 scripts/tests/rootfs-compose.sh
+scripts/tests/rootfs-disk.sh
+scripts/tests/orangepi-rootfs-flow.sh
 scripts/tests/starry-release-smoke.sh
 ```
 
@@ -310,6 +327,8 @@ scripts/tests/rootfs-nested-content.sh --image-dir IMAGES/rootfs \
   --guest-tests cyclictest,lmbench,iozone \
   --guest-free-size 256M --outer-free-size 256M
 scripts/tests/alpine-ltp-content.sh --image-dir IMAGES/rootfs --arch x86_64
+bash scripts/tests/orangepi-nested-content.sh \
+  --image IMAGES/rootfs/orangepi-5-plus.img
 ```
 
 BusyBox 端到端夹具构建需要显式启用：
@@ -342,6 +361,52 @@ scripts/tests/rootfs-builder-options.sh --integration
 | `IMAGES/<platform>/arceos` | 某硬件平台的 ArceOS 产物 |
 | `IMAGES/orangepi/starry/orangepi-5-plus` | 可放入客户机根文件系统 `/guest/starry/orangepi-5-plus` 的 StarryOS 内核 |
 | `IMAGES/orangepi-5-plus-starry` | 独立 StarryOS 发布包的暂存目录（镜像、manifest 和 SHA256） |
+| `IMAGES/rootfs/rootfs-aarch64-orangepi-jammy.img` | 包含三个 benchmark 的 Orange Pi Jammy 客户机 rootfs |
+| `IMAGES/rootfs/orangepi-5-plus.img` | 带同源嵌套客户机 rootfs 的可烧写 Ubuntu Jammy minimal 镜像 |
+
+### Orange Pi 5 Plus Linux 镜像
+
+Orange Pi 命令分别发布各自的产物。只构建内核和 DTB：
+
+```bash
+./build.sh platform orangepi-5-plus linux
+```
+
+只构建包含三个测例的 Jammy 客户机 rootfs：
+
+```bash
+./build.sh platform orangepi-5-plus rootfs
+```
+
+构建 Orange Pi 的全部载荷并生成最终可烧写镜像：
+
+```bash
+./build.sh platform orangepi-5-plus all
+```
+
+`all` 会先构建 Linux、U-Boot、ArceOS、StarryOS、Zephyr、FreeRTOS、AXIVC
+载荷和 benchmark 客户机 rootfs，再发布 `IMAGES/rootfs/orangepi-5-plus.img`。
+各单项构建命令不会发布该镜像。最终 Ubuntu Jammy minimal 根文件系统会在
+`/guest` 下包含全部平台载荷以及嵌套 rootfs：
+
+```text
+/guest/rootfs-aarch64-orangepi-jammy.img
+└── /guest-tests/
+    ├── cyclictest/
+    ├── lmbench/
+    └── iozone/
+```
+
+客户机 ext4 从固定 Orange Pi Jammy rootfs 归档生成，并在最终镜像组合前注入三个
+静态链接的 AArch64 测例。客户机和外层文件系统默认各保留 256 MiB 可写空间。
+构建需要 `lz4`、`mke2fs`、`sfdisk`、`python3`、`debugfs`、
+`dumpe2fs`、`e2fsck` 和 `resize2fs`，但镜像组合不需要 loop mount。构建只打包
+测例，不会自动执行 benchmark。验证命令：
+
+```bash
+bash scripts/tests/orangepi-nested-content.sh \
+  --image IMAGES/rootfs/orangepi-5-plus.img
+```
 
 ### Orange Pi 5 Plus StarryOS
 

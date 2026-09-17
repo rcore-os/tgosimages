@@ -448,6 +448,22 @@ run_ok 'list reports compatible plugin names' \
 assert_eq $'alpha\nzed' "$(cat "$work/stdout")" 'list output is sorted'
 
 new_plugins
+make_plugin orangepi-compatible orangepi-compatible aarch64 orangepi-jammy guest \
+    'mkdir -p "$output/guest-tests"; : >"$output/guest-tests/orangepi-compatible"'
+run_ok 'Orange Pi Jammy is accepted as a plugin capability' \
+    env ROOTFS_TEST_PLUGIN_DIR="$plugins" bash "$build_script" list \
+        --arch aarch64 --rootfs orangepi-jammy --scope guest
+assert_eq orangepi-compatible "$(cat "$work/stdout")" \
+    'Orange Pi Jammy compatible plugin is listed'
+run_ok 'Orange Pi Jammy context is forwarded to plugins' \
+    env ROOTFS_TEST_PLUGIN_DIR="$plugins" FAKE_EXPECT_ARCH=aarch64 \
+        FAKE_EXPECT_ROOTFS=orangepi-jammy FAKE_EXPECT_SCOPE=guest \
+        bash "$build_script" build --arch aarch64 --rootfs orangepi-jammy \
+        --scope guest --tests orangepi-compatible --output "$work/orangepi-compatible"
+assert_exists "$work/orangepi-compatible/guest-tests/orangepi-compatible" \
+    'Orange Pi Jammy plugin output is published'
+
+new_plugins
 make_plugin alpha alpha aarch64 alpine outer ':'
 make_plugin z-last z-last x86_64 alpine outer ':'
 run_ok 'list succeeds when its lexicographically last plugin is incompatible' \
@@ -495,7 +511,9 @@ run_fail 'invalid scope is rejected' bash "$build_script" list \
 for case in 'alpine outer ltp' 'busybox outer none' 'debian outer none' \
             'busybox guest cyclictest,lmbench,iozone' \
             'alpine guest cyclictest,lmbench,iozone' \
-            'debian guest cyclictest,lmbench,iozone'; do
+            'debian guest cyclictest,lmbench,iozone' \
+            'orangepi-jammy outer none' \
+            'orangepi-jammy guest cyclictest,lmbench,iozone'; do
     read -r rootfs scope expected <<<"$case"
     run_ok "defaults resolve $rootfs $scope" bash "$build_script" defaults --rootfs "$rootfs" --scope "$scope"
     assert_eq "$expected" "$(cat "$work/stdout")" "defaults value for $rootfs $scope"
@@ -580,7 +598,7 @@ for plugin in cyclictest lmbench iozone; do
     run_ok "$plugin describes its guest-only capabilities" "$builtin_plugins/$plugin.sh" describe
     assert_eq "name=$plugin
 arches=aarch64,riscv64,x86_64,loongarch64
-rootfs=busybox,alpine,debian
+rootfs=busybox,alpine,debian,orangepi-jammy
 scopes=guest" "$(cat "$work/stdout")" "$plugin metadata"
 done
 run_ok 'lmbench real launcher smoke is explicitly bounded' grep -F 'timeout 15' "$builtin_plugins/lmbench.sh"
@@ -853,7 +871,8 @@ run_fail 'interrupted LTP extraction preserves failure' \
         --output "$work/ltp-interrupted-output"
 [[ -z $(find "$work/ltp-interrupted-build/sources" -mindepth 1 -type d -name '.*' -print -quit) ]] ||
     fail 'interrupted LTP extraction leaked a temporary directory'
-run_ok 'ltp uses the checksum-verified shared Alpine builder' grep -F 'alpine-builder.sh' "$builtin_plugins/ltp.sh"
+run_ok 'ltp uses the checksum-verified shared Alpine builder' \
+    grep -F 'alpine-builder.sh"' "$builtin_plugins/ltp.sh"
 run_ok 'standalone Alpine base no longer installs LTP' \
     bash -c '! grep -Eq "alpine_install_ltp_tests|alpine_ltp_prepare_source|alpine_ensure_ltp_docker_image" "$1"' _ \
         "$repo_root/scripts/rootfs/alpine.sh"
@@ -950,7 +969,8 @@ builder_description=$(cat "$work/stdout")
 [[ $builder_description == *'package_set=build-base-0.5-r3_linux-headers-6.16.12-r0_numactl-dev-2.0.18-r0_python3-3.12.14-r0'* ]] || fail 'builder package set is not version-addressed'
 [[ $builder_description == *'archive_cache=alpine-minirootfs-3.23.5-loongarch64-92185135af8b8694f9732c4cdc0dae7f26f72059fd79e9bef6d5dbafd05898ea.tar.gz'* ]] || fail 'builder archive cache is not checksum-addressed'
 for plugin in cyclictest lmbench iozone; do
-    run_ok "$plugin uses the checksum-verified shared builder" grep -F 'alpine-builder.sh' "$builtin_plugins/$plugin.sh"
+    run_ok "$plugin uses the checksum-verified shared builder" \
+        grep -F 'alpine-builder.sh"' "$builtin_plugins/$plugin.sh"
     ! grep -Fq 'alpine:3.23' "$builtin_plugins/$plugin.sh" || fail "$plugin still uses a mutable Alpine image reference"
 done
 
@@ -970,5 +990,6 @@ run_fail 'built-in plugin rejects a fixture that fails its sidecar checksum' \
         ROOTFS_TEST_BUILD_ROOT="$plugin_build_root" \
         bash "$build_script" build --arch x86_64 --rootfs alpine --scope guest \
         --tests cyclictest --output "$work/bad-fixture-overlay"
+
 
 echo "1..$tests"

@@ -168,6 +168,11 @@ Some platform builds require:
 # Orange Pi 5 Plus StarryOS guest kernel
 ./build.sh platform orangepi-5-plus starry
 
+# Orange Pi stages and complete flashable image
+./build.sh platform orangepi-5-plus linux
+./build.sh platform orangepi-5-plus rootfs
+./build.sh platform orangepi-5-plus all
+
 # Rootfs builds
 ./build.sh rootfs busybox aarch64 --out_dir IMAGES/rootfs
 ./build.sh rootfs alpine riscv64 --out_dir IMAGES/rootfs/alpine-riscv64.img
@@ -272,7 +277,14 @@ special nodes and out-of-band metadata paths are rejected. Download caches and
 extracted sources are keyed by the verified checksum and record checksum
 provenance, while builder containers are pinned by their configured image.
 
+Every selected plugin is rebuilt for the current invocation. Checked source downloads,
+extracted source directories, and builder containers may still be reused; completed
+overlay artifacts are not cached. Release compression remains `xz -T0 -9e`.
+
 ### BusyBox
+
+BusyBox is cleaned with `make distclean`, configured and rebuilt for every invocation.
+The downloaded Git source checkout is still reused and reset to the pinned ref.
 
 - Generates both initramfs and ext4 rootfs images
 - Used by `scripts/platform/qemu.sh` for QEMU Linux and ArceOS flows
@@ -294,6 +306,10 @@ provenance, while builder containers are pinned by their configured image.
 
 ### Debian
 
+The Debian base filesystem is recreated with `debootstrap` for every invocation;
+completed base ext4 images are not cached. Docker may still reuse its local builder
+image, but APT packages are fetched again inside the temporary build environment.
+
 - Uses Docker plus `debootstrap`
 - Generates an ext4 rootfs image
 - Defaults to Debian `trixie`
@@ -301,7 +317,8 @@ provenance, while builder containers are pinned by their configured image.
 
 ### Rootfs validation
 
-Run the fast, build-free suites before a costly image build:
+Select the fast regression suites relevant to the change; running every suite
+is not required for each build:
 
 ```bash
 scripts/tests/rootfs-nested-content-test.sh
@@ -309,6 +326,8 @@ scripts/tests/qemu-rootfs-test-options.sh
 scripts/tests/rootfs-builder-options.sh
 scripts/tests/rootfs-test-plugins.sh
 scripts/tests/rootfs-compose.sh
+scripts/tests/rootfs-disk.sh
+scripts/tests/orangepi-rootfs-flow.sh
 scripts/tests/starry-release-smoke.sh
 ```
 
@@ -320,6 +339,8 @@ scripts/tests/rootfs-nested-content.sh --image-dir IMAGES/rootfs \
   --guest-tests cyclictest,lmbench,iozone \
   --guest-free-size 256M --outer-free-size 256M
 scripts/tests/alpine-ltp-content.sh --image-dir IMAGES/rootfs --arch x86_64
+bash scripts/tests/orangepi-nested-content.sh \
+  --image IMAGES/rootfs/orangepi-5-plus.img
 ```
 
 The BusyBox end-to-end fixture build is opt-in:
@@ -353,6 +374,53 @@ Artifacts are collected under `IMAGES/`. Common locations include:
 | `IMAGES/<platform>/arceos` | ArceOS artifacts for a hardware platform |
 | `IMAGES/orangepi/starry/orangepi-5-plus` | StarryOS kernel for `/guest/starry/orangepi-5-plus` |
 | `IMAGES/orangepi-5-plus-starry` | Standalone StarryOS release staging (image, manifest, and SHA256) |
+| `IMAGES/rootfs/rootfs-aarch64-orangepi-jammy.img` | Orange Pi Jammy guest rootfs with the three benchmarks |
+| `IMAGES/rootfs/orangepi-5-plus.img` | Flashable Ubuntu Jammy minimal image with a same-origin nested guest rootfs |
+
+### Orange Pi 5 Plus Linux image
+
+The Orange Pi commands have separate outputs. Build only the kernel and DTB with:
+
+```bash
+./build.sh platform orangepi-5-plus linux
+```
+
+Build only the Jammy guest rootfs containing the three benchmarks with:
+
+```bash
+./build.sh platform orangepi-5-plus rootfs
+```
+
+Build every Orange Pi payload and the final flashable image with:
+
+```bash
+./build.sh platform orangepi-5-plus all
+```
+
+`all` builds Linux, U-Boot, ArceOS, StarryOS, Zephyr, FreeRTOS, the AXIVC payloads,
+and the benchmark guest rootfs before publishing `IMAGES/rootfs/orangepi-5-plus.img`.
+Individual build commands do not publish that image. The final Ubuntu Jammy minimal
+root filesystem contains all platform payloads under `/guest` and the nested rootfs:
+
+```text
+/guest/rootfs-aarch64-orangepi-jammy.img
+└── /guest-tests/
+    ├── cyclictest/
+    ├── lmbench/
+    └── iozone/
+```
+
+The guest ext4 is built from the pinned Orange Pi Jammy rootfs archive and receives
+the three statically linked AArch64 workloads before final image composition. The
+nested and outer filesystems reserve 256 MiB each by default. The build requires
+`lz4`, `mke2fs`, `sfdisk`, `python3`, `debugfs`, `dumpe2fs`, `e2fsck`, and
+`resize2fs`, but does not require loop mounts for image composition. It packages the
+workloads without running them. Validate a completed image with:
+
+```bash
+bash scripts/tests/orangepi-nested-content.sh \
+  --image IMAGES/rootfs/orangepi-5-plus.img
+```
 
 ### Orange Pi 5 Plus StarryOS
 

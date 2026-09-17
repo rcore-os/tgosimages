@@ -117,7 +117,7 @@ build_plugin() {
     done
     [[ -n $arch && -n $rootfs && -n $scope && -n $output ]] || die 'arch, rootfs, scope, and output are required'
     platform=$(platform_for_arch "$arch") || die "unsupported arch: $arch"
-    case $rootfs in busybox|alpine|debian) ;; *) die "unsupported rootfs: $rootfs" ;; esac
+    case $rootfs in busybox|alpine|debian|orangepi-jammy) ;; *) die "unsupported rootfs: $rootfs" ;; esac
     [[ $scope == guest ]] || die "unsupported scope: $scope"
     [[ -d $output && -z $(find "$output" -mindepth 1 -print -quit) ]] || die 'output must be an empty directory'
 
@@ -152,7 +152,7 @@ case ${1-} in
 describe)
     (($# == 1)) || die 'describe takes no arguments'
     printf '%s\n' 'name=cyclictest' 'arches=aarch64,riscv64,x86_64,loongarch64' \
-        'rootfs=busybox,alpine,debian' 'scopes=guest'
+        'rootfs=busybox,alpine,debian,orangepi-jammy' 'scopes=guest'
     ;;
 build) shift; build_plugin "$@" ;;
 *) die 'command required: describe or build' ;;
