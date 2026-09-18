@@ -331,6 +331,11 @@ apply_patches() {
     log "[PATCH] Found ${#patch_files[@]} patch file(s)"
     pushd "${src_dir}" >/dev/null
     mkdir -p .patch_stamps
+    # git am needs a committer identity; set a repo-local fallback when unset
+    if [[ -z "$(git config user.name 2>/dev/null || true)" || -z "$(git config user.email 2>/dev/null || true)" ]]; then
+        git config user.name "tgosimages"
+        git config user.email "tgosimages@localhost"
+    fi
     for p in "${patch_files[@]}"; do
         [[ -f "$p" ]] || continue
         local base stamp type applied cid
@@ -350,7 +355,7 @@ apply_patches() {
             if [[ -n "$cid" ]] && git rev-list --all | grep -q "^$cid"; then
                 log "[SKIP] $base commit $cid already in history"; echo > "$stamp"; applied=1
             else
-                if git am --keep-cr < "$p" >>"${LOG_FILE}" 2>&1; then
+                if git am --keep-cr < "$p" >>"${LOG_FILE:-/dev/null}" 2>&1; then
                     applied=1; echo > "$stamp"
                 else
                     log "[WARN] git am failed; fallback to git apply path"; git am --abort || true
@@ -359,7 +364,7 @@ apply_patches() {
         fi
         if [[ $applied -eq 0 ]]; then
             if git apply --check "$p" >/dev/null 2>&1; then
-                if git apply "$p" >>"${LOG_FILE}" 2>&1; then
+                if git apply "$p" >>"${LOG_FILE:-/dev/null}" 2>&1; then
                     applied=1; echo > "$stamp"; log "  git apply ok"
                 fi
             else
@@ -371,7 +376,7 @@ apply_patches() {
         if [[ $applied -eq 0 ]]; then
             for plevel in 1 0; do
                 if patch -p${plevel} --dry-run < "$p" >/dev/null 2>&1; then
-                    if patch -p${plevel} < "$p" >>"${LOG_FILE}" 2>&1; then
+                    if patch -p${plevel} < "$p" >>"${LOG_FILE:-/dev/null}" 2>&1; then
                         applied=1; echo > "$stamp"; log "  fallback patch -p${plevel} applied"; break
                     fi
                 fi
