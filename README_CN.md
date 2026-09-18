@@ -142,10 +142,19 @@ sudo apt install \
   gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
   bc fakeroot coreutils cpio gzip rsync file \
   debootstrap binfmt-support debian-archive-keyring eatmydata \
-  e2fsprogs docker.io \
+  e2fsprogs util-linux fdisk docker.io \
   python3 python3-venv curl git openssh-client libmpc-dev libgmp-dev \
-  lz4 chrpath gawk texinfo diffstat expect cmake
+  lz4 chrpath gawk texinfo diffstat expect cmake \
+  clang libclang-dev libudev-dev
 ```
+
+其中不太直观的几项：
+
+| 包 | 被何处依赖 |
+| --- | --- |
+| `util-linux`（`flock`）、`fdisk`（`sfdisk`） | `scripts/lib/build-lock.sh` 与 `scripts/lib/rootfs-disk.sh` |
+| `clang`、`libclang-dev` | `bindgen`，经由 `ax-posix-api` 与 `lwprintf-rs` crate |
+| `libudev-dev` | `libudev-sys` crate，经由 tgoskits 的 xtask |
 
 部分平台还需要：
 
