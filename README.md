@@ -138,10 +138,19 @@ sudo apt install \
   gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
   bc fakeroot coreutils cpio gzip rsync file \
   debootstrap binfmt-support debian-archive-keyring eatmydata \
-  e2fsprogs docker.io \
+  e2fsprogs util-linux fdisk docker.io \
   python3 python3-venv curl git openssh-client libmpc-dev libgmp-dev \
-  lz4 chrpath gawk texinfo diffstat expect cmake
+  lz4 chrpath gawk texinfo diffstat expect cmake \
+  clang libclang-dev libudev-dev
 ```
+
+The less obvious entries:
+
+| Package | Required by |
+| --- | --- |
+| `util-linux` (`flock`), `fdisk` (`sfdisk`) | `scripts/lib/build-lock.sh` and `scripts/lib/rootfs-disk.sh` |
+| `clang`, `libclang-dev` | `bindgen`, via the `ax-posix-api` and `lwprintf-rs` crates |
+| `libudev-dev` | the `libudev-sys` crate, via the tgoskits xtask |
 
 Some platform builds require:
 
