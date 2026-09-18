@@ -379,6 +379,7 @@ qemu_ivc_build_linux_tools() {
         kernel_module || return 1
     [[ -s "${module}" ]] || die "Unified axvisor.ko was not produced: ${module}"
 
+    ensure_musl_toolchain aarch64
     info "Building Axvisor IVC Linux subscriber demo"
     make -C "${AXVISOR_TOOLS_SRC_DIR}" \
         ARCH=arm64 \
