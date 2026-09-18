@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}" && pwd -P)
+source "${SCRIPT_DIR}/scripts/lib/log.sh"
 usage() {
     printf '%s\n' "run.sh: QEMU boot helper for aarch64, riscv64, x86_64."
     printf '%s\n' ''
@@ -33,7 +34,7 @@ run_qemu_aarch64() {
     if [[ "$fs_type" == "ramfs" ]]; then
         local INITRAMFS="${images_dir}/initramfs.cpio.gz"
         if [[ ! -f "$KERNEL" || ! -f "$INITRAMFS" ]]; then
-            echo "[ERROR] Missing kernel or initramfs for aarch64." >&2
+            error "Missing kernel or initramfs for aarch64."
             exit 1
         fi
         qemu-system-aarch64 \
@@ -48,7 +49,7 @@ run_qemu_aarch64() {
     elif [[ "$fs_type" == "rootfs" ]]; then
         local ROOTFS="${images_dir}/rootfs.img"
         if [[ ! -f "$KERNEL" || ! -f "$ROOTFS" ]]; then
-            echo "[ERROR] Missing kernel or rootfs for aarch64." >&2
+            error "Missing kernel or rootfs for aarch64."
             exit 1
         fi
         qemu-system-aarch64 \
@@ -73,7 +74,7 @@ run_qemu_riscv64() {
     if [[ "$fs_type" == "ramfs" ]]; then
         local INITRAMFS="${images_dir}/initramfs.cpio.gz"
         if [[ ! -f "$KERNEL" || ! -f "$INITRAMFS" ]]; then
-            echo "[ERROR] Missing kernel or initramfs for riscv64." >&2
+            error "Missing kernel or initramfs for riscv64."
             exit 1
         fi
         qemu-system-riscv64 \
@@ -87,7 +88,7 @@ run_qemu_riscv64() {
     elif [[ "$fs_type" == "rootfs" ]]; then
         local ROOTFS="${images_dir}/rootfs.img"
         if [[ ! -f "$KERNEL" || ! -f "$ROOTFS" ]]; then
-            echo "[ERROR] Missing kernel or rootfs for riscv64." >&2
+            error "Missing kernel or rootfs for riscv64."
             exit 1
         fi
         qemu-system-riscv64 \
@@ -111,7 +112,7 @@ run_qemu_x86_64() {
     if [[ "$fs_type" == "ramfs" ]]; then
         local INITRAMFS="${images_dir}/initramfs.cpio.gz"
         if [[ ! -f "$KERNEL" || ! -f "$INITRAMFS" ]]; then
-            echo "[ERROR] Missing kernel or initramfs for x86_64." >&2
+            error "Missing kernel or initramfs for x86_64."
             exit 1
         fi
         qemu-system-x86_64 \
@@ -125,7 +126,7 @@ run_qemu_x86_64() {
     elif [[ "$fs_type" == "rootfs" ]]; then
         local ROOTFS="${images_dir}/rootfs.img"
         if [[ ! -f "$KERNEL" || ! -f "$ROOTFS" ]]; then
-            echo "[ERROR] Missing kernel or rootfs for x86_64." >&2
+            error "Missing kernel or rootfs for x86_64."
             exit 1
         fi
         qemu-system-x86_64 \

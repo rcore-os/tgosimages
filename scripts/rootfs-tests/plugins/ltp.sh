@@ -14,7 +14,7 @@ repo_root=$(CDPATH= cd -- "$plugin_dir/../../.." && pwd)
 # shellcheck source=../lib/common.sh
 source "$plugin_dir/../lib/common.sh"
 
-die() { echo "$name: $*" >&2; exit 1; }
+die() { error "$name: $*"; exit 1; }
 plugin_work_dir=''
 plugin_stage_dir=''
 declare -a ltp_filter_dirs=()

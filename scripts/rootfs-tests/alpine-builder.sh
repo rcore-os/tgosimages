@@ -16,7 +16,7 @@ packages=(build-base=0.5-r3 linux-headers=6.16.12-r0 numactl-dev=2.0.18-r0 pytho
 # fails the image build instead of silently changing the toolchain.
 manifest_file="$script_dir/alpine-builder-packages.txt"
 
-die() { echo "alpine-builder: $*" >&2; exit 1; }
+die() { error "alpine-builder: $*"; exit 1; }
 
 metadata_for_arch() {
     case $1 in

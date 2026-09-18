@@ -464,10 +464,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                 die "--output can only be used for a single architecture build"
             fi
 
-            for arch in "${DEBIAN_ARCHES[@]}"; do
-                DEBIAN_ARCH="${arch}"
+            debian_arch_target() {
+                DEBIAN_ARCH=$1
                 debian
-            done
+            }
+            run_sequential_targets rootfs "debian all" debian_arch_target "${DEBIAN_ARCHES[@]}" --
             ;;
         clean)
             debian_parse_args "$@"

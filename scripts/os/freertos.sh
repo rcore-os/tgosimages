@@ -422,7 +422,7 @@ fix_cmake_paths() {
 
 # ── CMake build (shared by qemu-aarch64 / phytiumpi / tac-e400-plc) ─────────
 
-build_cmake() {
+freertos_build_cmake() {
     local rtos_name="$1"      # e.g. freertos_aarch64_qemu
     local cmake_file="$2"     # e.g. src/freertos_aarch64_qemu/freertos_aarch64_qemu.cmake
     local bin_name="$3"       # e.g. freertos-aarch64-qemu.bin
@@ -444,10 +444,10 @@ build_cmake() {
     pushd "$build_dir" >/dev/null
 
     info "Configuring CMake with -DRTOS=${rtos_name}"
-    cmake -DRTOS="${rtos_name}" "${FREERTOS_SRC_DIR}"
+    build_cmake -DRTOS="${rtos_name}" "${FREERTOS_SRC_DIR}"
 
     info "Building ${rtos_name}"
-    make -j"$(nproc)"
+    build_make
 
     popd >/dev/null
 
@@ -521,7 +521,7 @@ qemu_aarch64() {
     info "Applying patch: rtos-benchmark-qemu-a53.patch"
     apply_single_patch "${FREERTOS_PATCH_DIR}/rtos-benchmark-qemu-a53.patch" "$FREERTOS_SRC_DIR"
 
-    build_cmake \
+    freertos_build_cmake \
         "freertos_aarch64_qemu" \
         "src/freertos_aarch64_qemu/freertos_aarch64_qemu.cmake" \
         "freertos-aarch64-qemu.bin" \
@@ -549,7 +549,7 @@ phytiumpi() {
     info "Applying patch: rtos-benchmark-phytiumpi.patch"
     apply_single_patch "${FREERTOS_PATCH_DIR}/rtos-benchmark-phytiumpi.patch" "$BUILD_DIR"
 
-    build_cmake \
+    freertos_build_cmake \
         "freertos_aarch64_guest" \
         "src/freertos_aarch64_guest/freertos_aarch64_guest.cmake" \
         "freertos-aarch64-guest.bin" \
@@ -577,7 +577,7 @@ tac_e400_plc() {
     info "Applying patch: rtos-benchmark-phytiumpi.patch"
     apply_single_patch "${FREERTOS_PATCH_DIR}/rtos-benchmark-phytiumpi.patch" "$BUILD_DIR"
 
-    build_cmake \
+    freertos_build_cmake \
         "freertos_aarch64_guest" \
         "src/freertos_aarch64_guest/freertos_aarch64_guest.cmake" \
         "freertos-aarch64-guest.bin" \
@@ -723,17 +723,13 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             orangepi-5-plus "$@"
             ;;
         all)
-            qemu_aarch64 "$@"
-            phytiumpi "$@"
-            tac_e400_plc "$@"
-            orangepi-5-plus "$@"
+            run_sequential_targets os "freertos all" run_script_target \
+                qemu-aarch64 phytiumpi tac-e400-plc orangepi-5-plus -- "$@"
             ;;
         clean)
             rm -rf "${FREERTOS_SRC_DIR}"
-            qemu_aarch64 "clean"
-            phytiumpi "clean"
-            tac_e400_plc "clean"
-            orangepi-5-plus "clean"
+            run_sequential_targets os "freertos clean" run_script_target \
+                qemu-aarch64 phytiumpi tac-e400-plc orangepi-5-plus -- clean
             ;;
         *)
             die "Unknown command: $cmd (supported: qemu-aarch64, phytiumpi, tac-e400-plc, orangepi-5-plus, all, clean)"

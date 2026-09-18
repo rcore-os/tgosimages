@@ -10,7 +10,7 @@ source_top=iozone3_511
 plugin_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$plugin_dir/../../.." && pwd)
 source "$plugin_dir/../lib/common.sh"
-die() { echo "$name: $*" >&2; exit 1; }
+die() { error "$name: $*"; exit 1; }
 plugin_work_dir=''
 cleanup_work() { [[ -z $plugin_work_dir ]] || rm -rf -- "$plugin_work_dir"; }
 platform_for_arch() { case $1 in aarch64) echo linux/arm64/v8;; riscv64) echo linux/riscv64;; x86_64) echo linux/amd64;; loongarch64) echo linux/loong64;; *) return 1;; esac; }

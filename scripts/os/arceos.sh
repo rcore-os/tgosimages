@@ -150,7 +150,7 @@ arceos_build() {
     local target=$(get_platform_config "$ARCEOS_PLATFORM" "target")
     local build_target="${ARCEOS_TARGET:-${target}}"
     local default_config="${ARCEOS_SRC_DIR}/apps/arceos/build-${build_target}.toml"
-    local build_cmd=(cargo arceos build --package "${ARCEOS_PACKAGE}")
+    local build_cmd=(build_cargo arceos build --package "${ARCEOS_PACKAGE}")
     local extra_args=()
 
     if [[ -z "${ARCEOS_CONFIG}" && -f "${default_config}" ]]; then
@@ -246,15 +246,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             ARCEOS_PLATFORM="x86-pc"
             ;;
         all)
-            for platform in aarch64-dyn riscv64-qemu-virt x86-pc; do
-                "$0" "$platform" "$@" || { echo "[ERROR] $platform build failed" >&2; exit 1; }
-            done
+            run_sequential_targets os "arceos all" run_script_target aarch64-dyn riscv64-qemu-virt x86-pc -- "$@"
             exit 0
             ;;
         clean)
-            for platform in aarch64-dyn riscv64-qemu-virt x86-pc; do
-                "$0" "$platform" "clean" || { echo "[ERROR] $platform build failed" >&2; exit 1; }
-            done
+            run_sequential_targets os "arceos clean" run_script_target aarch64-dyn riscv64-qemu-virt x86-pc -- clean
             exit 0
             ;;
         *)

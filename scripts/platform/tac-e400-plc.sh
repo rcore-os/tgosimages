@@ -62,15 +62,15 @@ linux() {
             info "Configuring kernel: cp \"$LINUX_SRC_DIR/.config\" .config"
             cp "$LINUX_SRC_DIR/.config" .config
 
-            info "Starting compilation: make -j$(nproc) $@"
-            make -j"$(nproc)" "$@" 2>&1
+            info "Starting compilation: make -j$(build_jobs) $@"
+            build_make "$@" 2>&1
 
             info "Copying build artifacts -> $linux_images_dir"
             copy_required "$LINUX_SRC_DIR/EDGE_KERNEL/arch/arm64/boot/Image" "$linux_images_dir/tac-e400-plc"
             copy_required "$LINUX_SRC_DIR/EDGE_KERNEL/arch/arm64/boot/dts/phytium/e2000q-hanwei-board.dtb" "$linux_images_dir/tac-e400-plc.dtb"
         else
-            info "Cleaning: make -j$(nproc) clean"
-            make -j"$(nproc)" clean 2>&1
+            info "Cleaning: make -j$(build_jobs) clean"
+            build_make clean 2>&1
             info "Removing ${linux_images_dir}/*"
             rm "${linux_images_dir}"/* || true
         fi
@@ -114,6 +114,8 @@ freertos() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    source "${SCRIPT_DIR}/../lib/platform-log.sh"
+    platform_log_init "$@"
     cmd="${1:-}"
     if [[ "${cmd}" =~ ^(all|clean)$ ]]; then
         LOG_CREATE_DEFAULT_FILE="${LOG_CREATE_DEFAULT_FILE:-0}"

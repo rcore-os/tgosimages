@@ -108,10 +108,7 @@ linux() {
     info "Cloning ${ARCH} Linux source repository $LINUX_REPO_URL"
     clone_repository "$LINUX_REPO_URL" "$LINUX_SRC_DIR"
     info "Checking out ${ARCH} Linux ref ${LINUX_REF}"
-    checkout_ref "$LINUX_SRC_DIR" "$LINUX_REF"
-
-    info "Applying patches..."
-    apply_patches "$LINUX_PATCH_DIR" "$LINUX_SRC_DIR"
+    prepare_patched_source "$LINUX_SRC_DIR" "$LINUX_REF" "$LINUX_PATCH_DIR"
 
     info "Starting to build ${ARCH} Linux OS..."
     local commands=("$@")
@@ -158,7 +155,7 @@ linux() {
     if [[ "$@" != *"clean"* ]]; then
         if [[ ${#commands[@]} -eq 0 ]] || [[ "${commands[0]}" == "all" ]]; then
             info "Configuring Linux: make ARCH=${linux_arch} CROSS_COMPILE=${cross_compile} ${defconfig}"
-            make ARCH="${linux_arch}" CROSS_COMPILE="${cross_compile}" "${defconfig}" || {
+            build_make ARCH="${linux_arch}" CROSS_COMPILE="${cross_compile}" "${defconfig}" || {
                 local status=$?
                 popd >/dev/null
                 return "$status"
@@ -177,7 +174,7 @@ linux() {
                         --enable ARM_GIC_V3_ITS
                     ;;
             esac
-            make ARCH="${linux_arch}" CROSS_COMPILE="${cross_compile}" olddefconfig || {
+            build_make ARCH="${linux_arch}" CROSS_COMPILE="${cross_compile}" olddefconfig || {
                 local status=$?
                 popd >/dev/null
                 return "$status"
@@ -185,22 +182,22 @@ linux() {
         fi
         
         if [[ (${#commands[@]} -eq 0 || "${commands[0]}" == "all") && ${#image_targets[@]} -gt 0 ]]; then
-            info "Building Linux image targets: make -j$(nproc) ARCH=${linux_arch} CROSS_COMPILE=${cross_compile} ${image_targets[*]}"
-            make -j"$(nproc)" ARCH="${linux_arch}" CROSS_COMPILE="${cross_compile}" "${image_targets[@]}" || {
+            info "Building Linux image targets: make -j$(build_jobs) ARCH=${linux_arch} CROSS_COMPILE=${cross_compile} ${image_targets[*]}"
+            build_make ARCH="${linux_arch}" CROSS_COMPILE="${cross_compile}" "${image_targets[@]}" || {
                 local status=$?
                 popd >/dev/null
                 return "$status"
             }
         elif [[ ${#commands[@]} -eq 0 ]]; then
-            info "Building Linux: make -j$(nproc) ARCH=${linux_arch} CROSS_COMPILE=${cross_compile}"
-            make -j"$(nproc)" ARCH="${linux_arch}" CROSS_COMPILE="${cross_compile}" || {
+            info "Building Linux: make -j$(build_jobs) ARCH=${linux_arch} CROSS_COMPILE=${cross_compile}"
+            build_make ARCH="${linux_arch}" CROSS_COMPILE="${cross_compile}" || {
                 local status=$?
                 popd >/dev/null
                 return "$status"
             }
         else
-            info "Building Linux: make -j$(nproc) ARCH=${linux_arch} CROSS_COMPILE=${cross_compile} ${commands[*]}"
-            make -j"$(nproc)" ARCH="${linux_arch}" CROSS_COMPILE="${cross_compile}" "${commands[@]}" || {
+            info "Building Linux: make -j$(build_jobs) ARCH=${linux_arch} CROSS_COMPILE=${cross_compile} ${commands[*]}"
+            build_make ARCH="${linux_arch}" CROSS_COMPILE="${cross_compile}" "${commands[@]}" || {
                 local status=$?
                 popd >/dev/null
                 return "$status"
@@ -231,8 +228,8 @@ linux() {
             
         fi
     else
-        info "Building Linux: make -j$(nproc) ARCH=${linux_arch} CROSS_COMPILE=${cross_compile} clean"
-        make -j"$(nproc)" ARCH="${linux_arch}" CROSS_COMPILE="${cross_compile}" "clean"
+        info "Building Linux: make -j$(build_jobs) ARCH=${linux_arch} CROSS_COMPILE=${cross_compile} clean"
+        build_make ARCH="${linux_arch}" CROSS_COMPILE="${cross_compile}" "clean"
         info "Removing ${linux_images_dir}/*"
         rm -rf "${linux_images_dir}"/* || true
     fi
@@ -367,12 +364,12 @@ qemu_ivc_build_linux_tools() {
     info "Building unified Axvisor IVC/IVSHMEM Linux kernel module"
     # Use Kbuild clean, not the tools' top-level clean (which also removes
     # userspace demos). UIO symbols come from the guest kernel's Module.symvers.
-    make -C "${LINUX_SRC_DIR}" \
+    build_make -C "${LINUX_SRC_DIR}" \
         ARCH=arm64 \
         CROSS_COMPILE="${cross_compile}" \
         M="${AXVISOR_TOOLS_SRC_DIR}" \
         clean || return 1
-    make -C "${AXVISOR_TOOLS_SRC_DIR}" \
+    build_make -C "${AXVISOR_TOOLS_SRC_DIR}" \
         ARCH=arm64 \
         CROSS_COMPILE="${cross_compile}" \
         KDIR="${LINUX_SRC_DIR}" \
@@ -381,7 +378,7 @@ qemu_ivc_build_linux_tools() {
 
     ensure_musl_toolchain aarch64
     info "Building Axvisor IVC Linux subscriber demo"
-    make -C "${AXVISOR_TOOLS_SRC_DIR}" \
+    build_make -C "${AXVISOR_TOOLS_SRC_DIR}" \
         ARCH=arm64 \
         CROSS="${AARCH64_MUSL_CROSS:-aarch64-linux-musl-}" \
         demo || return 1
@@ -687,20 +684,35 @@ qemu_build_os_and_rootfs() {
         parallel_steps+=("qemu_rootfs_${rootfs_builder}_step")
     done
 
-    if ! PARALLEL_LOG_DIR="${action_log_dir}" \
-         PARALLEL_DEFER_COMPLETION=1 \
-             run_parallel_functions "${action}-${ARCH}" "${parallel_steps[@]}" -- "${BUILD_ARGS[@]}"; then
-        printf '[%s] COMPLETE %s-%s: parallel build failed\n' "$(date '+%F %T')" "${action}" "${ARCH}" | tee -a "${summary_log}"
-        printf '[%s] Summary log: %s\n' "$(date '+%F %T')" "${summary_log}" | tee -a "${summary_log}"
+    # A function called in an if/! list ignores errexit in its worker functions.
+    # Capture status outside a conditional so workers can enable their own -e.
+    local parallel_status restore_errexit=0
+    [[ $- != *e* ]] || restore_errexit=1
+    set +e
+    PARALLEL_LOG_DIR="${action_log_dir}" PARALLEL_DEFER_COMPLETION=1 \
+        run_parallel_functions "${action}-${ARCH}" "${parallel_steps[@]}" -- "${BUILD_ARGS[@]}"
+    parallel_status=$?
+    if ((restore_errexit)); then set -e; fi
+    if ((parallel_status != 0)); then
+        log_summary "${summary_log}" ERROR 'COMPLETE %s-%s: parallel build failed' "${action}" "${ARCH}"
+        log_summary "${summary_log}" INFO 'Summary log: %s' "${summary_log}"
         return 1
     fi
 
     qemu_rootfs_inject_platform_dir
-    printf '[%s] COMPLETE %s-%s: all steps finished successfully\n' "$(date '+%F %T')" "${action}" "${ARCH}" | tee -a "${summary_log}"
-    printf '[%s] Summary log: %s\n' "$(date '+%F %T')" "${summary_log}" | tee -a "${summary_log}"
+    log_summary "${summary_log}" SUCCESS 'COMPLETE %s-%s: all steps finished successfully' "${action}" "${ARCH}"
+    log_summary "${summary_log}" INFO 'Summary log: %s' "${summary_log}"
+}
+
+qemu_batch_target() {
+    local target=$1
+    shift
+    bash "$0" "${target#qemu-}" "$@"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    source "${SCRIPT_DIR}/../lib/platform-log.sh"
+    platform_log_init "$@"
     LOG_CREATE_DEFAULT_FILE="${LOG_CREATE_DEFAULT_FILE:-0}"
     source "${SCRIPT_DIR}/../lib/utils.sh"
     source "${SCRIPT_DIR}/../lib/rootfs.sh"
@@ -781,14 +793,12 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                 shift 1 || true
             fi
 
-            for arch in aarch64 riscv64 x86_64 loongarch64; do
-                "$0" "$arch" "${OS}" "$@" || { echo "[ERROR] $arch build failed" >&2; exit 1; }
-            done
+            run_sequential_targets platform "qemu ${OS}" qemu_batch_target \
+                qemu-aarch64 qemu-riscv64 qemu-x86_64 qemu-loongarch64 -- "${OS}" "$@"
             ;;
         clean)
-            for arch in aarch64 riscv64 x86_64 loongarch64; do
-                "$0" "$arch" "clean" || { echo "[ERROR] $arch build failed" >&2; exit 1; }
-            done
+            run_sequential_targets platform "qemu clean" qemu_batch_target \
+                qemu-aarch64 qemu-riscv64 qemu-x86_64 qemu-loongarch64 -- clean
             ;;
         *)
         die "Unknown command: $cmd" >&2

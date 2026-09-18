@@ -726,10 +726,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                 die "--out_dir can only be used for a single architecture build"
             fi
 
-            for arch in "${ALPINE_ARCHES[@]}"; do
-                ALPINE_ARCH="${arch}"
+            alpine_arch_target() {
+                ALPINE_ARCH=$1
                 alpine
-            done
+            }
+            run_sequential_targets rootfs "alpine all" alpine_arch_target "${ALPINE_ARCHES[@]}" --
             ;;
         clean)
             alpine_parse_args "$@"

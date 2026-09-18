@@ -520,3 +520,28 @@ python3 http_server.py stop
 ## 许可证
 
 本项目基于 MIT License，详见 [LICENSE](LICENSE)。
+
+### 平台构建日志
+
+`./build.sh platform ...` 和直接执行 `scripts/platform/*.sh` 使用相同的日志布局：
+
+```text
+logs/platform/<平台>-<操作>-<时间>-<唯一标识>/
+├── build.log       # 串行阶段、子脚本输出和并行调度信息
+├── summary.log     # 整次调用的开始、最终结果和退出码
+└── steps/          # 每组并行任务的 summary.log 和各步骤日志
+```
+
+并行编译的详细输出保留在 `steps/` 中；串行准备、镜像注入等后处理输出保留在 `build.log` 中。以顶层 `summary.log` 判断整次调用的结果，步骤组完成不代表后处理已成功。QEMU 的日志目录名包含架构和操作。帮助命令不创建默认日志。
+
+可用 `LOG_DIR=/path/to/logs` 更改日志根目录。显式设置 `LOG_FILE` 时保留调用方的日志管理方式；`LOG_CREATE_DEFAULT_FILE=0` 可关闭自动创建整次调用日志（并行步骤日志仍会生成）。历史日志不迁移、不删除。
+
+`platform all` 与 `platform qemu all` 使用同一套批量进度显示：`START`、`STARTED`、`RUNNING`（默认每 60 秒）、`DONE` / `FAILED`、`COMPLETE`。目标按原顺序依次执行，失败后停止并显示日志末尾 20 行。批量日志目录包含 `summary.log`、`<目标>.log` 和 `steps/`；编译详细输出写入目标日志，避免刷屏。可用 `PARALLEL_HEARTBEAT_INTERVAL` 调整进度间隔（秒）。
+
+### 统一日志显示
+
+宿主机构建入口（platform、os、rootfs、apps、release）及辅助脚本共用 `scripts/lib/log.sh`，消息格式为 `[YYYY-MM-DD HH:MM:SS] [INFO|SUCCESS|WARN|ERROR|DEBUG] 内容`；`DEBUG` 由 `VERBOSE=1` 开启。单任务启动时提示自动日志文件路径。平台、OS、rootfs 的批量任务共用进度格式和失败摘要（最后 20 行），原有串行/并行调度及 rootfs 架构进度上报保留。工具原始输出和机器可读输出保持原样。
+
+### 全局构建加速
+
+公共构建入口统一管理线程预算、编译缓存及耗时日志；声明完整输入后，可使用补丁感知的源码准备和整项任务缓存。新增目标的接入方式、环境变量和缓存失效规则见 [全局构建规范与目标接入要求](docs/build-framework_CN.md)。

@@ -195,8 +195,8 @@ build_user_apps() {
 
     ensure_musl_toolchain aarch64
     info "Building Starry userspace AXIVC programs from ivc-sdk"
-    make -C "${IVC_SDK_DIR}" clean-linux BUILD_DIR="${IVC_BUILD_DIR}"
-    make -C "${IVC_SDK_DIR}" all BUILD_DIR="${IVC_BUILD_DIR}"
+    build_make -C "${IVC_SDK_DIR}" clean-linux BUILD_DIR="${IVC_BUILD_DIR}"
+    build_make -C "${IVC_SDK_DIR}" all BUILD_DIR="${IVC_BUILD_DIR}"
 }
 
 build_zephyr_image() {
