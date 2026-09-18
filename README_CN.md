@@ -215,11 +215,12 @@ scripts/rootfs/debian.sh loongarch64 --debian unstable --out_dir IMAGES/rootfs
 干净基础镜像
 ├── 客户机分支 + 客户机测试插件 -> 嵌套 rootfs
 └── 外层分支 + 外层测试插件 + /guest 平台文件
-    └── /guest/rootfs-<arch>-<type>.img（嵌套 rootfs）
+    ├── /guest/rootfs-<arch>-<type>.img（客户机 1）
+    └── /guest/rootfs-<arch>-<type>-2.img（客户机 2）
 ```
 
 客户机插件安装到嵌套镜像的 `/guest-tests/<plugin>`。外层镜像在 `/guest`
-下包含平台文件，并在 `/guest/rootfs-<arch>-<type>.img` 保存原始嵌套镜像；
+下包含平台文件，并保存上述两份独立的原始嵌套镜像；
 外层专用平台文件和 `/opt/ltp` 不会进入嵌套镜像。系统刻意不生成
 `run-all.sh`：选择测试只负责打包测试资源，不规定执行顺序，也不会自动运行。
 
@@ -230,7 +231,11 @@ scripts/rootfs/debian.sh loongarch64 --debian unstable --out_dir IMAGES/rootfs
 | 外层测试 | `none` | `ltp` | `none` |
 | 嵌套客户机测试 | `cyclictest,lmbench,iozone` | `cyclictest,lmbench,iozone` | `cyclictest,lmbench,iozone` |
 
-嵌套与外层 ext4 默认各保留 256 MiB 空闲空间。嵌套镜像以未压缩原始文件
+两份 guest 初始内容相同，使用同一套 `--guest-tests` 配置；测例只构建一次，镜像以两个独立普通文件保存，写入任意一份不会修改另一份。第一份保留旧文件名，第二份追加 `-2`；不使用硬链接。两份是同一文件系统的副本，初始 UUID 也相同，客户机按各自块设备挂载。
+
+在 `platform` 任务图中，每个测例插件是独立叶子节点。插件完成后分别合并 outer/guest overlay，再构建 rootfs 和平台镜像；因此不同架构、平台及测例可以共享全局并发预算，失败只阻断依赖该测例的镜像链。
+
+每份嵌套 ext4 与外层 ext4 默认各保留 256 MiB 空闲空间，`--guest-free-size` 对两份分别生效。嵌套镜像以未压缩原始文件
 嵌入，因此外层原始镜像可能明显变大；发布阶段的 xz 压缩包仍可能小得多，
 但不保证固定压缩大小阈值。BusyBox ext4 同样参与组合。旧有 initramfs
 继续保留平台文件注入，但不包含客户机测试插件和嵌套 rootfs。
@@ -391,6 +396,7 @@ Orange Pi 命令分别发布各自的产物。只构建内核和 DTB：
 
 ```text
 /guest/rootfs-aarch64-orangepi-jammy.img
+/guest/rootfs-aarch64-orangepi-jammy-2.img
 └── /guest-tests/
     ├── cyclictest/
     ├── lmbench/

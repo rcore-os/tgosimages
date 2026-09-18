@@ -212,12 +212,13 @@ branches:
 clean base
 ├── guest branch + guest test plugins -> nested rootfs
 └── outer branch + outer test plugins + /guest platform payload
-    └── /guest/rootfs-<arch>-<type>.img (the nested rootfs)
+    ├── /guest/rootfs-<arch>-<type>.img (guest 1)
+    └── /guest/rootfs-<arch>-<type>-2.img (guest 2)
 ```
 
 Guest plugins install below `/guest-tests/<plugin>` in the nested image. The
 outer image contains platform payload below `/guest` and the raw nested image at
-`/guest/rootfs-<arch>-<type>.img`; outer-only platform files and `/opt/ltp` do
+the two paths above; outer-only platform files and `/opt/ltp` do
 not leak into the nested image. There is deliberately no generated
 `run-all.sh`: selecting tests packages their assets but does not choose a test
 order or run them automatically.
@@ -229,7 +230,19 @@ The defaults are:
 | Outer tests | `none` | `ltp` | `none` |
 | Nested guest tests | `cyclictest,lmbench,iozone` | `cyclictest,lmbench,iozone` | `cyclictest,lmbench,iozone` |
 
-Both nested and outer ext4 images reserve 256 MiB free space by default. The
+Both guests start with identical contents and use the same `--guest-tests`
+selection. Tests build once; the resulting filesystem is stored as two independent
+regular files, never hardlinks. Writes to one do not modify the other. The first
+keeps its legacy name; the second adds `-2`. These filesystem copies initially
+share a UUID; each guest mounts its own block device.
+
+In the `platform` graph, each test plugin is a leaf task. Outer/guest overlay
+joins wait for their plugins, followed by rootfs and platform-image nodes. This
+lets tests across architectures and platforms share the global budget, while a
+plugin failure blocks only its dependent image chain.
+
+Each guest and the outer ext4 image reserve 256 MiB free space by default;
+`--guest-free-size` applies separately to both guests. The
 uncompressed nested image is embedded as a raw file, so the raw outer image can
 grow substantially; release-time xz compression may still make the archive
 much smaller, but no compressed-size threshold is guaranteed. BusyBox ext4
@@ -404,6 +417,7 @@ root filesystem contains all platform payloads under `/guest` and the nested roo
 
 ```text
 /guest/rootfs-aarch64-orangepi-jammy.img
+/guest/rootfs-aarch64-orangepi-jammy-2.img
 └── /guest-tests/
     ├── cyclictest/
     ├── lmbench/

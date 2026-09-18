@@ -8,6 +8,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -38,8 +39,51 @@ class QemuParallel(unittest.TestCase):
         for board in ('phytiumpi', 'roc-rk3568-pc', 'evm3588', 'tac-e400-plc',
                       'orangepi-5-plus', 'rdk-s100p', 'bst-a1000'):
             script = self.repo / f'scripts/platform/{board}.sh'
-            script.write_text('#!/bin/bash\nprintf "compiler-output board\\n"\n'
-                              '[[ ${PROBE_BOARD_FAIL:-0} != 1 ]] || exit 23\n')
+            script.write_text('''#!/bin/bash
+ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    source "$ROOT_DIR/scripts/lib/platform-graph-entry.sh"
+fi
+PLATFORM_IMAGES_DIR="$ROOT_DIR/IMAGES/fixture"
+PLATFORM_ROOTFS_DIR="$ROOT_DIR/IMAGES/rootfs"
+linux() {
+    touch "$PROBE_ROOT/board.started"
+    if [[ ${PROBE_HOLD:-0} == 1 ]]; then
+        printf '%s' "$$" >"$BUILD_WORK_DIR/worker.pid"
+        sleep 30
+    fi
+    if [[ ${PROBE_GLOBAL_BARRIER:-0} == 1 && $BUILD_WORKSPACE_NAME == phytiumpi ]]; then
+        deadline=$((SECONDS+12))
+        until [[ -f $PROBE_ROOT/aarch64.started ]]; do
+            ((SECONDS < deadline)) || return 24
+            sleep .05
+        done
+    fi
+    printf 'compiler-output board\\n'
+    [[ ${PROBE_BOARD_FAIL:-0} != 1 ]] || return 23
+    touch "$BUILD_WORK_DIR/linux.done"
+}
+arceos() { touch "$BUILD_WORK_DIR/arceos.done"; }
+rtthread() { :; }
+zephyr() { touch "$BUILD_WORK_DIR/zephyr.done"; }
+freertos() { touch "$BUILD_WORK_DIR/freertos.done"; }
+uboot() { touch "$BUILD_WORK_DIR/uboot.done"; }
+rootfs() { test -f "$BUILD_WORK_DIR/linux.done"; touch "$BUILD_WORK_DIR/rootfs.done"; }
+starry() { touch "$BUILD_WORK_DIR/starry.done"; }
+ivc() {
+    test -f "$BUILD_WORK_DIR/starry.done"
+    test -f "$BUILD_WORK_DIR/zephyr.done"
+    touch "$BUILD_WORK_DIR/ivc.done"
+}
+orangepi_build_base_image() {
+    for component in linux rootfs uboot arceos starry zephyr freertos ivc; do
+        test -f "$BUILD_WORK_DIR/$component.done"
+    done
+    touch "$BUILD_WORK_DIR/base.done"
+}
+finalize_linux_image() { test -f "$BUILD_WORK_DIR/base.done"; touch "$PROBE_ROOT/orangepi.composed"; }
+rootfs_inject_guest_stage() { test -f "$BUILD_WORK_DIR/linux.done"; }
+''')
             script.chmod(0o755)
         upstream = self.work / 'upstream'
         subprocess.run(['git', 'init', '-q', str(upstream)], check=True)
@@ -75,9 +119,16 @@ with (root/'events.lock').open('a') as lock:
         original = (ROOT / 'scripts/platform/qemu.sh').read_text()
         marker = 'if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then'
         self.assertEqual(original.count(marker), 1)
-        stub = '''qemu_build_os_and_rootfs() {
+        stub = '''linux() {
     python3 "$PROBE_ROOT/record.py" "$PROBE_ROOT" start "$ARCH"
     touch "$PROBE_ROOT/$ARCH.started"
+    if [[ ${PROBE_GLOBAL_BARRIER:-0} == 1 ]]; then
+        deadline=$((SECONDS+12))
+        until [[ -f $PROBE_ROOT/board.started ]]; do
+            ((SECONDS < deadline)) || return 24
+            sleep .05
+        done
+    fi
     if [[ ${PROBE_BARRIER:-0} == 1 ]]; then
         local deadline=$((SECONDS+12)) ready peer
         while :; do
@@ -92,20 +143,27 @@ with (root/'events.lock').open('a') as lock:
     fi
     clone_repository "$PROBE_UPSTREAM" "$BUILD_DIR/probe"
     prepare_patched_source "$BUILD_DIR/probe" "$PROBE_REF" "$PROBE_ROOT/patches/$ARCH"
-    probe_inner() {
-        [[ $(build_jobs) -le $TGOS_BUILD_JOB_BUDGET ]]
-        printf '%s\\n' "$ARCH" >"$BUILD_DIR/probe/.config"
-    }
-    run_parallel_functions inner probe_inner --
+    printf '%s\\n' "$ARCH" >"$BUILD_DIR/probe/.config"
     sleep 0.2
     printf 'compiler-output %s\\n' "$ARCH"
     python3 "$PROBE_ROOT/record.py" "$PROBE_ROOT" end "$ARCH"
-    [[ ${PROBE_FAIL:-} != "$ARCH" ]] || return 19
+    if [[ ${PROBE_FAIL:-} == "$ARCH" ]]; then
+        (exit 19)
+        printf 'wrongly-continued\\n'
+    fi
 }
+arceos() { :; }
+zephyr() { :; }
+freertos() { :; }
+qemu_rootfs_busybox_step() { :; }
+qemu_rootfs_alpine_step() { :; }
+qemu_rootfs_debian_step() { :; }
+qemu_rootfs_inject_platform_dir() { touch "$PROBE_ROOT/$ARCH.composed"; }
 '''
         (self.repo / 'scripts/platform/qemu.sh').write_text(original.replace(marker, stub + marker))
         self.env = dict(os.environ, LOG_CREATE_DEFAULT_FILE='0', LOG_COLOR='never', BUILD_JOBS='8', BUILD_PARALLEL_TASKS='4',
-                        PROBE_ROOT=str(self.work), PROBE_UPSTREAM=upstream.as_uri(), PROBE_REF=base)
+                        PROBE_ROOT=str(self.work), PROBE_UPSTREAM=upstream.as_uri(), PROBE_REF=base,
+                        ROOTFS_GRAPH_DISABLE='1')
         for key in ('BUILD_WORKSPACE_NAME', 'BUILD_WORK_DIR', 'BUILD_WORKSPACE_ROOT', 'BUILD_CACHE_DIR',
                     'BUILD_SOURCE_CACHE_DIR', 'TGOS_BUILD_JOB_BUDGET', 'LOG_FILE', 'LOG_DIR',
                     'PLATFORM_LOG_RUN_DIR', 'LOG_STDIO_CAPTURED', 'PARALLEL_STEP_CALLBACK'):
@@ -115,9 +173,9 @@ with (root/'events.lock').open('a') as lock:
         return run(['bash', str(self.repo / 'build.sh'), 'platform', target, 'all'], env=dict(self.env, **env))
 
     def test_architectures_overlap_and_share_only_downloads(self):
-        result = self.invoke('all', PROBE_BARRIER='1')
+        result = self.invoke(PROBE_BARRIER='1')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('COMPLETE platform all: all targets finished successfully', result.stdout)
+        self.assertIn('COMPLETE graph: all tasks finished successfully', result.stdout)
         self.assertNotIn('compiler-output', result.stdout)
         events = json.loads((self.work / 'events.json').read_text())
         self.assertEqual(events['peak'], 4)
@@ -139,21 +197,45 @@ with (root/'events.lock').open('a') as lock:
         events = json.loads((self.work / 'events.json').read_text())
         self.assertLessEqual(events['peak'], 2)
         self.assertEqual(len(events['entries']), 4)
-        self.assertIn('FAILED qemu-aarch64: status=19', result.stdout)
+        self.assertIn('FAILED qemu-aarch64.linux: status=19', result.stdout)
         self.assertIn('compiler-output aarch64', result.stdout)
+        self.assertNotIn('wrongly-continued', result.stdout)
+        self.assertFalse((self.work / 'aarch64.composed').exists())
+        self.assertTrue((self.work / 'x86_64.composed').exists())
 
-    def test_platform_all_stops_after_board_failure(self):
-        result = self.invoke('all', PROBE_BOARD_FAIL='1')
+    def test_platform_all_shares_graph_and_continues_after_board_failure(self):
+        result = self.invoke('all', PROBE_BOARD_FAIL='1', PROBE_GLOBAL_BARRIER='1')
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn('FAILED phytiumpi: status=23', result.stdout)
+        self.assertIn('FAILED phytiumpi.linux: status=23', result.stdout)
         self.assertIn('compiler-output board', result.stdout)
-        self.assertEqual(result.stdout.count('] STARTED '), 1)
-        self.assertFalse((self.work / 'events.json').exists())
+        self.assertTrue((self.work / 'aarch64.composed').exists())
+        graphs = list((self.repo / 'logs').rglob('graph.json'))
+        self.assertEqual(len(graphs), 1)
+        states = json.loads(graphs[0].with_name('state.json').read_text())
+        self.assertEqual(states['phytiumpi.compose']['state'], 'blocked')
+        self.assertEqual(states['qemu-aarch64.compose']['state'], 'success')
 
-    def test_same_architecture_reuses_and_serializes_workspace(self):
+    def test_platform_all_respects_orangepi_dependencies(self):
+        result = self.invoke('all', PROBE_GLOBAL_BARRIER='1')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.work / 'orangepi.composed').exists())
+        self.assertEqual(len(list((self.repo / 'logs').rglob('graph.json'))), 1)
+
+    def test_single_board_command_includes_dependencies(self):
+        result = run(['bash', str(self.repo / 'build.sh'), 'platform', 'orangepi-5-plus', 'rootfs'], env=self.env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        workspace = self.repo / 'build/workspaces/orangepi-5-plus'
+        self.assertTrue((workspace / 'linux.done').exists())
+        self.assertTrue((workspace / 'rootfs.done').exists())
+        self.assertFalse((workspace / 'starry.done').exists())
+        result = run(['bash', str(self.repo / 'build.sh'), 'platform', 'phytiumpi', 'arceos'], env=self.env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.repo / 'build/workspaces/phytiumpi/linux.done').exists())
+
+    def test_same_outputs_are_serialized_across_workspace_roots(self):
         processes = [subprocess.Popen(['bash', str(self.repo / 'build.sh'), 'platform', 'qemu-aarch64', 'all'],
-                                      env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                     for _ in range(2)]
+                                      env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                     for env in (self.env, dict(self.env, BUILD_WORKSPACE_ROOT=str(self.work / 'other-workspaces')))]
         try:
             for process in processes:
                 self.assertEqual(process.wait(timeout=30), 0)
@@ -171,6 +253,39 @@ with (root/'events.lock').open('a') as lock:
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('escapes workspace', result.stdout + result.stderr)
         self.assertFalse((self.work / 'events.json').exists())
+        workspace = self.repo / 'build/workspaces/qemu-aarch64'
+        workspace.rmdir()
+        shared = self.work / 'shared-source'
+        shared.mkdir()
+        workspace.symlink_to(shared, target_is_directory=True)
+        result = self.invoke('qemu-aarch64')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('must not be a symlink', result.stdout + result.stderr)
+
+    def test_platform_all_sigterm_reaches_scheduler(self):
+        process = subprocess.Popen(['bash', str(self.repo / 'build.sh'), 'platform', 'all'],
+                                   env=dict(self.env, PROBE_HOLD='1'), stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL)
+        try:
+            deadline = time.monotonic() + 10
+            while not list((self.repo / 'build').rglob('worker.pid')) and time.monotonic() < deadline:
+                time.sleep(.02)
+            self.assertTrue(list((self.repo / 'build').rglob('worker.pid')))
+            process.send_signal(signal.SIGTERM)
+            self.assertEqual(process.wait(timeout=5), 1)
+            state_file, = (self.repo / 'logs').rglob('state.json')
+            states = json.loads(state_file.read_text())
+            self.assertNotIn('running', [s['state'] for s in states.values()])
+            self.assertIn('cancelled', [s['state'] for s in states.values()])
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            for path in (self.repo / 'build').rglob('worker.pid'):
+                try:
+                    os.killpg(int(path.read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
     def test_background_cache_process_does_not_keep_workspace_locked(self):
         command = ['bash', '-c', '''
@@ -183,8 +298,9 @@ build_workspace_run daemon bash -c 'sleep 15 >/dev/null 2>&1 & echo $!'
         self.assertEqual(result.returncode, 0, result.stderr)
         daemon = int(result.stdout.strip())
         try:
-            with (self.repo / 'build/workspaces/.locks/daemon.lock').open('a') as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            for path in ('build/workspaces/.locks/daemon.lock', 'build/.locks/platform-daemon.lock'):
+                with (self.repo / path).open('a') as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         finally:
             try:
                 os.kill(daemon, signal.SIGTERM)

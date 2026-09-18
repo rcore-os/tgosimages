@@ -104,6 +104,13 @@ nested_path="/guest/$nested_name"
 image_has_path "$outer" "$nested_path" || die "missing nested image: $nested_path"
 nested="$work/$nested_name"
 dump_path "$outer" "$nested_path" "$nested" || die 'cannot extract nested root filesystem'
+second_path="/guest/${nested_name%.img}-2.img"
+second="$work/guest-2.img"
+dump_path "$outer" "$second_path" "$second" || die 'cannot extract second guest root filesystem'
+cmp -s "$nested" "$second" || die 'guest images have different initial contents'
+first_inode=$(_rootfs_debugfs_stat "$outer" "$nested_path" required | awk '/^Inode:/ {print $2}')
+second_inode=$(_rootfs_debugfs_stat "$outer" "$second_path" required | awk '/^Inode:/ {print $2}')
+[[ $first_inode != "$second_inode" ]] || die 'guest images share an inode'
 _rootfs_check_clean "$nested" || die 'nested root filesystem is not clean'
 
 guest_free=$(rootfs_parse_size_bytes "$guest_free_value") || die 'invalid guest free size'

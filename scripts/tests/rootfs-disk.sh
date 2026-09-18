@@ -345,6 +345,9 @@ has_path "$work/composed-outer.img" /guest/rootfs-aarch64-orangepi-jammy.img || 
     fail 'outer image lacks nested Orange Pi rootfs'
 debugfs -R "dump /guest/rootfs-aarch64-orangepi-jammy.img $work/nested.img" \
     "$work/composed-outer.img" >/dev/null 2>&1
+debugfs -R "dump /guest/rootfs-aarch64-orangepi-jammy-2.img $work/nested-2.img" \
+    "$work/composed-outer.img" >/dev/null 2>&1
+run_ok 'disk composition embeds two identical guests' cmp "$work/nested.img" "$work/nested-2.img"
 run_ok 'nested Orange Pi rootfs is clean' e2fsck -fn "$work/nested.img"
 assert_eq gpt-root "$(debugfs -R 'cat /etc/rootfs-marker' "$work/nested.img" 2>/dev/null)" \
     'nested rootfs comes from the unmodified Orange Pi root partition'

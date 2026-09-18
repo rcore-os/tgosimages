@@ -302,6 +302,15 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                     run_checked_script "$script_path" "$qemu_cmd" "${qemu_args[@]}"
                     ;;
                 all|clean)
+                    if [[ $target == all && ${1:-all} != clean ]]; then
+                        platform_graph_help=0
+                        for argument in "$@"; do
+                            case $argument in help|-h|--help) platform_graph_help=1 ;; esac
+                        done
+                        if ((platform_graph_help == 0)); then
+                            exec python3 "${SCRIPTS_DIR}/lib/platform-graph.py" all "$@"
+                        fi
+                    fi
                     platform_targets=(phytiumpi roc-rk3568-pc evm3588 tac-e400-plc orangepi-5-plus rdk-s100p bst-a1000 qemu)
                     extra_args=("$@")
                     if [[ $target == clean ]]; then

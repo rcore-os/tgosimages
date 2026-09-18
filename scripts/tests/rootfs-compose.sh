@@ -271,16 +271,70 @@ run_ok 'outer contains builder guest content' has_path "$output" /guest/builder/
 run_ok 'outer contains nested guest image' has_path "$output" /guest/rootfs-x86_64-busybox.img
 nested="$work/nested.img"
 debugfs -R "dump /guest/rootfs-x86_64-busybox.img $nested" "$output" >/dev/null 2>&1
+second="$work/nested-2.img"
+debugfs -R "dump /guest/rootfs-x86_64-busybox-2.img $second" "$output" >/dev/null 2>&1
+run_ok 'both guests have identical initial contents' cmp "$nested" "$second"
+first_inode=$(_rootfs_debugfs_stat "$output" /guest/rootfs-x86_64-busybox.img required | awk '/^Inode:/ {print $2}')
+second_inode=$(_rootfs_debugfs_stat "$output" /guest/rootfs-x86_64-busybox-2.img required | awk '/^Inode:/ {print $2}')
+run_ok 'guest images use independent outer filesystem inodes' test "$first_inode" != "$second_inode"
+debugfs -w -R 'mkdir /independent-write' "$second" >/dev/null 2>&1
+run_fail 'writing guest two does not modify guest one' has_path "$nested" /independent-write
+run_ok 'guest two reserves its own free space' bash -c 'source "$1/scripts/lib/rootfs-compose.sh"; (( $(rootfs_ext4_free_bytes "$2") >= 2*1024*1024 ))' _ "$repo_root" "$second"
 run_ok 'nested guest contains guest-test payload' has_path "$nested" /guest-tests/fake/payload
 run_fail 'nested guest excludes outer-only payload' has_path "$nested" /outer-only/fixture
 run_fail 'nested guest excludes builder guest content' has_path "$nested" /guest/builder/content
 run_fail 'nested guest is not recursive' has_path "$nested" /guest/rootfs-x86_64-busybox.img
 run_ok 'nested and outer are distinct images' test "$(sha256sum "$nested" | awk '{print $1}')" != "$(sha256sum "$output" | awk '{print $1}')"
 
+graph_base="$work/graph-base.img"
+run_ok 'graph base node publishes the clean base without test composition' \
+    env ROOTFS_GRAPH_BASE_ONLY=1 bash -c 'source "$1"; rootfs_compose_test_images "$2" "$3" "$4" "$5" x86_64 busybox 2M 3M "$6"' \
+        _ "$compose_lib" "$base" "$outer_overlay" "$guest_overlay" "$outer_guest" "$graph_base"
+run_ok 'graph base retains clean-base bytes' cmp "$base" "$graph_base"
+normalize_tree_seconds "$outer_overlay"
+normalize_tree_seconds "$guest_overlay"
+normalize_tree_seconds "$outer_guest"
+graph_output="$work/graph-output.img"
+run_ok 'graph image node composes both guests from completed dependencies' \
+    rootfs_compose_test_images "$graph_base" "$outer_overlay" "$guest_overlay" "$outer_guest" \
+        x86_64 busybox 2M 3M "$graph_output"
+run_ok 'graph image contains guest one' has_path "$graph_output" /guest/rootfs-x86_64-busybox.img
+run_ok 'graph image contains guest two' has_path "$graph_output" /guest/rootfs-x86_64-busybox-2.img
+
+graph_node_base="$work/graph-node-base"
+graph_node_output="$work/graph-node-output"
+mkdir "$graph_node_base" "$graph_node_output"
+cp --preserve=all --reflink=auto --sparse=always "$base" "$graph_node_base/rootfs-x86_64-busybox.img"
+printf initramfs >"$graph_node_base/initramfs-x86_64-busybox.cpio.gz"
+normalize_tree_seconds "$outer_overlay"
+normalize_tree_seconds "$guest_overlay"
+run_ok 'QEMU rootfs image node composes and publishes its output pair' \
+    env BUILD_WORK_DIR="$work" LOG_CREATE_DEFAULT_FILE=0 bash "$repo_root/scripts/lib/rootfs-compose-node.sh" \
+        x86_64 busybox "$graph_node_base" "$graph_node_output" "$outer_overlay" "$guest_overlay" 2M 3M
+run_ok 'QEMU image node publishes two guests' has_path "$graph_node_output/rootfs-x86_64-busybox.img" \
+    /guest/rootfs-x86_64-busybox-2.img
+assert_eq initramfs "$(cat "$graph_node_output/initramfs-x86_64-busybox.cpio.gz")" \
+    'QEMU image node changed the paired initramfs'
+
+guest_base="$work/guest-base.img"
+cp --preserve=all --reflink=auto --sparse=always "$base" "$guest_base"
+normalize_tree_seconds "$guest_overlay"
+run_ok 'guest composition node injects the merged test overlay atomically' \
+    env BUILD_WORK_DIR="$work" LOG_CREATE_DEFAULT_FILE=0 bash \
+        "$repo_root/scripts/lib/rootfs-guest-compose-node.sh" "$guest_base" "$guest_overlay" 2M
+run_ok 'guest composition node publishes test payload' has_path "$guest_base" /guest-tests/fake/payload
+
 collision_guest="$work/collision-guest"
 mkdir "$collision_guest"
 printf collision >"$collision_guest/rootfs-x86_64-busybox.img"
 printf old >"$work/preserved-output"
+second_collision="$work/second-collision"
+mkdir "$second_collision"
+printf collision >"$second_collision/rootfs-x86_64-busybox-2.img"
+run_fail 'compose protects guest two from platform payload collisions' \
+    rootfs_compose_test_images "$base" "$outer_overlay" "$guest_overlay" "$second_collision" \
+        x86_64 busybox 2M 3M "$work/preserved-output"
+assert_eq old "$(cat "$work/preserved-output")" 'guest two collision changed published output'
 preserved_hash=$(sha256sum "$work/preserved-output" | awk '{print $1}')
 run_fail 'compose rejects collision before output modification' \
     rootfs_compose_test_images "$base" "$outer_overlay" "$guest_overlay" "$collision_guest" \
@@ -373,6 +427,7 @@ cp --preserve=all --reflink=auto --sparse=always "$base" "$atomic"
 existing_stage="$work/existing-stage"
 mkdir -p "$existing_stage/guest"
 printf original-nested >"$existing_stage/guest/rootfs-x86_64-busybox.img"
+printf original-second >"$existing_stage/guest/rootfs-x86_64-busybox-2.img"
 normalize_tree_seconds "$existing_stage"
 _rootfs_inject_tree_via_debugfs "$atomic" "$existing_stage"
 touch -d @1700000003 "$atomic"
@@ -394,6 +449,15 @@ run_ok 'atomic injection puts guest source under guest' has_path "$atomic" /gues
 run_ok 'atomic injection puts overlay at root' has_path "$atomic" /outer-added/payload
 assert_eq original-nested "$(debugfs_cat "$atomic" /guest/rootfs-x86_64-busybox.img)" \
     'atomic injection changed existing nested image bytes'
+assert_eq original-second "$(debugfs_cat "$atomic" /guest/rootfs-x86_64-busybox-2.img)" \
+    'atomic injection changed second nested image bytes'
+
+second_source="$work/inject-second-collision"
+mkdir "$second_source"
+printf bad >"$second_source/rootfs-x86_64-busybox-2.img"
+run_fail 'atomic injection rejects second guest basename' \
+    rootfs_inject_outer_payload_atomic "$atomic" "$second_source" "$overlay_source" \
+        rootfs-x86_64-busybox.img 1M
 
 protected_source="$work/protected-source"
 mkdir "$protected_source"

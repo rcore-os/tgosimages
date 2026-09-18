@@ -516,8 +516,7 @@ rootfs_compose_disk_guest() (
     stage=stage-nested-and-platform-payload
     nested_stage=$(mktemp -d "${output_dir}/.${output_base}.nested.XXXXXX") || return 1
     touch -d "@$(stat -c %Y -- "$base_snapshot")" "$guest_image" || return 1
-    cp --preserve=mode,ownership,timestamps --reflink=auto --sparse=always -- \
-        "$guest_image" "$nested_stage/$nested_name" || return 1
+    _rootfs_stage_guest_pair "$guest_image" "$nested_stage" "$nested_name" || return 1
     _rootfs_validate_payload_tree "$nested_stage" || return 1
 
     stage=extract-outer-root
@@ -545,6 +544,7 @@ rootfs_compose_disk_guest() (
     rootfs_disk_extract_partition "$outer_disk" "$start" "$size" "$validation_partition" || return 1
     _rootfs_check_clean "$validation_partition" || return 1
     _rootfs_debugfs_stat "$validation_partition" "/guest/$nested_name" required >/dev/null || return 1
+    _rootfs_debugfs_stat "$validation_partition" "/guest/${nested_name%.img}-2.img" required >/dev/null || return 1
 
     stage=publish-output
     touch -r "$base_snapshot" "$outer_disk" || return 1
