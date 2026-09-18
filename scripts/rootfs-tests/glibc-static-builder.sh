@@ -11,7 +11,7 @@ platform=linux/amd64
 base_image=ubuntu@sha256:69cecf4bbf72d2d44a9eef1b71fb98c7fb973d78af11399deccef19beb008ad9
 manifest_file="$script_dir/glibc-static-builder-packages.txt"
 
-die() { echo "glibc-static-builder: $*" >&2; exit 1; }
+die() { error "glibc-static-builder: $*"; exit 1; }
 
 set_builder_metadata() {
     case $1 in x86_64|aarch64|riscv64|loongarch64) ;; *) die "unsupported architecture: $1" ;; esac

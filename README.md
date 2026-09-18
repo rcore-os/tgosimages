@@ -546,3 +546,28 @@ Before sending a pull request, please keep script style consistent and document 
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
+### Platform build logs
+
+`./build.sh platform ...` and direct `scripts/platform/*.sh` invocations share this layout:
+
+```text
+logs/platform/<platform>-<action>-<timestamp>-<unique-id>/
+├── build.log       # Serial stages, child output, and parallel scheduling
+├── summary.log     # Invocation start, final result, and exit status
+└── steps/          # Each parallel group's summary.log and per-step logs
+```
+
+Detailed parallel compiler output stays in `steps/`; serial preparation and image postprocessing output stays in `build.log`. Use the top-level `summary.log` for the overall result: completion of a parallel group does not imply successful postprocessing. QEMU directory names include the architecture and action. Help commands do not create default logs.
+
+Set `LOG_DIR=/path/to/logs` to change the log root. An explicit `LOG_FILE` preserves caller-managed logging; `LOG_CREATE_DEFAULT_FILE=0` disables automatic invocation logs (parallel step logs are still created). Existing logs are neither moved nor removed.
+
+`platform all` and `platform qemu all` share the same batch progress display: `START`, `STARTED`, `RUNNING` (every 60 seconds by default), `DONE` / `FAILED`, and `COMPLETE`. Targets retain their sequential order; a failure stops the batch and prints the last 20 log lines. Batch directories contain `summary.log`, `<target>.log`, and `steps/`; verbose compiler output goes to target logs. Set `PARALLEL_HEARTBEAT_INTERVAL` to adjust the progress interval in seconds.
+
+### Shared log display
+
+Host build entry points (platform, os, rootfs, apps, release) and helper scripts share `scripts/lib/log.sh`. Messages use `[YYYY-MM-DD HH:MM:SS] [INFO|SUCCESS|WARN|ERROR|DEBUG] message`; `VERBOSE=1` enables DEBUG. Single tasks announce automatically created log files. Platform, OS, and rootfs batches share progress formatting and failure excerpts (last 20 lines), preserving sequential/parallel scheduling and rootfs architecture progress reporting. Raw tool output and machine-readable output retain their original form.
+
+### Shared build acceleration
+
+Common build adapters manage compiler budgets, caches and timing. Explicit input declarations enable patch-aware source preparation and whole-task caching. See the [build framework guide](docs/build-framework.md) for target integration, configuration and invalidation rules.

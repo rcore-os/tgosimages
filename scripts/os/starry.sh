@@ -170,7 +170,7 @@ starry_build() {
     [[ -f "${config_path}" ]] || die "StarryOS build config not found: ${config_path}"
     build_config="$(starry_config_for_build "${config_path}")"
 
-    build_cmd=(cargo xtask starry build -c "${build_config}")
+    build_cmd=(build_cargo xtask starry build -c "${build_config}")
     build_cmd+=("${STARRY_ARGS[@]}")
     ensure_musl_toolchain aarch64
     info "Building StarryOS from ${STARRY_REF}"

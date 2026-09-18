@@ -89,9 +89,9 @@ rtthread_parse_args() {
 rtthread_build() {
     if [[ -d "$RTTHREAD_PLATFORM_DIR" ]]; then
         pushd "$RTTHREAD_PLATFORM_DIR" >/dev/null
-        info "EXEC: scons -j$(nproc) $RTTHREAD_ARGS"
+        info "EXEC: scons -j$(build_jobs) $RTTHREAD_ARGS"
         export RTT_EXEC_PATH="/opt/arm-gnu-toolchain-11.3.rel1-x86_64-aarch64-none-elf/bin"
-        scons -j$(nproc) $RTTHREAD_ARGS
+        build_scons $RTTHREAD_ARGS
         popd >/dev/null
     fi
 
@@ -139,15 +139,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             RTTHREAD_PLATFORM_BIN_NAME="rtthread.bin"
             ;;
         all)
-            for arch in phytiumpi roc-rk3568-pc; do
-                "$0" "$arch" "$@" || { echo "[ERROR] $arch build failed" >&2; exit 1; }
-            done
+            run_sequential_targets os "rtthread all" run_script_target phytiumpi roc-rk3568-pc -- "$@"
             exit 0
             ;;
         clean)
-            for arch in phytiumpi roc-rk3568-pc; do
-                "$0" "$arch" "-c" || { echo "[ERROR] $arch build failed" >&2; exit 1; }
-            done
+            run_sequential_targets os "rtthread clean" run_script_target phytiumpi roc-rk3568-pc -- -c
             exit 0
             ;;
         *)

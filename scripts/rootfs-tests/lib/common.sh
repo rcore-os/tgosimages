@@ -3,6 +3,8 @@
 _rootfs_test_common_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 # shellcheck source=../../lib/build-lock.sh
 source "${_rootfs_test_common_dir}/../../lib/build-lock.sh"
+source "${_rootfs_test_common_dir}/../../lib/log.sh"
+source "${_rootfs_test_common_dir}/../../lib/build-performance.sh"
 unset _rootfs_test_common_dir
 
 rootfs_test_csv_contains() {

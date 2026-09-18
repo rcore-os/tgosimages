@@ -59,18 +59,18 @@ linux() {
         if [[ "$@" != *"clean"* ]]; then
             info "Configuring kernel: make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 O=build_bst bsta1000b_release_defconfig"
             chmod -R 755 scripts/ arch/arm64/kernel/vdso/gen_vdso_offsets.sh
-            make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 O=build_bst bsta1000b_release_defconfig
+            build_make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 O=build_bst bsta1000b_release_defconfig
 
-            info "Starting compilation: make CROSS_COMPILE=aarch64-linux-gnu-  ARCH=arm64 O=build_bst -j$(nproc) $@"
-            make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 O=build_bst -j"$(nproc)" "$@" 2>&1
+            info "Starting compilation: make CROSS_COMPILE=aarch64-linux-gnu-  ARCH=arm64 O=build_bst -j$(build_jobs) $@"
+            build_make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 O=build_bst "$@" 2>&1
 
             info "Copying build artifacts -> $linux_images_dir"
             copy_required "$LINUX_SRC_DIR/kernel/build_bst/arch/arm64/boot/Image" "$linux_images_dir/Image"
             copy_required "$LINUX_SRC_DIR/bst_dt/bsta1000b-fada.dtb" "$linux_images_dir/bsta1000b-fada.dtb"
             copy_required "$LINUX_SRC_DIR/bst_dt/bsta1000b-fadb.dtb" "$linux_images_dir/bsta1000b-fadb.dtb"
         else
-            info "Cleaning: make -j$(nproc) clean"
-            make -j"$(nproc)" clean 2>&1
+            info "Cleaning: make -j$(build_jobs) clean"
+            build_make clean 2>&1
             info "Removing ${linux_images_dir}/*"
             rm "${linux_images_dir}"/* || true
         fi
@@ -90,6 +90,8 @@ arceos() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    source "${SCRIPT_DIR}/../lib/platform-log.sh"
+    platform_log_init "$@"
     cmd="${1:-}"
     if [[ "${cmd}" =~ ^(all|clean)$ ]]; then
         LOG_CREATE_DEFAULT_FILE="${LOG_CREATE_DEFAULT_FILE:-0}"

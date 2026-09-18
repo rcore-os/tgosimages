@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-die() { echo "cyclictest-validator: $*" >&2; exit 1; }
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/log.sh"
+
+die() { error "cyclictest-validator: $*"; exit 1; }
 
 (($# == 2)) || die 'usage: validate-cyclictest.sh <arch> <cyclictest>'
 arch=$1
