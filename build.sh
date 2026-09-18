@@ -32,7 +32,7 @@ usage() {
     printf '%s\n' "  qemu-riscv64         -> scripts/platform/qemu.sh riscv64"
     printf '%s\n' "  qemu-loongarch64     -> scripts/platform/qemu.sh loongarch64"
     printf '%s\n' "  qemu                 -> scripts/platform/qemu.sh all"
-    printf '%s\n' "  all                  -> build all platform targets sequentially with rootfs and all os if applicable"
+    printf '%s\n' "  all                  -> build board targets sequentially and QEMU architectures in parallel"
     printf '%s\n' "  clean                -> clean all platform targets"
     printf '%s\n' ""
     printf '%s\n' "OS Targets:"
@@ -302,7 +302,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                     run_checked_script "$script_path" "$qemu_cmd" "${qemu_args[@]}"
                     ;;
                 all|clean)
-                    platform_targets=(phytiumpi roc-rk3568-pc evm3588 tac-e400-plc orangepi-5-plus rdk-s100p bst-a1000 qemu-aarch64 qemu-x86_64 qemu-riscv64 qemu-loongarch64)
+                    platform_targets=(phytiumpi roc-rk3568-pc evm3588 tac-e400-plc orangepi-5-plus rdk-s100p bst-a1000 qemu)
                     extra_args=("$@")
                     if [[ $target == clean ]]; then
                         extra_args=(clean)

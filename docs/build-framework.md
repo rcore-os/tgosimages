@@ -18,9 +18,12 @@ elapsed time and propagate tool failures. They do not evaluate command strings.
 | --- | --- | --- |
 | `BUILD_JOBS` | `nproc` | Total compiler budget for this invocation |
 | `BUILD_PARALLEL_TASKS` | Current job budget | Maximum simultaneous tasks at each parallel boundary |
-| `BUILD_CACHE` | `1` | `0` disables framework caches; `1`/`auto` use available backends |
+| `BUILD_CACHE` | `1` | `0` disables compiler/task caching; `1`/`auto` use available backends |
 | `BUILD_CACHE_DIR` | `build/.cache` | Compiler caches and task manifests |
 | `BUILD_REBUILD` | `0` | `1` bypasses whole-task hits and refreshes successful records |
+| `BUILD_WORKSPACE_ROOT` | `build/workspaces` | Persistent isolated task workspaces |
+| `BUILD_SOURCE_CACHE_DIR` | `<BUILD_CACHE_DIR>/git` | Shared Git download cache |
+| `LOG_COLOR` | `auto` | Terminal color policy: `auto`, `always`, `never` |
 
 Existing `CCACHE_DIR`, `CMAKE_C_COMPILER_LAUNCHER`, `CMAKE_CXX_COMPILER_LAUNCHER`,
 `CARGO_BUILD_JOBS` and `RUSTC_WRAPPER` overrides remain supported. Explicit
@@ -35,6 +38,41 @@ budget. The cap applies to participating tasks in one invocation, not to other
 users, other independent builds, remote SDK builders or arbitrary subprocesses
 that ignore the adapters. Do not parallelize users of a mutable source tree
 without isolating that tree or locking its entire preparation/build lifetime.
+
+### Architecture workspaces
+
+`platform qemu all` runs four architecture jobs through the parallel scheduler;
+`platform all` invokes this group in its QEMU phase. Within each architecture,
+OS and rootfs steps divide the inherited budget again. Failures are aggregated
+after all architecture jobs complete; set `BUILD_PARALLEL_TASKS=1` to serialize.
+
+New launchers may use `build_workspace_run <task-id> <executable> [args...]`.
+It holds a persistent per-workspace lock across the complete command and sets
+`BUILD_WORK_DIR` for every descendant. Scripts initialize `BUILD_DIR` through
+`build_paths_init`; they must not reconstruct `ROOT_DIR/build` themselves.
+Direct QEMU commands reenter through the same workspace launcher, so direct and
+batch invocations for one architecture cannot modify its tree simultaneously.
+
+Source copies belong to `build/workspaces/qemu-<arch>/`; final QEMU and rootfs
+artifacts retain their architecture-specific `IMAGES/` names. Explicit mutable
+source overrides outside the workspace are rejected. Read-only toolchains can
+still be shared. Git clones/ref fetches share a locked bare download cache,
+while each checkout has its own Git objects and patch state (no alternates or
+hardlinks). Clearing the download cache does not invalidate existing checkouts.
+New clones refresh the cached upstream default branch; pinned commit downloads
+are reused. Download caching is separate from compiler/task cache policy.
+
+Old build directories are preserved. New architecture workspaces start cold;
+there is no automatic move or deletion of user source caches. Stop builds before
+running `cleanall`, which also removes default workspaces and their locks.
+
+### Console colors
+
+Shared messages use cyan/green/yellow/red for progress/success/warnings/errors,
+plus distinct colors for QEMU architecture names. Auto mode honors `NO_COLOR`
+and `TERM=dumb`. Forced colors apply to the console, after the plain log stream
+has been saved; captured child streams stay uncolored. Raw tool output is not
+reformatted. Use `LOG_COLOR=never` for plain console output.
 
 ## Compiler and object reuse
 
@@ -122,3 +160,8 @@ Run `bash scripts/tests/build-performance.sh` on Linux. It exercises actual
 Make/CMake compilation, ccache hits, budget enforcement, task concurrency,
 input/ref/patch/environment invalidation, output tampering, overlapping patches,
 legacy adoption, local-edit preservation, and failed-patch retries.
+
+`python3 scripts/tests/qemu-parallel.py` verifies real overlapping architecture
+dispatch, isolated patches/configurations, shared downloads, concurrent limits,
+failure aggregation, and single-architecture locking with local Git fixtures.
+Terminal color routing is covered by `scripts/tests/build-review-regressions.py`.

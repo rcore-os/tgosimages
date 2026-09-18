@@ -5,7 +5,8 @@ repo_root=$(cd -- "$(dirname -- "$0")/../.." && pwd -P)
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 mkdir -p "$work/repo/scripts/platform" "$work/repo/scripts/lib"
-cp "$repo_root/scripts/lib/"{utils,platform-log,log,build-performance}.sh "$work/repo/scripts/lib/"
+cp "$repo_root/scripts/lib/"{utils,platform-log,log,build-performance,build-paths,build-workspace}.sh "$work/repo/scripts/lib/"
+cp "$repo_root/scripts/lib/log-color.awk" "$work/repo/scripts/lib/"
 cat >"$work/repo/scripts/platform/fixture.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail

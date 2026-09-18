@@ -536,7 +536,9 @@ logs/platform/<平台>-<操作>-<时间>-<唯一标识>/
 
 可用 `LOG_DIR=/path/to/logs` 更改日志根目录。显式设置 `LOG_FILE` 时保留调用方的日志管理方式；`LOG_CREATE_DEFAULT_FILE=0` 可关闭自动创建整次调用日志（并行步骤日志仍会生成）。历史日志不迁移、不删除。
 
-`platform all` 与 `platform qemu all` 使用同一套批量进度显示：`START`、`STARTED`、`RUNNING`（默认每 60 秒）、`DONE` / `FAILED`、`COMPLETE`。目标按原顺序依次执行，失败后停止并显示日志末尾 20 行。批量日志目录包含 `summary.log`、`<目标>.log` 和 `steps/`；编译详细输出写入目标日志，避免刷屏。可用 `PARALLEL_HEARTBEAT_INTERVAL` 调整进度间隔（秒）。
+`platform all` 与 `platform qemu all` 使用同一套批量进度显示：`START`、`STARTED`、`RUNNING`（默认每 60 秒）、`DONE` / `FAILED`、`COMPLETE`。板卡目标仍依次执行；QEMU 阶段按架构并行，收集全部架构结果后汇总失败。失败任务显示日志末尾 20 行。批量日志目录包含 `summary.log`、`<目标>.log` 和 `steps/`；编译详细输出写入目标日志，避免刷屏。可用 `PARALLEL_HEARTBEAT_INTERVAL` 调整进度间隔（秒）。
+
+终端日志中，进度为青色、成功为绿色、警告为黄色、失败为红色；QEMU 各架构名称使用固定的不同颜色。默认 `LOG_COLOR=auto` 仅在终端着色，并尊重 `NO_COLOR`；`LOG_COLOR=always` 强制着色，`LOG_COLOR=never` 关闭颜色。框架日志文件保持纯文本。
 
 ### 统一日志显示
 
@@ -545,3 +547,9 @@ logs/platform/<平台>-<操作>-<时间>-<唯一标识>/
 ### 全局构建加速
 
 公共构建入口统一管理线程预算、编译缓存及耗时日志；声明完整输入后，可使用补丁感知的源码准备和整项任务缓存。新增目标的接入方式、环境变量和缓存失效规则见 [全局构建规范与目标接入要求](docs/build-framework_CN.md)。
+
+```bash
+BUILD_JOBS=16 BUILD_PARALLEL_TASKS=4 ./build.sh platform qemu all
+```
+
+各架构使用 `build/workspaces/qemu-<架构>/`，单架构命令也使用相同工作区和锁。Git 下载缓存共用 `build/.cache/git/`，checkout、补丁状态和中间产物独立。旧构建目录保留，新工作区首次使用时会重新准备源码。

@@ -4,7 +4,8 @@ set -euo pipefail
 
 TOOLS_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${TOOLS_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 START_DIR="$(pwd -P)"
 
 source "${TOOLS_DIR}/../lib/utils.sh"

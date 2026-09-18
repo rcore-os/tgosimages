@@ -8,7 +8,8 @@ fi
 UTILS_CALLER_SOURCE="${BASH_SOURCE[1]:-${0:-script}}"
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 script_log_info() {
     local caller_dir
@@ -75,14 +76,15 @@ if [[ -z "${LOG_FILE:-}" && "${LOG_CREATE_DEFAULT_FILE:-1}" == "1" ]]; then
 fi
 export LOG_FILE
 
+source "${SCRIPT_DIR}/log.sh"
 if [[ -n "${LOG_FILE:-}" && "${LOG_CAPTURE_STDIO:-1}" == "1" && -z "${LOG_STDIO_CAPTURED:-}" && "${LOG_TO_STDERR:-1}" == "1" ]]; then
     mkdir -p "$(dirname "${LOG_FILE}")"
     export LOG_STDIO_CAPTURED=1
-    exec > >(tee -a "${LOG_FILE}") 2>&1
+    exec > >(tee -a "${LOG_FILE}" | (unset LOG_STDIO_CAPTURED; log_render)) 2>&1
 fi
 
-source "${SCRIPT_DIR}/log.sh"
 source "${SCRIPT_DIR}/build-performance.sh"
+source "${SCRIPT_DIR}/build-workspace.sh"
 if [[ ${_log_created:-0} == 1 ]]; then
     info "Log file: ${LOG_FILE}"
     unset _log_created
@@ -213,10 +215,13 @@ run_parallel_functions() {
     local status
     local failed=0
     local failed_steps=()
+    local unit=steps
+    local callback=${PARALLEL_STEP_CALLBACK:-}
+    [[ -z $callback ]] || unit=targets
     local category
     local script_name
     IFS='|' read -r category script_name _ < <(script_log_info)
-    local log_dir="${PARALLEL_LOG_DIR:-$(new_log_dir "${category}" "${script_name}" "${action}")}"
+    local log_dir="${PARALLEL_LOG_DIR:-$(new_log_dir "${category}" "${script_name}" "${action// /-}")}"
     local summary_log="${log_dir}/summary.log"
 
     while [[ "$#" -gt 0 && "$1" != "--" ]]; do
@@ -270,7 +275,9 @@ run_parallel_functions() {
                 log_format INFO 'START %s' "$step_name"
                 printf 'cwd=%s\n' "$(pwd)"
                 printf 'function='
-                if [[ "${use_common_args}" -eq 1 ]]; then
+                if [[ -n $callback ]]; then
+                    printf '%q ' "$callback" "$step" "${args[@]}"
+                elif [[ "${use_common_args}" -eq 1 ]]; then
                     printf '%q ' "$step" "${args[@]}"
                 else
                     printf '%q ' "${step_command[@]}"
@@ -282,7 +289,10 @@ run_parallel_functions() {
                 LOG_TO_STDERR=1
                 LOG_STDIO_CAPTURED=1
                 export LOG_FILE LOG_TO_STDERR LOG_STDIO_CAPTURED
-                if [[ "${use_common_args}" -eq 1 ]]; then
+                unset PARALLEL_STEP_CALLBACK
+                if [[ -n $callback ]]; then
+                    ( set -e; "$callback" "$step" "${args[@]}" )
+                elif [[ "${use_common_args}" -eq 1 ]]; then
                     ( set -e; "$step" "${args[@]}" )
                 else
                     ( set -e; "${step_command[@]}" )
@@ -346,9 +356,9 @@ run_parallel_functions() {
 
     if [[ "${PARALLEL_DEFER_COMPLETION:-0}" != "1" ]]; then
         if [[ "$failed" -eq 0 ]]; then
-            log_summary "$summary_log" SUCCESS 'COMPLETE %s: all steps finished successfully' "$action"
+            log_summary "$summary_log" SUCCESS 'COMPLETE %s: all %s finished successfully' "$action" "$unit"
         else
-            log_summary "$summary_log" ERROR 'COMPLETE %s: failed steps=%s' "$action" "${failed_steps[*]}"
+            log_summary "$summary_log" ERROR 'COMPLETE %s: failed %s=%s' "$action" "$unit" "${failed_steps[*]}"
         fi
         log_summary "$summary_log" INFO 'Summary log: %s' "$summary_log"
     fi
@@ -360,6 +370,7 @@ apply_patches() {
     local LC_ALL=C
     local patch_dir="$1"
     local src_dir="$2"
+    build_assert_workspace_path "$src_dir" || return
 
     if [[ -z "$patch_dir" || -z "$src_dir" ]]; then
         error "apply_patches: patch_dir and src_dir cannot be empty!"
@@ -473,6 +484,7 @@ apply_patches() {
 clone_repository() {
     local repo_url="$1"
     local src_dir="$2"
+    build_assert_workspace_path "$src_dir" || return
 
     if [[ -z "$repo_url" || -z "$src_dir" ]]; then
         error "clone_repository: repo_url and src_dir cannot be empty!"
@@ -483,7 +495,11 @@ clone_repository() {
         info "SKIP: repo exists: ${src_dir}"
     else
         info "CLONE: ${repo_url} -> ${src_dir}"
-        git clone --depth=1 "${repo_url}" "${src_dir}"
+        if [[ -n ${BUILD_SOURCE_CACHE_DIR:-} ]]; then
+            python3 "$TGOS_BUILD_LIB_DIR/git-source-cache.py" clone "$src_dir" "$repo_url"
+        else
+            git clone --depth=1 "${repo_url}" "${src_dir}"
+        fi
     fi
 }
 
@@ -491,8 +507,13 @@ checkout_ref() {
     # Usage: checkout_git_ref <repo_path> <ref>
     local repo_path="$1"
     local ref="$2"
+    build_assert_workspace_path "$repo_path" || return
     local fetch_attempt
     local target="$ref"
+    if [[ -n ${BUILD_SOURCE_CACHE_DIR:-} ]] && ! git -C "$repo_path" cat-file -e "${ref}^{tree}" 2>/dev/null; then
+        target=$(python3 "$TGOS_BUILD_LIB_DIR/git-source-cache.py" ref "$repo_path" "$ref") || return
+        ref=$target
+    fi
     if [ ! -d "$repo_path/.git" ]; then
         error "$repo_path is not a git repository"
         return 1
