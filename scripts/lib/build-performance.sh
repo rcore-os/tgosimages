@@ -158,11 +158,16 @@ build_task() (
 # Callers must serialize use of shared source trees through the build phase.
 prepare_patched_source() {
     local source=$1 ref=$2 patches=$3
+    build_assert_workspace_path "$source" || return
     local state_dir="$source/.patch_stamps" identity current base
     python3 "$TGOS_BUILD_LIB_DIR/build_inputs.py" --protect-cmake-outputs "$source" || return
     if ! base=$(git -C "$source" rev-parse --verify "${ref}^{commit}" 2>/dev/null); then
-        git -C "$source" fetch --quiet --no-tags --depth=1 origin "$ref" || return
-        base=$(git -C "$source" rev-parse --verify 'FETCH_HEAD^{commit}') || return
+        if [[ -n ${BUILD_SOURCE_CACHE_DIR:-} ]]; then
+            base=$(bash "$TGOS_BUILD_LIB_DIR/git-source-cache.sh" ref "$source" "$ref") || return
+        else
+            git -C "$source" fetch --quiet --no-tags --depth=1 origin "$ref" || return
+            base=$(git -C "$source" rev-parse --verify 'FETCH_HEAD^{commit}') || return
+        fi
         ref=$base
     fi
     identity=$(python3 "$TGOS_BUILD_LIB_DIR/build_inputs.py" "$patches") || return

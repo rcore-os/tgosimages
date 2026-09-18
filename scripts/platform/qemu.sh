@@ -3,7 +3,26 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+source "${ROOT_DIR}/scripts/lib/build-workspace.sh"
+if test "${BASH_SOURCE[0]}" = "$0"; then
+    qemu_help_only=0
+    for qemu_argument in "$@"; do
+        case $qemu_argument in help|-h|--help) qemu_help_only=1 ;; esac
+    done
+    case ${1:-} in
+        aarch64|riscv64|x86_64|loongarch64)
+            # Help does not need a build workspace or take the build lock.
+            if [[ $# -gt 1 && $qemu_help_only == 0 && ${2:-} != --* &&
+                  ${BUILD_WORKSPACE_NAME:-} != "qemu-$1" ]]; then
+                build_workspace_run "qemu-$1" bash "$0" "$@"
+                exit $?
+            fi
+            ;;
+    esac
+    unset qemu_help_only qemu_argument
+fi
+build_paths_init "$ROOT_DIR"
 
 # Repository URLs
 
@@ -793,11 +812,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                 shift 1 || true
             fi
 
-            run_sequential_targets platform "qemu ${OS}" qemu_batch_target \
+            PARALLEL_STEP_CALLBACK=qemu_batch_target run_parallel_functions "qemu ${OS}" \
                 qemu-aarch64 qemu-riscv64 qemu-x86_64 qemu-loongarch64 -- "${OS}" "$@"
             ;;
         clean)
-            run_sequential_targets platform "qemu clean" qemu_batch_target \
+            PARALLEL_STEP_CALLBACK=qemu_batch_target run_parallel_functions "qemu clean" \
                 qemu-aarch64 qemu-riscv64 qemu-x86_64 qemu-loongarch64 -- clean
             ;;
         *)

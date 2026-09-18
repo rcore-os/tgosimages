@@ -90,7 +90,7 @@ These scripts generate filesystem contents or filesystem images.
 
 For QEMU:
 
-- `qemu` runs `qemu-aarch64`, `qemu-x86_64`, `qemu-riscv64`, and `qemu-loongarch64` sequentially
+- `qemu` runs `qemu-aarch64`, `qemu-x86_64`, `qemu-riscv64`, and `qemu-loongarch64` in isolated workspaces, concurrently within the shared build budget
 - `qemu-aarch64`, `qemu-riscv64`, `qemu-x86_64`, and `qemu-loongarch64` are thin wrappers over `scripts/platform/qemu.sh`
 
 `scripts/platform/qemu.sh` currently supports:
@@ -562,7 +562,13 @@ Detailed parallel compiler output stays in `steps/`; serial preparation and imag
 
 Set `LOG_DIR=/path/to/logs` to change the log root. An explicit `LOG_FILE` preserves caller-managed logging; `LOG_CREATE_DEFAULT_FILE=0` disables automatic invocation logs (parallel step logs are still created). Existing logs are neither moved nor removed.
 
-`platform all` and `platform qemu all` share the same batch progress display: `START`, `STARTED`, `RUNNING` (every 60 seconds by default), `DONE` / `FAILED`, and `COMPLETE`. Targets retain their sequential order; a failure stops the batch and prints the last 20 log lines. Batch directories contain `summary.log`, `<target>.log`, and `steps/`; verbose compiler output goes to target logs. Set `PARALLEL_HEARTBEAT_INTERVAL` to adjust the progress interval in seconds.
+`platform all` and `platform qemu all` share the same batch progress display: `START`, `STARTED`, `RUNNING` (every 60 seconds by default), `DONE` / `FAILED`, and `COMPLETE`. Board targets remain sequential; the QEMU phase runs architectures concurrently and aggregates failures after collecting all results. Failed tasks print the last 20 log lines. Batch directories contain `summary.log`, `<target>.log`, and `steps/`; verbose compiler output goes to target logs. Set `PARALLEL_HEARTBEAT_INTERVAL` to adjust the progress interval in seconds.
+
+Console messages use cyan for progress, green for success, yellow for warnings,
+and red for failures; QEMU architecture names have distinct fixed colors.
+`LOG_COLOR=auto` (default) colors terminals only and honors `NO_COLOR`.
+Use `LOG_COLOR=always` to force colors or `LOG_COLOR=never` to disable them.
+Framework log files remain plain text.
 
 ### Shared log display
 
@@ -571,3 +577,13 @@ Host build entry points (platform, os, rootfs, apps, release) and helper scripts
 ### Shared build acceleration
 
 Common build adapters manage compiler budgets, caches and timing. Explicit input declarations enable patch-aware source preparation and whole-task caching. See the [build framework guide](docs/build-framework.md) for target integration, configuration and invalidation rules.
+
+```bash
+BUILD_JOBS=16 BUILD_PARALLEL_TASKS=4 ./build.sh platform qemu all
+```
+
+Architecture workspaces live under `build/workspaces/qemu-<arch>/`. Direct
+single-architecture commands use the same workspace and lock as batch builds.
+Git downloads are shared under `build/.cache/git/`; checkouts and patch states
+are independent. Existing build directories are preserved, so the first run in
+the new workspace performs a fresh preparation.

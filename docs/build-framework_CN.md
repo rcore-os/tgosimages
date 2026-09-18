@@ -10,13 +10,14 @@
 | --- | --- | --- |
 | 上游源码 | `build/sources/<组件>/` | 新组件优先使用；已有源码路径可继续兼容 |
 | 中间产物 | `build/objects/<组件>/<目标或架构>/` | 独立于源码目录；配置或工具链不兼容时进一步分目录 |
+| 任务工作区 | `build/workspaces/<任务>/` | 保存任务独占的源码副本和构建目录，整次任务持有锁 |
 | 编译及任务缓存 | `build/.cache/` | 由公共层管理，可通过 `BUILD_CACHE_DIR` 调整 |
 | 最终镜像/产物 | `IMAGES/<目标>/` | 只放供运行、打包或交付的产物 |
 | 构建日志 | `logs/<类别>/` | 使用公共日志入口 |
 
 **所有目标不得把 `.o`、CMake/Ninja 构建目录、临时打包文件或最终镜像写进源码 checkout。** 即使增加 `.gitignore`，也不能替代目录隔离。同一源码的不同架构、板型和不兼容配置不得共用中间产物目录。
 
-对于支持 out-of-tree 构建的工具，使用 CMake 的 `-S/-B` 或项目支持的 Make `O=`。若上游确实只支持 in-tree 构建，应在 `build/objects/` 下创建该任务独占的源码副本或工作树；不要让多个任务修改下载缓存中的共享源码。
+对于支持 out-of-tree 构建的工具，使用 CMake 的 `-S/-B` 或项目支持的 Make `O=`。若上游确实只支持 in-tree 构建，应在该任务的独占工作区中创建源码副本或工作树；不要让多个任务修改下载缓存中的共享源码。
 
 ### 构建工具接入同一套目录规则
 
@@ -62,6 +63,18 @@ Make 适配器必须保留项目选择的编译器，不能根据 `CROSS_COMPILE
 此预算不会限制其他独立构建进程、远程 SDK 服务器或不使用公共入口的外部脚本。用户显式传入的工具级线程参数也可能覆盖默认值，新增目标不应依赖这些覆盖。
 
 运行 shell 函数步骤时，不要把 `run_parallel_functions` 或其外层构建函数放入 `if`、`!`、`&&`、`||` 条件列表并依赖步骤内部的 `set -e`；Bash 会在这种上下文中抑制 errexit。需接收失败结果时，应暂时关闭调用层的 errexit，直接调用运行器、记录退出码，再恢复原设置，参考 QEMU 和 Orange Pi 的调用方式。汇总器还必须处理子进程未写状态文件就退出的情况，使用进程退出码报告失败。
+
+### 跨架构任务接入
+
+`platform qemu all` 的四个架构通过公共调度器并行执行，各架构内部再分配 OS/rootfs 步骤预算。`platform all` 的 QEMU 阶段也使用这一入口。所有架构完成后汇总结果，任意失败使整组返回非零；需要串行时设置 `BUILD_PARALLEL_TASKS=1`。
+
+新增隔离任务通过 `build_workspace_run <任务标识> <可执行命令> [参数...]` 启动。工作区锁覆盖完整命令，公共层向全部子进程传递 `BUILD_WORK_DIR`。各脚本必须通过 `build_paths_init` 初始化 `BUILD_DIR`，不能自行回到仓库根目录的 `build/`。
+
+QEMU 使用 `build/workspaces/qemu-<架构>/`，单架构命令与批量命令使用相同工作区和锁。默认最终产物仍按架构写入 `IMAGES/`。显式指定到工作区之外的可变源码目录会被拒绝，防止架构间重新共享 checkout；只读工具链可以共享。
+
+Git 下载缓存在 `${BUILD_CACHE_DIR}/git/` 中，通过锁串行更新，每个工作区拥有独立 Git 对象、checkout 和 patch 状态，不通过 alternates 或硬链接依赖缓存。新 clone 会同步上游默认分支；明确 commit 的下载可以复用。下载缓存独立于编译/整项任务缓存开关。
+
+旧构建目录不迁移、不删除；新工作区首次运行会重新准备源码。执行 `cleanall` 前应停止构建，因为它还会删除默认工作区及其锁。
 
 ## 4. 补丁是构建输入，旧标记不是证明
 
@@ -126,8 +139,13 @@ build_task "kernel-$arch" \
 | `BUILD_CACHE=0` | 关闭框架编译缓存及整项任务缓存 |
 | `BUILD_CACHE_DIR` | 缓存根目录，默认 `build/.cache` |
 | `BUILD_REBUILD=1` | 跳过整项任务命中检查，成功后更新记录 |
+| `BUILD_WORKSPACE_ROOT` | 工作区根目录，默认 `build/workspaces` |
+| `BUILD_SOURCE_CACHE_DIR` | Git 下载缓存，默认 `${BUILD_CACHE_DIR}/git` |
+| `LOG_COLOR` | `auto` 自动终端着色、`always` 强制着色、`never` 关闭 |
 
 保留现有 `CCACHE_DIR`、CMake launcher、`CARGO_BUILD_JOBS` 和 `RUSTC_WRAPPER` 等显式覆盖。缺少 ccache/sccache 时回退到普通编译。
+
+终端颜色约定：进度青色、成功绿色、警告黄色、失败红色；QEMU 架构名使用固定的不同颜色。`auto` 尊重 `NO_COLOR` 和 `TERM=dumb`。框架先保存纯文本日志，再对终端显示着色；子任务捕获流不加颜色，第三方工具原始输出不重新格式化。
 
 普通目标 `clean` 应只清理该目标拥有的构建产物，不清理其他目标和公共缓存。`build.sh cleanall` 会删除整个 `build/`；若需要跨 cleanall 保留缓存，将 `BUILD_CACHE_DIR` 设置在其外部。
 
@@ -140,6 +158,8 @@ build_task "kernel-$arch" \
 公共回归入口：`bash scripts/tests/build-performance.sh`。它包含真实 Make/CMake 编译、线程预算、任务并发、缓存失效和补丁生命周期测试。
 
 边界回归入口：`python3 scripts/tests/build-review-regressions.py`，覆盖编译器选择、异常进程退出、失败传播、文件类型区分及构建期间工具变化。
+
+跨架构回归入口：`python3 scripts/tests/qemu-parallel.py`，通过本地 Git 仓库验证真实调度重叠、独立补丁/配置、共享下载、并发上限、失败汇总和同架构互斥。终端颜色与日志文件隔离由边界回归测试覆盖。
 
 ## 附录：Zephyr 迁移案例
 

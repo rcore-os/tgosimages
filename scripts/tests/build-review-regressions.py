@@ -2,6 +2,8 @@
 """Regression checks for compiler selection, worker exits and cache identity."""
 import importlib.util
 import os
+import errno
+import pty
 from pathlib import Path
 import signal
 import shutil
@@ -39,7 +41,7 @@ class ReviewRegressions(unittest.TestCase):
         self.env = dict(os.environ, LOG_CREATE_DEFAULT_FILE='0', BUILD_JOBS='2',
                         BUILD_CACHE_DIR=str(self.work / 'cache'))
         for key in ('LOG_FILE', 'LOG_STDIO_CAPTURED', 'CC', 'CROSS_COMPILE',
-                    'CCACHE_DISABLE', 'BUILD_CACHE', 'TGOS_BUILD_JOB_BUDGET'):
+                    'CCACHE_DISABLE', 'BUILD_CACHE', 'TGOS_BUILD_JOB_BUDGET', 'LOG_COLOR', 'NO_COLOR'):
             self.env.pop(key, None)
 
     def shell(self, body):
@@ -155,6 +157,60 @@ all
                             'bash "$2/driver.sh" "$2/tool" "$2/output"')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(list((self.work / 'cache/tasks').glob('*.json')))
+
+    def test_forced_console_color_keeps_framework_logs_plain(self):
+        fixture = self.work / 'repo'
+        (fixture / 'scripts/platform').mkdir(parents=True)
+        shutil.copytree(ROOT / 'scripts/lib', fixture / 'scripts/lib')
+        script = fixture / 'scripts/platform/color.sh'
+        env = dict(self.env, LOG_COLOR='always', LOG_CREATE_DEFAULT_FILE='1')
+        # Both stdio owners must color the console after saving plain logs.
+        for entry in ('platform-log', 'utils'):
+            with self.subTest(entry=entry):
+                init = 'platform_log_init "$@"\n' if entry == 'platform-log' else ''
+                script.write_text('#!/bin/bash\nset -eu\n'
+                                  'ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd -P)\n'
+                                  f'source "$ROOT_DIR/scripts/lib/{entry}.sh"\n' + init +
+                                  "info 'STARTED qemu-aarch64'\nsuccess 'DONE qemu-x86_64'\n")
+                result = run(['bash', str(script), 'all'], env=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('\x1b[', result.stdout)
+                logs = list((fixture / 'logs').rglob('*.log'))
+                self.assertTrue(logs)
+                for path in logs:
+                    self.assertNotIn('\x1b', path.read_text())
+
+    def test_auto_color_requires_terminal_and_respects_no_color(self):
+        command = ['bash', '-c', 'source "$1/scripts/lib/log.sh"; '
+                   'log_summary "$2/summary.log" ERROR "FAILED qemu-aarch64"',
+                   '_', str(ROOT), str(self.work)]
+        result = run(command, env=dict(self.env, TERM='xterm'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('\x1b', result.stdout)
+        for disabled in (False, True):
+            master, slave = pty.openpty()
+            env = dict(self.env, TERM='xterm')
+            if disabled:
+                env['NO_COLOR'] = ''
+            try:
+                process = subprocess.Popen(command, env=env, stdout=slave, stderr=slave)
+                os.close(slave)
+                self.assertEqual(process.wait(timeout=5), 0)
+                output = b''
+                while True:
+                    try:
+                        chunk = os.read(master, 65536)
+                    except OSError as exc:
+                        if exc.errno == errno.EIO:
+                            break
+                        raise
+                    if not chunk:
+                        break
+                    output += chunk
+            finally:
+                os.close(master)
+            self.assertEqual(b'\x1b[' in output, not disabled)
+        self.assertNotIn('\x1b', (self.work / 'summary.log').read_text())
 
 
 if __name__ == '__main__':

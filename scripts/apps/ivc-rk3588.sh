@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 TGOSIMAGES_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="${TGOSIMAGES_ROOT}/build"
+source "${TGOSIMAGES_ROOT}/scripts/lib/build-paths.sh"
+build_paths_init "$TGOSIMAGES_ROOT"
 
 source "${TGOSIMAGES_ROOT}/scripts/lib/utils.sh"
 

@@ -39,28 +39,31 @@ platform_log_init() {
     run_dir=$(mktemp -d "${log_root}/${name}-${action}-$(date '+%Y%m%d-%H%M%S')-XXXXXX")
     local summary=${run_dir}/summary.log full_log=${run_dir}/build.log
     local statuses status
-    log_format INFO 'START %s %s' "$name" "$action" | tee -a "$summary" "$full_log"
-    log_format INFO 'Log directory: %s' "$run_dir" | tee -a "$summary" "$full_log"
+    log_format INFO 'START %s %s' "$name" "$action" | tee -a "$summary" "$full_log" | log_render
+    log_format INFO 'Log directory: %s' "$run_dir" | tee -a "$summary" "$full_log" | log_render
 
     # A fresh Bash retains the script's errexit semantics; wait for tee before
     # reporting completion so the log is fully written when the command exits.
     set +e
     PLATFORM_LOG_RUN_DIR="$run_dir" LOG_FILE="$full_log" \
         LOG_STDIO_CAPTURED=1 LOG_TO_STDERR=1 \
-        bash "$0" "$@" 2>&1 | tee -a "$full_log"
+        bash "$0" "$@" 2>&1 | tee -a "$full_log" | log_render
     statuses=("${PIPESTATUS[@]}")
     set -e
     status=${statuses[0]}
     if ((status == 0 && statuses[1] != 0)); then
         status=${statuses[1]}
     fi
+    if ((status == 0 && statuses[2] != 0)); then
+        status=${statuses[2]}
+    fi
     if ((status == 0)); then
         log_format SUCCESS 'COMPLETE %s %s: all stages finished successfully (status=0)' \
-            "$name" "$action" | tee -a "$summary" "$full_log"
+            "$name" "$action" | tee -a "$summary" "$full_log" | log_render
     else
         log_format ERROR 'FAILED %s %s: status=%s; see %s and steps/' \
             "$name" "$action" "$status" "$full_log" |
-            tee -a "$summary" "$full_log"
+            tee -a "$summary" "$full_log" | log_render
     fi
     exit "$status"
 }

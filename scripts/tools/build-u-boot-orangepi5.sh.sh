@@ -4,7 +4,8 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/log.sh"
 source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/build-performance.sh"
 ROOT_DIR=$(cd "$TGOS_BUILD_LIB_DIR/../.." && pwd -P)
-BUILD_DIR="$ROOT_DIR/build"
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 ########################################
 # Config
