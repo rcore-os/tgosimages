@@ -172,6 +172,7 @@ starry_build() {
 
     build_cmd=(cargo xtask starry build -c "${build_config}")
     build_cmd+=("${STARRY_ARGS[@]}")
+    ensure_musl_toolchain aarch64
     info "Building StarryOS from ${STARRY_REF}"
     info "EXEC: ${build_cmd[*]}"
     (

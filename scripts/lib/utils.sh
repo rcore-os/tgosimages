@@ -110,6 +110,29 @@ warn() {
     log "⚠️  $1"
 }
 
+# Prepend the musl cross toolchain bin dir to PATH when <arch>-linux-musl-gcc is absent
+ensure_musl_toolchain() {
+    local arch="${1:-aarch64}"
+    local gcc="${arch}-linux-musl-gcc"
+    local root candidate
+
+    if command -v "${gcc}" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    for root in "${MUSL_TOOLCHAIN_ROOT:-}" /env /opt /usr/local; do
+        [[ -n "${root}" ]] || continue
+        candidate="${root}/${arch}-linux-musl-cross/bin"
+        if [[ -x "${candidate}/${gcc}" ]]; then
+            export PATH="${candidate}:${PATH}"
+            info "Using musl toolchain: ${candidate}"
+            return 0
+        fi
+    done
+
+    die "${gcc} not found on PATH; install it (e.g. extract to /env/${arch}-linux-musl-cross) or set MUSL_TOOLCHAIN_ROOT"
+}
+
 report_build_arch() {
     local arch=$1
     info "Building architecture: ${arch}"

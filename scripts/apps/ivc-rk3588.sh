@@ -193,6 +193,7 @@ print_build_inputs() {
 build_user_apps() {
     [[ "${SKIP_USER_APPS}" == "0" ]] || return 0
 
+    ensure_musl_toolchain aarch64
     info "Building Starry userspace AXIVC programs from ivc-sdk"
     make -C "${IVC_SDK_DIR}" clean-linux BUILD_DIR="${IVC_BUILD_DIR}"
     make -C "${IVC_SDK_DIR}" all BUILD_DIR="${IVC_BUILD_DIR}"
