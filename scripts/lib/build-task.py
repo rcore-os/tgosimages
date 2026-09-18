@@ -124,6 +124,8 @@ def main():
             try:
                 if record.get('outputs') == manifests(outputs):
                     log('SUCCESS', f'CACHE HIT {args.name}: verified inputs and outputs')
+                    if os.environ.get('TGOS_TASK_CACHE_RESULT'):
+                        Path(os.environ['TGOS_TASK_CACHE_RESULT']).write_text('hit\n')
                     return 0
                 reason = 'output content changed'
             except (OSError, ValueError):

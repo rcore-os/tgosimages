@@ -2,6 +2,11 @@
 
 TGOS_BUILD_LIB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 
+# New target adapters declare a graph instead of nesting worker pools.
+build_graph() {
+    python3 "${TGOS_BUILD_LIB_DIR}/build-graph.py" "$@"
+}
+
 # The budget belongs to the invocation, not to each concurrently running tool.
 build_jobs() {
     local jobs=${BUILD_JOBS:-$(nproc)} budget=${TGOS_BUILD_JOB_BUDGET:-}

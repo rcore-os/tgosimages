@@ -67,6 +67,7 @@ truncate -s 24M "$nested"
 mkfs.ext4 -q -F "$nested"
 _rootfs_inject_tree_via_debugfs "$nested" "$work/nested-tree"
 cp "$nested" "$work/outer-tree/guest/rootfs-x86_64-busybox.img"
+cp "$nested" "$work/outer-tree/guest/rootfs-x86_64-busybox-2.img"
 printf platform >"$work/outer-tree/guest/platform/marker"
 find "$work/outer-tree" -type d -o -type f | xargs touch -d @1700000000
 
@@ -109,6 +110,7 @@ _rootfs_inject_tree_via_debugfs "$bad_nested" "$work/nested-tree"
 bad_tree="$work/bad-outer-tree"
 mkdir -p "$bad_tree/guest" "$work/bad-images"
 cp "$bad_nested" "$bad_tree/guest/rootfs-x86_64-busybox.img"
+cp "$bad_nested" "$bad_tree/guest/rootfs-x86_64-busybox-2.img"
 find "$bad_tree" -type d -o -type f | xargs touch -d @1700000000
 bad_outer="$work/bad-images/rootfs-x86_64-busybox.img"
 truncate -s 56M "$bad_outer"
@@ -129,6 +131,7 @@ _rootfs_inject_tree_via_debugfs "$recursive_nested" "$work/nested-tree"
 recursive_tree="$work/recursive-outer-tree"
 mkdir -p "$recursive_tree/guest" "$work/recursive-images"
 cp "$recursive_nested" "$recursive_tree/guest/rootfs-x86_64-busybox.img"
+cp "$recursive_nested" "$recursive_tree/guest/rootfs-x86_64-busybox-2.img"
 find "$recursive_tree" -type d -o -type f | xargs touch -d @1700000000
 recursive_outer="$work/recursive-images/rootfs-x86_64-busybox.img"
 truncate -s 56M "$recursive_outer"

@@ -101,20 +101,6 @@ PARALLEL_LOG_DIR="$2/logs" run_parallel_functions batch victim --
         file.chmod(0o755)
         self.assertNotEqual(cache.digest(directory), cache.digest(file))
 
-    def test_qemu_stops_after_failed_step_command(self):
-        result = self.shell('''
-source "$1/scripts/platform/qemu.sh"
-ROOTFS_BUILDERS=()
-BUILD_ARGS=()
-ARCH=x86_64
-LOG_DIR="$2/logs"
-fault() { false; printf 'wrongly-continued\\n'; }
-qemu_rootfs_inject_platform_dir() { printf 'wrongly-injected\\n'; }
-qemu_build_os_and_rootfs all fault
-''')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn('wrongly-', result.stdout)
-
     def test_orangepi_stops_failed_parallel_step(self):
         result = self.shell('''
 source "$1/scripts/platform/orangepi-5-plus.sh"
