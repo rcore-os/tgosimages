@@ -273,7 +273,7 @@ for nondefault builds.
 
 ### Rootfs test plugins
 
-Executable `scripts/rootfs-tests/plugins/*.sh` files form the extension point.
+Executable `scripts/rootfs-test-plugins/plugins/*.sh` files form the extension point.
 A plugin implements two commands:
 
 - `describe` prints exactly `name=`, `arches=`, `rootfs=`, and `scopes=` lines.

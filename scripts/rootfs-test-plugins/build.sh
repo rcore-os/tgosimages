@@ -6,7 +6,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 source "$script_dir/lib/common.sh"
 
 die() {
-    error "rootfs-tests: $*"
+    error "rootfs-test-plugins: $*"
     exit 1
 }
 
