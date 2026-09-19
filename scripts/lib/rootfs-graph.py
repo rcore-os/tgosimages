@@ -7,7 +7,7 @@ import subprocess
 
 LIB = Path(__file__).resolve().parent
 ROOT = LIB.parents[1]
-TEST_BUILD = ROOT / 'scripts/rootfs-tests/build.sh'
+TEST_BUILD = ROOT / 'scripts/rootfs-test-plugins/build.sh'
 
 
 def option(args, name):

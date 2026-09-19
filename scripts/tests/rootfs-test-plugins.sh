@@ -2,8 +2,8 @@
 set -euo pipefail
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-build_script="$repo_root/scripts/rootfs-tests/build.sh"
-common_script="$repo_root/scripts/rootfs-tests/lib/common.sh"
+build_script="$repo_root/scripts/rootfs-test-plugins/build.sh"
+common_script="$repo_root/scripts/rootfs-test-plugins/lib/common.sh"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
@@ -497,7 +497,7 @@ run_ok 'default plugin directory discovery succeeds' \
         --arch aarch64 --rootfs alpine --scope outer
 default_listing=$(cat "$work/stdout")
 run_ok 'explicit repo plugin directory matches the default' \
-    env ROOTFS_TEST_PLUGIN_DIR="$repo_root/scripts/rootfs-tests/plugins" bash "$build_script" list \
+    env ROOTFS_TEST_PLUGIN_DIR="$repo_root/scripts/rootfs-test-plugins/plugins" bash "$build_script" list \
         --arch aarch64 --rootfs alpine --scope outer
 assert_eq "$default_listing" "$(cat "$work/stdout")" 'default plugin directory resolves below the framework'
 
@@ -593,7 +593,7 @@ esac
 
 # The built-in guest plugins expose stable metadata and can build from checked,
 # deliberately tiny offline source archives without contacting the network.
-builtin_plugins="$repo_root/scripts/rootfs-tests/plugins"
+builtin_plugins="$repo_root/scripts/rootfs-test-plugins/plugins"
 for plugin in cyclictest lmbench iozone; do
     run_ok "$plugin describes its guest-only capabilities" "$builtin_plugins/$plugin.sh" describe
     assert_eq "name=$plugin
@@ -958,7 +958,7 @@ run_fail 'interrupted plugin extraction preserves failure' env PATH="$fault_bin:
 [[ -z $(find "$interrupted_build/sources" -mindepth 1 -type d -name '.*' -print -quit) ]] || fail 'interrupted extraction leaked a temporary directory'
 
 # Builder metadata is pinned and includes inspectable LoongArch provenance.
-builder_script="$repo_root/scripts/rootfs-tests/alpine-builder.sh"
+builder_script="$repo_root/scripts/rootfs-test-plugins/alpine-builder.sh"
 run_ok 'LoongArch builder description is checksum-pinned and package-set-addressed' \
     bash "$builder_script" describe --arch loongarch64
 builder_description=$(cat "$work/stdout")

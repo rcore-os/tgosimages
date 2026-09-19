@@ -6,7 +6,7 @@ repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 # shellcheck source=../lib/rootfs-compose.sh
 source "$repo_root/scripts/lib/rootfs-compose.sh"
 # shellcheck source=../rootfs-tests/lib/common.sh
-source "$repo_root/scripts/rootfs-tests/lib/common.sh"
+source "$repo_root/scripts/rootfs-test-plugins/lib/common.sh"
 
 image_dir="$repo_root/IMAGES/rootfs"
 selected_arch=''
@@ -207,7 +207,7 @@ for outer in "${images[@]}"; do
 
     tests=$guest_tests
     if [[ $tests == all ]]; then
-        tests=$("$repo_root/scripts/rootfs-tests/build.sh" list --arch "$arch" --rootfs "$rootfs" --scope guest) ||
+        tests=$("$repo_root/scripts/rootfs-test-plugins/build.sh" list --arch "$arch" --rootfs "$rootfs" --scope guest) ||
             die "cannot list guest plugins for $arch/$rootfs"
         tests=${tests//$'\n'/,}
         tests=${tests%,}

@@ -46,7 +46,7 @@ mkfs_usage() {
     printf '  --out_dir <dir>               Output directory (default images: IMAGES/rootfs/{initramfs-<arch>-busybox.cpio.gz,rootfs-<arch>-busybox.img})\n'
     printf '  --guest <dir>                 Guest directory to copy into rootfs /guest\n'
     printf '  --outer-tests <list>          Tests installed in the outer image (default: none)\n'
-    printf '  --guest-tests <list>          Tests installed identically in both guest images (default from rootfs-tests)\n'
+    printf '  --guest-tests <list>          Tests installed identically in both guest images (default from rootfs-test-plugins)\n'
     printf '  --guest-free-size <size>      Free space reserved in each guest image (default: 256M)\n'
     printf '  --outer-free-size <size>      Free space reserved in outer image (default: 256M)\n'
     printf '\n'

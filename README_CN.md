@@ -272,7 +272,7 @@ QEMU 流程会透传相同选项：
 
 ### Rootfs 测试插件
 
-可执行的 `scripts/rootfs-tests/plugins/*.sh` 文件是扩展入口。插件实现两个命令：
+可执行的 `scripts/rootfs-test-plugins/plugins/*.sh` 文件是扩展入口。插件实现两个命令：
 
 - `describe` 必须恰好输出 `name=`、`arches=`、`rootfs=`、`scopes=` 四行。
 - `build --arch <arch> --rootfs <type> --scope <outer|guest> --output <empty-dir>`
