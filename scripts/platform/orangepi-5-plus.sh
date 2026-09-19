@@ -4,7 +4,11 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    source "${ROOT_DIR}/scripts/lib/platform-graph-entry.sh"
+fi
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 # Repository and directory configuration
 LINUX_REPO_URL="https://github.com/orangepi-xunlong/orangepi-build.git"
@@ -610,7 +614,13 @@ all() {
     # sequential. The remaining stages use independent source/work trees.
     linux "$@" || status=1
     rootfs "$@" || status=1
-    if ! run_parallel_functions "all" uboot arceos starry zephyr freertos -- "$@"; then
+    local parallel_status restore_errexit=0
+    [[ $- != *e* ]] || restore_errexit=1
+    set +e
+    run_parallel_functions "all" uboot arceos starry zephyr freertos -- "$@"
+    parallel_status=$?
+    if ((restore_errexit)); then set -e; fi
+    if ((parallel_status != 0)); then
         status=1
         warn "Some Orange Pi platform targets failed; continuing with AXIVC payload build"
     fi
@@ -638,6 +648,8 @@ uboot() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    source "${SCRIPT_DIR}/../lib/platform-log.sh"
+    platform_log_init "$@"
     cmd="${1:-}"
     if [[ -z "${cmd}" ]]; then
         cmd="all"

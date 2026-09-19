@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 source "${SCRIPT_DIR}/../lib/utils.sh"
 source "${SCRIPT_DIR}/../lib/rootfs-compose.sh"
@@ -58,8 +59,8 @@ debian_usage() {
     printf '  --output <path>               Output image path for single-arch build\n'
     printf '  --guest <dir>                 Guest directory to copy into rootfs /guest\n'
     printf '  --outer-tests <list>          Tests installed in the outer image (default: none)\n'
-    printf '  --guest-tests <list>          Tests installed in the nested guest image (default from rootfs-tests)\n'
-    printf '  --guest-free-size <size>      Free space reserved in nested guest image (default: 256M)\n'
+    printf '  --guest-tests <list>          Tests installed identically in both guest images (default from rootfs-test-plugins)\n'
+    printf '  --guest-free-size <size>      Free space reserved in each guest image (default: 256M)\n'
     printf '  --outer-free-size <size>      Free space reserved in outer image (default: 256M)\n'
     printf '  --img-size <size>             Output image size (default: 1G)\n'
     printf '  --debian <suite>              Debian suite (default: trixie)\n'
@@ -464,10 +465,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                 die "--output can only be used for a single architecture build"
             fi
 
-            for arch in "${DEBIAN_ARCHES[@]}"; do
-                DEBIAN_ARCH="${arch}"
+            debian_arch_target() {
+                DEBIAN_ARCH=$1
                 debian
-            done
+            }
+            run_sequential_targets rootfs "debian all" debian_arch_target "${DEBIAN_ARCHES[@]}" --
             ;;
         clean)
             debian_parse_args "$@"

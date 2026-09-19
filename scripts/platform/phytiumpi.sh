@@ -4,7 +4,11 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    source "${ROOT_DIR}/scripts/lib/platform-graph-entry.sh"
+fi
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 # Repository and directory configuration
 LINUX_REPO_URL="https://gitee.com/phytium_embedded/phytium-pi-os.git"
@@ -61,14 +65,14 @@ linux() {
         pushd "$LINUX_SRC_DIR" >/dev/null
         if [[ "$@" != *"clean"* ]]; then
             info "Configuring build: make phytiumpi_desktop_defconfig"
-            make phytiumpi_desktop_defconfig || {
+            build_make phytiumpi_desktop_defconfig || {
                 local status=$?
                 popd >/dev/null
                 return "$status"
             }
 
             info "Starting compilation: make $@"
-            make "$@" || {
+            build_make "$@" || {
                 local status=$?
                 popd >/dev/null
                 return "$status"
@@ -91,7 +95,7 @@ linux() {
             [[ -f "$linux_images_dir/rootfs.ext2" ]] && cp -f "$linux_images_dir/rootfs.ext2" "$PLATFORM_ROOTFS_DIR/phytiumpi.rootfs.ext2"
         else
             info "Cleaning: make $@"
-            make $@
+            build_make $@
             info "Removing ${linux_images_dir}/*"
             rm "${linux_images_dir}"/* || true
             rm -f "${PLATFORM_ROOTFS_DIR}/phytiumpi.img" || true
@@ -148,6 +152,8 @@ freertos() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    source "${SCRIPT_DIR}/../lib/platform-log.sh"
+    platform_log_init "$@"
     cmd="${1:-}"
     if [[ "${cmd}" =~ ^(all|clean)$ ]]; then
         LOG_CREATE_DEFAULT_FILE="${LOG_CREATE_DEFAULT_FILE:-0}"

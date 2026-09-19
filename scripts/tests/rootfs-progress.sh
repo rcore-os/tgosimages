@@ -7,7 +7,8 @@ trap 'rm -rf -- "$work"' EXIT
 fixture="$work/repo"
 mkdir -p "$fixture/scripts/lib" "$fixture/scripts/rootfs" "$fixture/scripts/os"
 cp "$repo_root/build.sh" "$fixture/build.sh"
-cp "$repo_root/scripts/lib/utils.sh" "$fixture/scripts/lib/utils.sh"
+cp "$repo_root/scripts/lib/"{utils,log,build-performance,build-paths,build-workspace}.sh "$fixture/scripts/lib/"
+cp "$repo_root/scripts/lib/log-color.awk" "$fixture/scripts/lib/"
 export PROGRESS_TEST_REPO="$repo_root"
 export LOG_DIR="$work/logs"
 export LOG_CREATE_DEFAULT_FILE=0 PARALLEL_HEARTBEAT_INTERVAL=1

@@ -4,7 +4,11 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    source "${ROOT_DIR}/scripts/lib/platform-graph-entry.sh"
+fi
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 # Repository and directory configuration
 LINUX_REPO_URL=""
@@ -141,6 +145,8 @@ rtthread() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    source "${SCRIPT_DIR}/../lib/platform-log.sh"
+    platform_log_init "$@"
     cmd="${1:-}"
     if [[ "${cmd}" =~ ^(all|clean)$ ]]; then
         LOG_CREATE_DEFAULT_FILE="${LOG_CREATE_DEFAULT_FILE:-0}"

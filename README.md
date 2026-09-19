@@ -90,7 +90,7 @@ These scripts generate filesystem contents or filesystem images.
 
 For QEMU:
 
-- `qemu` runs `qemu-aarch64`, `qemu-x86_64`, `qemu-riscv64`, and `qemu-loongarch64` sequentially
+- `qemu` runs `qemu-aarch64`, `qemu-x86_64`, `qemu-riscv64`, and `qemu-loongarch64` in isolated workspaces, concurrently within the shared build budget
 - `qemu-aarch64`, `qemu-riscv64`, `qemu-x86_64`, and `qemu-loongarch64` are thin wrappers over `scripts/platform/qemu.sh`
 
 `scripts/platform/qemu.sh` currently supports:
@@ -212,12 +212,13 @@ branches:
 clean base
 ├── guest branch + guest test plugins -> nested rootfs
 └── outer branch + outer test plugins + /guest platform payload
-    └── /guest/rootfs-<arch>-<type>.img (the nested rootfs)
+    ├── /guest/rootfs-<arch>-<type>.img (guest 1)
+    └── /guest/rootfs-<arch>-<type>-2.img (guest 2)
 ```
 
 Guest plugins install below `/guest-tests/<plugin>` in the nested image. The
 outer image contains platform payload below `/guest` and the raw nested image at
-`/guest/rootfs-<arch>-<type>.img`; outer-only platform files and `/opt/ltp` do
+the two paths above; outer-only platform files and `/opt/ltp` do
 not leak into the nested image. There is deliberately no generated
 `run-all.sh`: selecting tests packages their assets but does not choose a test
 order or run them automatically.
@@ -229,7 +230,19 @@ The defaults are:
 | Outer tests | `none` | `ltp` | `none` |
 | Nested guest tests | `cyclictest,lmbench,iozone` | `cyclictest,lmbench,iozone` | `cyclictest,lmbench,iozone` |
 
-Both nested and outer ext4 images reserve 256 MiB free space by default. The
+Both guests start with identical contents and use the same `--guest-tests`
+selection. Tests build once; the resulting filesystem is stored as two independent
+regular files, never hardlinks. Writes to one do not modify the other. The first
+keeps its legacy name; the second adds `-2`. These filesystem copies initially
+share a UUID; each guest mounts its own block device.
+
+In the `platform` graph, each test plugin is a leaf task. Outer/guest overlay
+joins wait for their plugins, followed by rootfs and platform-image nodes. This
+lets tests across architectures and platforms share the global budget, while a
+plugin failure blocks only its dependent image chain.
+
+Each guest and the outer ext4 image reserve 256 MiB free space by default;
+`--guest-free-size` applies separately to both guests. The
 uncompressed nested image is embedded as a raw file, so the raw outer image can
 grow substantially; release-time xz compression may still make the archive
 much smaller, but no compressed-size threshold is guaranteed. BusyBox ext4
@@ -260,7 +273,7 @@ for nondefault builds.
 
 ### Rootfs test plugins
 
-Executable `scripts/rootfs-tests/plugins/*.sh` files form the extension point.
+Executable `scripts/rootfs-test-plugins/plugins/*.sh` files form the extension point.
 A plugin implements two commands:
 
 - `describe` prints exactly `name=`, `arches=`, `rootfs=`, and `scopes=` lines.
@@ -404,6 +417,7 @@ root filesystem contains all platform payloads under `/guest` and the nested roo
 
 ```text
 /guest/rootfs-aarch64-orangepi-jammy.img
+/guest/rootfs-aarch64-orangepi-jammy-2.img
 └── /guest-tests/
     ├── cyclictest/
     ├── lmbench/
@@ -537,3 +551,44 @@ Before sending a pull request, please keep script style consistent and document 
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
+### Platform build logs
+
+`./build.sh platform ...` and direct `scripts/platform/*.sh` invocations share this layout:
+
+```text
+logs/platform/<platform>-<action>-<timestamp>-<unique-id>/
+├── build.log       # Serial stages, child output, and parallel scheduling
+├── summary.log     # Invocation start, final result, and exit status
+└── steps/          # Each parallel group's summary.log and per-step logs
+```
+
+Detailed parallel compiler output stays in `steps/`; serial preparation and image postprocessing output stays in `build.log`. Use the top-level `summary.log` for the overall result: completion of a parallel group does not imply successful postprocessing. QEMU directory names include the architecture and action. Help commands do not create default logs.
+
+Set `LOG_DIR=/path/to/logs` to change the log root. An explicit `LOG_FILE` preserves caller-managed logging; `LOG_CREATE_DEFAULT_FILE=0` disables automatic invocation logs (parallel step logs are still created). Existing logs are neither moved nor removed.
+
+`platform all` and `platform qemu all` share the same batch progress display: `START`, `STARTED`, `RUNNING` (every 60 seconds by default), `DONE` / `FAILED`, and `COMPLETE`. Board targets remain sequential; the QEMU phase runs architectures concurrently and aggregates failures after collecting all results. Failed tasks print the last 20 log lines. Batch directories contain `summary.log`, `<target>.log`, and `steps/`; verbose compiler output goes to target logs. Set `PARALLEL_HEARTBEAT_INTERVAL` to adjust the progress interval in seconds.
+
+Console messages use cyan for progress, green for success, yellow for warnings,
+and red for failures; QEMU architecture names have distinct fixed colors.
+`LOG_COLOR=auto` (default) colors terminals only and honors `NO_COLOR`.
+Use `LOG_COLOR=always` to force colors or `LOG_COLOR=never` to disable them.
+Framework log files remain plain text.
+
+### Shared log display
+
+Host build entry points (platform, os, rootfs, apps, release) and helper scripts share `scripts/lib/log.sh`. Messages use `[YYYY-MM-DD HH:MM:SS] [INFO|SUCCESS|WARN|ERROR|DEBUG] message`; `VERBOSE=1` enables DEBUG. Single tasks announce automatically created log files. Platform, OS, and rootfs batches share progress formatting and failure excerpts (last 20 lines), preserving sequential/parallel scheduling and rootfs architecture progress reporting. Raw tool output and machine-readable output retain their original form.
+
+### Shared build acceleration
+
+Common build adapters manage compiler budgets, caches and timing. Explicit input declarations enable patch-aware source preparation and whole-task caching. See the [build framework guide](docs/build-framework.md) for target integration, configuration and invalidation rules.
+
+```bash
+BUILD_JOBS=16 BUILD_PARALLEL_TASKS=4 ./build.sh platform qemu all
+```
+
+Architecture workspaces live under `build/workspaces/qemu-<arch>/`. Direct
+single-architecture commands use the same workspace and lock as batch builds.
+Git downloads are shared under `build/.cache/git/`; checkouts and patch states
+are independent. Existing build directories are preserved, so the first run in
+the new workspace performs a fresh preparation.

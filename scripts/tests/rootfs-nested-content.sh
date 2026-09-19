@@ -6,7 +6,7 @@ repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 # shellcheck source=../lib/rootfs-compose.sh
 source "$repo_root/scripts/lib/rootfs-compose.sh"
 # shellcheck source=../rootfs-tests/lib/common.sh
-source "$repo_root/scripts/rootfs-tests/lib/common.sh"
+source "$repo_root/scripts/rootfs-test-plugins/lib/common.sh"
 
 image_dir="$repo_root/IMAGES/rootfs"
 selected_arch=''
@@ -182,6 +182,13 @@ for outer in "${images[@]}"; do
     nested="$tmp_dir/nested-$arch-$rootfs.img"
     e2fsck -fn "$outer" >/dev/null || die "outer ext4 check failed: $outer"
     dump_required "$outer" "$nested_path" "$nested"
+    second_path="${nested_path%.img}-2.img"
+    second="$tmp_dir/nested-$arch-$rootfs-2.img"
+    dump_required "$outer" "$second_path" "$second"
+    cmp -s "$nested" "$second" || die "guest images have different initial contents: $outer"
+    first_inode=$(_rootfs_debugfs_stat "$outer" "$nested_path" required | awk '/^Inode:/ {print $2}')
+    second_inode=$(_rootfs_debugfs_stat "$outer" "$second_path" required | awk '/^Inode:/ {print $2}')
+    [[ $first_inode != "$second_inode" ]] || die "guest images share an inode: $outer"
     e2fsck -fn "$nested" >/dev/null || die "nested ext4 check failed: $nested_path"
 
     outer_free=$(rootfs_ext4_free_bytes "$outer") || die "cannot read outer free space: $outer"
@@ -200,7 +207,7 @@ for outer in "${images[@]}"; do
 
     tests=$guest_tests
     if [[ $tests == all ]]; then
-        tests=$("$repo_root/scripts/rootfs-tests/build.sh" list --arch "$arch" --rootfs "$rootfs" --scope guest) ||
+        tests=$("$repo_root/scripts/rootfs-test-plugins/build.sh" list --arch "$arch" --rootfs "$rootfs" --scope guest) ||
             die "cannot list guest plugins for $arch/$rootfs"
         tests=${tests//$'\n'/,}
         tests=${tests%,}

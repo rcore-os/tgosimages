@@ -18,7 +18,7 @@ repo_root=$(CDPATH= cd -- "$plugin_dir/../../.." && pwd)
 # shellcheck source=../lib/common.sh
 source "$plugin_dir/../lib/common.sh"
 
-die() { echo "$name: $*" >&2; exit 1; }
+die() { error "$name: $*"; exit 1; }
 plugin_work_dir=''
 numactl_work_dir=''
 cleanup_work() {
@@ -195,7 +195,7 @@ build_plugin() {
         builder_script=${ROOTFS_TEST_GLIBC_STATIC_BUILDER:-"$plugin_dir/../glibc-static-builder.sh"}
         builder_image=$(ROOTFS_TEST_BUILD_ROOT="$build_root" "$builder_script" prepare --arch "$arch")
         uid=$(id -u); gid=$(id -g)
-        jobs=${ROOTFS_TEST_BUILD_JOBS:-$(nproc)}
+        jobs=$(BUILD_JOBS="${ROOTFS_TEST_BUILD_JOBS:-${BUILD_JOBS:-}}" build_jobs) || return
         docker run --rm --platform linux/amd64 \
             -e TARGET_TRIPLET="$target_triplet" -e TARGET_CC="$target_cc" -e TARGET_AR="$target_ar" \
             -e BUILD_JOBS="$jobs" -e HOST_UID="$uid" -e HOST_GID="$gid" \

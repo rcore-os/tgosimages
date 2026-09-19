@@ -129,7 +129,7 @@ run_ok 'all builders reject missing option values before building' test_missing_
 
 test_defaults() (
     source "$repo_root/scripts/lib/rootfs-compose.sh"
-    ROOTFS_TEST_BUILD="$repo_root/scripts/rootfs-tests/build.sh"
+    ROOTFS_TEST_BUILD="$repo_root/scripts/rootfs-test-plugins/build.sh"
     rootfs_builder_load_test_options busybox A B C D
     [[ $A == none && $B == cyclictest,lmbench,iozone && $C == 256M && $D == 256M ]]
     rootfs_builder_load_test_options alpine E F G H
