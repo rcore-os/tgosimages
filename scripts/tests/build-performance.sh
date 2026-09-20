@@ -161,7 +161,7 @@ printf 'PASS: failed patch does not publish success and can retry\n'
 mkdir "$work/patched/legacy-build"
 printf 'CMAKE_CACHEFILE_DIR:INTERNAL=%s\n' "$work/patched/legacy-build" >"$work/patched/legacy-build/CMakeCache.txt"
 printf 'old object\n' >"$work/patched/legacy-build/keep.o"
-python3 "$TGOS_BUILD_LIB_DIR/build_inputs.py" --protect-cmake-outputs "$work/patched"
+python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --protect-cmake-outputs "$work/patched"
 prepare_patched_source "$work/patched" "$base" "$work/ordered"
 printf '\n' >>"$work/ordered/02.patch"
 prepare_patched_source "$work/patched" "$base" "$work/ordered"

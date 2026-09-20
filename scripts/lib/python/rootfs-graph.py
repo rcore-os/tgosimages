@@ -5,8 +5,9 @@ from pathlib import Path
 import re
 import subprocess
 
-LIB = Path(__file__).resolve().parent
-ROOT = LIB.parents[1]
+PYTHON_LIB = Path(__file__).resolve().parent
+SHELL_LIB = PYTHON_LIB.parent
+ROOT = PYTHON_LIB.parents[2]
 TEST_BUILD = ROOT / 'scripts/rootfs-test-plugins/build.sh'
 
 
@@ -69,14 +70,14 @@ def expand(task, prefix, arch, rootfs_type, args, guest_default=None):
             plugin_nodes.append(node_id)
             plugin_outputs.append(str(output))
             nodes.append(dict(id=node_id,
-                command=['bash', str(LIB / 'rootfs-test-node.sh'), str(output),
+                command=['bash', str(SHELL_LIB / 'rootfs-test-node.sh'), str(output),
                          'bash', str(TEST_BUILD), 'build', '--arch', arch, '--rootfs', rootfs_type,
                          '--scope', scope, '--tests', plugin],
                 env=dict(task['env']), resources=[]))
         merge_id = f'{safe_prefix}.overlay.{scope}'
         merged = root / f'{scope}-merged'
         nodes.append(dict(id=merge_id, deps=plugin_nodes,
-            command=['python3', str(LIB / 'rootfs-overlay-merge.py'), '--output', str(merged), *plugin_outputs],
+            command=['python3', str(PYTHON_LIB / 'rootfs-overlay-merge.py'), '--output', str(merged), *plugin_outputs],
             env=dict(task['env'])))
         merge_ids.append(merge_id)
         overlays[scope] = str(merged)

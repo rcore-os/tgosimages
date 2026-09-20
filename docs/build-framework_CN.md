@@ -78,7 +78,7 @@ ROC、EVM、RDK 的 Linux SDK 节点共用 `vendor-sdk` 互斥资源，当前图
 
 ### 公共任务声明
 
-`build_graph` 位于 `scripts/lib/build-performance.sh`；也可以直接执行 `python3 scripts/lib/build-graph.py graph.json --log-dir logs/my-run`。每次调用使用新的日志目录。
+`build_graph` 位于 `scripts/lib/build-performance.sh`；也可以直接执行 `python3 scripts/lib/python/build-graph.py graph.json --log-dir logs/my-run`。每次调用使用新的日志目录。
 
 ```json
 {

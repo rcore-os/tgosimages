@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-LIB = ROOT / 'scripts/lib'
+LIB = ROOT / 'scripts/lib/python'
 spec = importlib.util.spec_from_file_location('rootfs_graph', LIB / 'rootfs-graph.py')
 rootfs_graph = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rootfs_graph)

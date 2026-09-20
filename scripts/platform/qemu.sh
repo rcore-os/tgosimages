@@ -18,7 +18,7 @@ if test "${BASH_SOURCE[0]}" = "$0"; then
             x86_64:linux|x86_64:arceos|x86_64:all|\
             loongarch64:linux|loongarch64:arceos|loongarch64:all|\
             all:linux|all:arceos|all:zephyr|all:freertos|all:all|all:--*)
-                exec python3 "${ROOT_DIR}/scripts/lib/qemu-graph.py" "$@"
+                exec python3 "${ROOT_DIR}/scripts/lib/python/qemu-graph.py" "$@"
                 ;;
         esac
     fi

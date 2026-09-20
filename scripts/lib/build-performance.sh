@@ -4,7 +4,7 @@ TGOS_BUILD_LIB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 
 # New target adapters declare a graph instead of nesting worker pools.
 build_graph() {
-    python3 "${TGOS_BUILD_LIB_DIR}/build-graph.py" "$@"
+    python3 "${TGOS_BUILD_LIB_DIR}/python/build-graph.py" "$@"
 }
 
 # The budget belongs to the invocation, not to each concurrently running tool.
@@ -156,7 +156,7 @@ build_scons() (
 # The command is an executable, not an unevaluated shell string.
 build_task() (
     _build_prepare || exit
-    python3 "${TGOS_BUILD_LIB_DIR}/build-task.py" "$@"
+    python3 "${TGOS_BUILD_LIB_DIR}/python/build-task.py" "$@"
 )
 
 # Reuse source preparation only when the entire patched tree is verified.
@@ -165,7 +165,7 @@ prepare_patched_source() {
     local source=$1 ref=$2 patches=$3
     build_assert_workspace_path "$source" || return
     local state_dir="$source/.patch_stamps" identity current base
-    python3 "$TGOS_BUILD_LIB_DIR/build_inputs.py" --protect-cmake-outputs "$source" || return
+    python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --protect-cmake-outputs "$source" || return
     if ! base=$(git -C "$source" rev-parse --verify "${ref}^{commit}" 2>/dev/null); then
         if [[ -n ${BUILD_SOURCE_CACHE_DIR:-} ]]; then
             base=$(bash "$TGOS_BUILD_LIB_DIR/git-source-cache.sh" ref "$source" "$ref") || return
@@ -175,8 +175,8 @@ prepare_patched_source() {
         fi
         ref=$base
     fi
-    identity=$(python3 "$TGOS_BUILD_LIB_DIR/build_inputs.py" "$patches") || return
-    current=$(python3 "$TGOS_BUILD_LIB_DIR/build_inputs.py" --source "$source") || return
+    identity=$(python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" "$patches") || return
+    current=$(python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --source "$source") || return
     if [[ -f $state_dir/source.sha256 && $(<"$state_dir/source.sha256") == "$current" ]]; then
         if [[ -f $state_dir/base.commit && $(<"$state_dir/base.commit") == "$base" &&
               -f $state_dir/patch-set.sha256 && $(<"$state_dir/patch-set.sha256") == "$identity" ]]; then
@@ -184,7 +184,7 @@ prepare_patched_source() {
             return 0
         fi
         info "SOURCE CACHE MISS: base revision or ordered patch set changed"
-    elif python3 "$TGOS_BUILD_LIB_DIR/build_inputs.py" --verify "$source" "$base" "$patches"; then
+    elif python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --verify "$source" "$base" "$patches"; then
         # Adopt legacy stamps only after reconstructing and comparing the
         # expected complete tree. This also handles overlapping patch chains.
         mkdir -p "$state_dir"
@@ -194,7 +194,7 @@ prepare_patched_source() {
         info "SOURCE CACHE HIT: verified existing patched source $source"
         return 0
     elif [[ -f $state_dir/source.sha256 ]] ||
-         ! python3 "$TGOS_BUILD_LIB_DIR/build_inputs.py" --verify "$source" HEAD /nonexistent-tgos-patches; then
+         ! python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --verify "$source" HEAD /nonexistent-tgos-patches; then
         error "Source has unverified local changes: $source; preserve or resolve them before rebuilding"
         return 1
     fi
@@ -206,13 +206,13 @@ prepare_patched_source() {
         # Record ownership of our partial application so a corrected patch can
         # safely retry from the base, without publishing a successful cache.
         mkdir -p "$state_dir"
-        current=$(python3 "$TGOS_BUILD_LIB_DIR/build_inputs.py" --source "$source") || return
+        current=$(python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --source "$source") || return
         printf '%s\n' "$current" >"$state_dir/source.sha256"
         rm -f -- "$state_dir/patch-set.sha256"
         return "$status"
     fi
     mkdir -p "$state_dir"
-    current=$(python3 "$TGOS_BUILD_LIB_DIR/build_inputs.py" --source "$source") || return
+    current=$(python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --source "$source") || return
     printf '%s\n' "$identity" >"$state_dir/patch-set.sha256"
     printf '%s\n' "$current" >"$state_dir/source.sha256"
     printf '%s\n' "$base" >"$state_dir/base.commit"

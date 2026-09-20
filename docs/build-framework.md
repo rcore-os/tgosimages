@@ -137,7 +137,7 @@ initramfs and ext4 output. Validate the child graph with
 
 New adapters declare a graph instead of nesting worker pools. Invoke
 `build_graph graph.json --log-dir logs/my-run` after sourcing the performance
-helper, or `python3 scripts/lib/build-graph.py graph.json --log-dir logs/my-run`.
+helper, or `python3 scripts/lib/python/build-graph.py graph.json --log-dir logs/my-run`.
 Use a new log directory for each invocation. Example manifest:
 
 ```json

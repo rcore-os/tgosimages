@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge independently built rootfs-test plugin trees without hiding collisions."""
+"""Python merger for independently built rootfs-test plugin trees."""
 import argparse
 import os
 from pathlib import Path

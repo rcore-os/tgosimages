@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit-input task cache. Never caches failures or trusts output existence."""
+"""Python explicit-input task cache; never cache failures or trust output existence."""
 import argparse
 import datetime
 import fcntl

@@ -6,7 +6,7 @@ if [[ -z ${PLATFORM_GRAPH_INTERNAL:-} ]]; then
         case $platform_graph_arg in help|-h|--help) platform_graph_help=1 ;; esac
     done
     if ((platform_graph_help == 0)) && [[ $# -gt 0 || ${0##*/} == orangepi-5-plus.sh ]]; then
-        exec python3 "$ROOT_DIR/scripts/lib/platform-graph.py" "${0##*/}" "$@"
+        exec python3 "$ROOT_DIR/scripts/lib/python/platform-graph.py" "${0##*/}" "$@"
     fi
     unset platform_graph_help platform_graph_arg
 fi

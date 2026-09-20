@@ -383,14 +383,14 @@ apply_patches() {
     fi
     
     local patch_identity patch_manifest="${src_dir}/.patch_stamps/patch-set.sha256"
-    patch_identity=$(python3 "${TGOS_BUILD_LIB_DIR}/build_inputs.py" "$patch_dir") || return
+    patch_identity=$(python3 "${TGOS_BUILD_LIB_DIR}/python/build_inputs.py" "$patch_dir") || return
     if [[ -f $patch_manifest && $(<"$patch_manifest") != "$patch_identity" ]]; then
         error "Patch set changed: prepare the source with checkout_ref before applying $patch_dir"
         return 1
     fi
     local source_identity
     if [[ -f $patch_manifest ]]; then
-        source_identity=$(python3 "${TGOS_BUILD_LIB_DIR}/build_inputs.py" --source "$src_dir") || return
+        source_identity=$(python3 "${TGOS_BUILD_LIB_DIR}/python/build_inputs.py" --source "$src_dir") || return
         if [[ -f ${src_dir}/.patch_stamps/source.sha256 &&
               $(<"${src_dir}/.patch_stamps/source.sha256") == "$source_identity" ]]; then
             info "PATCH CACHE HIT: verified ordered patch set and source state"
@@ -474,7 +474,7 @@ apply_patches() {
             error "Cannot apply $base"; popd >/dev/null; return 1
         fi
     done
-    source_identity=$(python3 "${TGOS_BUILD_LIB_DIR}/build_inputs.py" --source "$src_dir") || { popd >/dev/null; return 1; }
+    source_identity=$(python3 "${TGOS_BUILD_LIB_DIR}/python/build_inputs.py" --source "$src_dir") || { popd >/dev/null; return 1; }
     printf '%s\n' "$source_identity" >.patch_stamps/source.sha256
     printf '%s\n' "$patch_identity" >.patch_stamps/patch-set.sha256
     popd >/dev/null

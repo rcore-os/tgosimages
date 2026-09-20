@@ -1,4 +1,4 @@
-"""Content identities shared by patch application and incremental tasks."""
+"""Content identities shared by shell patching and Python task caching."""
 import hashlib
 import json
 import os

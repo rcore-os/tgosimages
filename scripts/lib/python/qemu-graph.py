@@ -10,12 +10,13 @@ import sys
 import tempfile
 
 sys.dont_write_bytecode = True
-LIB = Path(__file__).resolve().parent
-ROOT = LIB.parents[1]
-spec = importlib.util.spec_from_file_location('build_graph', LIB / 'build-graph.py')
+PYTHON_LIB = Path(__file__).resolve().parent
+SHELL_LIB = PYTHON_LIB.parent
+ROOT = PYTHON_LIB.parents[2]
+spec = importlib.util.spec_from_file_location('build_graph', PYTHON_LIB / 'build-graph.py')
 scheduler = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(scheduler)
-rootfs_spec = importlib.util.spec_from_file_location('rootfs_graph', LIB / 'rootfs-graph.py')
+rootfs_spec = importlib.util.spec_from_file_location('rootfs_graph', PYTHON_LIB / 'rootfs-graph.py')
 rootfs_graph = importlib.util.module_from_spec(rootfs_spec)
 rootfs_spec.loader.exec_module(rootfs_graph)
 
@@ -69,7 +70,7 @@ def make_graph(arch, args, log_dir):
                         'env': dict(env, QEMU_GRAPH_STEP=step, ROOTFS_GRAPH_BASE_ONLY='1',
                                     ROOTFS_GRAPH_OUTPUT_DIR=str(base_dir))}
                 node['deps'] = [base['id']]
-                node['command'] = ['bash', str(LIB / 'rootfs-compose-node.sh'), target, rootfs_type,
+                node['command'] = ['bash', str(SHELL_LIB / 'rootfs-compose-node.sh'), target, rootfs_type,
                     str(base_dir), str(ROOT / 'IMAGES/rootfs'), '', '',
                     rootfs_graph.option(args, '--guest-free-size') or '256M',
                     rootfs_graph.option(args, '--outer-free-size') or '256M']

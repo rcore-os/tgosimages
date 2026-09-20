@@ -15,6 +15,10 @@ import tempfile
 import time
 
 
+PYTHON_LIB = Path(__file__).resolve().parent
+SHELL_LIB = PYTHON_LIB.parent
+
+
 def positive(value):
     number = int(value)
     if number < 1:
@@ -86,7 +90,7 @@ def execute(graph, log_dir):
     color = not os.environ.get('LOG_STDIO_CAPTURED') and (mode == 'always' or
             (mode == 'auto' and sys.stdout.isatty() and 'NO_COLOR' not in os.environ and os.environ.get('TERM') != 'dumb'))
     if color:
-        renderer = subprocess.Popen(['awk', '-f', str(Path(__file__).with_name('log-color.awk'))],
+        renderer = subprocess.Popen(['awk', '-f', str(SHELL_LIB / 'log-color.awk')],
                                     stdin=subprocess.PIPE, text=True)
 
     def log(level, message):
@@ -209,7 +213,7 @@ def execute(graph, log_dir):
                     marker = log_dir / 'steps' / f'{name}.cache-hit'
                     marker.unlink(missing_ok=True)
                     env['TGOS_TASK_CACHE_RESULT'] = str(marker)
-                    command = [sys.executable, str(Path(__file__).with_name('build-task.py')),
+                    command = [sys.executable, str(PYTHON_LIB / 'build-task.py'),
                                name, *task['cache_args'], '--', *command]
                 stream = (log_dir / 'steps' / f'{name}.log').open('w')
                 try:

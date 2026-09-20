@@ -8,12 +8,13 @@ import sys
 import tempfile
 
 sys.dont_write_bytecode = True
-LIB = Path(__file__).resolve().parent
-ROOT = LIB.parents[1]
-spec = importlib.util.spec_from_file_location('qemu_graph', LIB / 'qemu-graph.py')
+PYTHON_LIB = Path(__file__).resolve().parent
+SHELL_LIB = PYTHON_LIB.parent
+ROOT = PYTHON_LIB.parents[2]
+spec = importlib.util.spec_from_file_location('qemu_graph', PYTHON_LIB / 'qemu-graph.py')
 qemu = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(qemu)
-rootfs_spec = importlib.util.spec_from_file_location('rootfs_graph', LIB / 'rootfs-graph.py')
+rootfs_spec = importlib.util.spec_from_file_location('rootfs_graph', PYTHON_LIB / 'rootfs-graph.py')
 rootfs_graph = importlib.util.module_from_spec(rootfs_spec)
 rootfs_spec.loader.exec_module(rootfs_graph)
 
@@ -59,7 +60,7 @@ def board_graph(name, declaration, args):
             continue
         graph['tasks'].append(dict(id=f'{name}.{step}',
             deps=[f'{name}.{dep}' for dep in dependencies.get(step, [])],
-            command=['bash', str(LIB / 'platform-node.sh'), name, step, *options], env=env,
+            command=['bash', str(SHELL_LIB / 'platform-node.sh'), name, step, *options], env=env,
             resources=declaration.get('resources', {}).get(step, [])))
     if name == 'orangepi-5-plus' and action != 'clean' and os.environ.get('ROOTFS_GRAPH_DISABLE') != '1':
         rootfs_task = next((task for task in graph['tasks'] if task['id'] == f'{name}.rootfs'), None)
@@ -71,7 +72,7 @@ def board_graph(name, declaration, args):
             guest_image = os.environ.get('ORANGEPI_GUEST_ROOTFS',
                 str(ROOT / 'IMAGES/rootfs/rootfs-aarch64-orangepi-jammy.img'))
             rootfs_task = dict(id=f'{name}.rootfs', deps=[base_task['id']], env=dict(env),
-                command=['bash', str(LIB / 'rootfs-guest-compose-node.sh'), guest_image, '',
+                command=['bash', str(SHELL_LIB / 'rootfs-guest-compose-node.sh'), guest_image, '',
                          os.environ.get('ORANGEPI_GUEST_FREE_SIZE', '256M')])
             expanded = rootfs_graph.expand(rootfs_task, f'{name}.rootfs.orangepi-jammy',
                 'aarch64', 'orangepi-jammy', options,
@@ -80,14 +81,14 @@ def board_graph(name, declaration, args):
             graph['tasks'] = expanded + [base_task, rootfs_task] + graph['tasks']
     if declaration.get('compose'):
         graph['tasks'].append(dict(id=f'{name}.compose', deps=[n['id'] for n in graph['tasks']],
-            command=['bash', str(LIB / 'platform-node.sh'), name, 'compose'], env=env))
+            command=['bash', str(SHELL_LIB / 'platform-node.sh'), name, 'compose'], env=env))
     return graph
 
 
 def main():
     target, *args = sys.argv[1:]
     target = target.removesuffix('.sh')
-    declarations = json.loads((LIB / 'platform-tasks.json').read_text())
+    declarations = json.loads((SHELL_LIB / 'platform-tasks.json').read_text())
     log_root = Path(os.environ.get('LOG_DIR', ROOT / 'logs/platform'))
     log_root.mkdir(parents=True, exist_ok=True)
     log_dir = Path(tempfile.mkdtemp(prefix='platform-graph-', dir=log_root)).resolve()
