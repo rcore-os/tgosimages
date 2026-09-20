@@ -245,7 +245,8 @@ def execute(graph, log_dir):
                     command = [sys.executable, str(PYTHON_LIB / 'build-task.py'),
                                name, *task['cache_args'], '--', *command]
                 step_log = log_dir / 'steps' / f'{name}.log'
-                stream = step_log.open('w')
+                env['LOG_FILE'] = str(step_log)
+                stream = step_log.open('a')
                 try:
                     process = subprocess.Popen(command, cwd=task.get('cwd', graph.get('cwd')),
                                                env=env, stdout=stream, stderr=subprocess.STDOUT,

@@ -7,7 +7,7 @@ fi
 
 _rootfs_compose_lib_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 source "${_rootfs_compose_lib_dir}/build-lock.sh"
-ROOTFS_TEST_BUILD=${ROOTFS_TEST_BUILD:-"${_rootfs_compose_lib_dir}/../rootfs-tests/build.sh"}
+ROOTFS_TEST_BUILD=${ROOTFS_TEST_BUILD:-"${_rootfs_compose_lib_dir}/../rootfs-test-plugins/build.sh"}
 if ! declare -F _rootfs_inject_tree_via_debugfs >/dev/null; then
     # shellcheck source=rootfs.sh
     source "${_rootfs_compose_lib_dir}/rootfs.sh"

@@ -144,6 +144,22 @@ time.sleep(.35)
         self.assertEqual(process.returncode, 1, output)
         self.assertIn(f'FAILED bad: status=7 log={self.root / "logs/steps/bad.log"}', output)
 
+    def test_task_receives_its_owned_log_file(self):
+        code = '''import os
+from pathlib import Path
+path = Path(os.environ["LOG_FILE"])
+assert path.name == "direct-log.log"
+with path.open("a") as stream:
+    stream.write("direct append\\n")
+print("captured after append", flush=True)
+'''
+        process = self.launch([self.node('direct-log', code)])
+        output, _ = process.communicate(timeout=10)
+        self.assertEqual(process.returncode, 0, output)
+        contents = (self.root / 'logs/steps/direct-log.log').read_text()
+        self.assertIn('direct append', contents)
+        self.assertIn('captured after append', contents)
+
 
 if __name__ == '__main__':
     unittest.main()

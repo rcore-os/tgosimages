@@ -127,6 +127,15 @@ test_missing_value() {
 }
 run_ok 'all builders reject missing option values before building' test_missing_value
 
+test_default_plugin_command() (
+    unset ROOTFS_TEST_BUILD
+    source "$repo_root/scripts/lib/rootfs-compose.sh"
+    local outer_tests= guest_tests= guest_free= outer_free=
+    rootfs_builder_load_test_options busybox outer_tests guest_tests guest_free outer_free
+    [[ -n $outer_tests && -n $guest_tests && -n $guest_free && -n $outer_free ]]
+)
+run_ok 'default plugin command resolves builder options' test_default_plugin_command
+
 test_invalid_size() (
     source "$repo_root/scripts/lib/rootfs-compose.sh"
     rootfs_builder_validate_reserves 12wat 256M

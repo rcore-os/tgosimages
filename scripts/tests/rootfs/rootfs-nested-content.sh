@@ -5,7 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/../../.." && pwd)
 # shellcheck source=../lib/rootfs-compose.sh
 source "$repo_root/scripts/lib/rootfs-compose.sh"
-# shellcheck source=../rootfs-tests/lib/common.sh
+# shellcheck source=../../rootfs-test-plugins/lib/common.sh
 source "$repo_root/scripts/rootfs-test-plugins/lib/common.sh"
 
 image_dir="$repo_root/IMAGES/rootfs"
