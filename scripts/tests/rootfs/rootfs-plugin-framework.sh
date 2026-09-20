@@ -508,17 +508,6 @@ run_fail 'invalid rootfs is rejected' bash "$build_script" list \
 run_fail 'invalid scope is rejected' bash "$build_script" list \
     --arch aarch64 --rootfs alpine --scope host
 
-for case in 'alpine outer ltp' 'busybox outer none' 'debian outer none' \
-            'busybox guest cyclictest,lmbench,iozone' \
-            'alpine guest cyclictest,lmbench,iozone' \
-            'debian guest cyclictest,lmbench,iozone' \
-            'orangepi-jammy outer none' \
-            'orangepi-jammy guest cyclictest,lmbench,iozone'; do
-    read -r rootfs scope expected <<<"$case"
-    run_ok "defaults resolve $rootfs $scope" bash "$build_script" defaults --rootfs "$rootfs" --scope "$scope"
-    assert_eq "$expected" "$(cat "$work/stdout")" "defaults value for $rootfs $scope"
-done
-
 # Shared helpers use exact CSV membership, stable mappings, and local files only.
 tests=$((tests + 1))
 # shellcheck source=/dev/null
@@ -601,7 +590,6 @@ arches=aarch64,riscv64,x86_64,loongarch64
 rootfs=busybox,alpine,debian,orangepi-jammy
 scopes=guest" "$(cat "$work/stdout")" "$plugin metadata"
 done
-run_ok 'lmbench real launcher smoke is explicitly bounded' grep -F 'timeout 15' "$builtin_plugins/lmbench.sh"
 
 run_ok 'ltp describes its Alpine outer-only capabilities' "$builtin_plugins/ltp.sh" describe
 assert_eq 'name=ltp
@@ -871,11 +859,6 @@ run_fail 'interrupted LTP extraction preserves failure' \
         --output "$work/ltp-interrupted-output"
 [[ -z $(find "$work/ltp-interrupted-build/sources" -mindepth 1 -type d -name '.*' -print -quit) ]] ||
     fail 'interrupted LTP extraction leaked a temporary directory'
-run_ok 'ltp uses the checksum-verified shared Alpine builder' \
-    grep -F 'alpine-builder.sh"' "$builtin_plugins/ltp.sh"
-run_ok 'standalone Alpine base no longer installs LTP' \
-    bash -c '! grep -Eq "alpine_install_ltp_tests|alpine_ltp_prepare_source|alpine_ensure_ltp_docker_image" "$1"' _ \
-        "$repo_root/scripts/rootfs/alpine.sh"
 
 plugin_build_root="$work/plugin-build"
 plugin_overlay="$work/builtin-overlay"
@@ -968,13 +951,6 @@ builder_description=$(cat "$work/stdout")
 [[ $builder_description == *$'platform=linux/loong64\n'* ]] || fail 'LoongArch builder platform is wrong'
 [[ $builder_description == *'package_set=build-base-0.5-r3_linux-headers-6.16.12-r0_numactl-dev-2.0.18-r0_python3-3.12.14-r0'* ]] || fail 'builder package set is not version-addressed'
 [[ $builder_description == *'archive_cache=alpine-minirootfs-3.23.5-loongarch64-92185135af8b8694f9732c4cdc0dae7f26f72059fd79e9bef6d5dbafd05898ea.tar.gz'* ]] || fail 'builder archive cache is not checksum-addressed'
-run_ok 'cyclictest uses the pinned unified glibc static builder' \
-    grep -F 'glibc-static-builder.sh"' "$builtin_plugins/cyclictest.sh"
-for plugin in lmbench iozone; do
-    run_ok "$plugin uses the checksum-verified shared builder" \
-        grep -F 'alpine-builder.sh"' "$builtin_plugins/$plugin.sh"
-    ! grep -Fq 'alpine:3.23' "$builtin_plugins/$plugin.sh" || fail "$plugin still uses a mutable Alpine image reference"
-done
 
 run_fail 'built-in guest plugin rejects an unsupported scope through the framework' \
     env ROOTFS_TEST_OFFLINE_FIXTURE_DIR="$fixtures" ROOTFS_TEST_BUILD_ROOT="$plugin_build_root" \

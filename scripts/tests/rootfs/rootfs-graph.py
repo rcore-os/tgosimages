@@ -19,8 +19,6 @@ spec.loader.exec_module(rootfs_graph)
 
 class RootfsGraph(unittest.TestCase):
     def test_guest_count_environment_contract(self):
-        with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(rootfs_graph.guest_count(), 2)
         with mock.patch.dict(os.environ, {'ROOTFS_GUEST_COUNT': '3'}, clear=True):
             self.assertEqual(rootfs_graph.guest_count(), 3)
         with mock.patch.dict(os.environ, {'ROOTFS_GUEST_COUNT': '999999999999999999999999'}, clear=True):

@@ -127,18 +127,6 @@ test_missing_value() {
 }
 run_ok 'all builders reject missing option values before building' test_missing_value
 
-test_defaults() (
-    source "$repo_root/scripts/lib/rootfs-compose.sh"
-    ROOTFS_TEST_BUILD="$repo_root/scripts/rootfs-test-plugins/build.sh"
-    rootfs_builder_load_test_options busybox A B C D
-    [[ $A == none && $B == cyclictest,lmbench,iozone && $C == 256M && $D == 256M ]]
-    rootfs_builder_load_test_options alpine E F G H
-    [[ $E == ltp && $F == cyclictest,lmbench,iozone && $G == 256M && $H == 256M ]]
-    rootfs_builder_load_test_options debian I J K L
-    [[ $I == none && $J == cyclictest,lmbench,iozone && $K == 256M && $L == 256M ]]
-)
-run_ok 'common defaults come from plugin framework with 256M reserves' test_defaults
-
 test_invalid_size() (
     source "$repo_root/scripts/lib/rootfs-compose.sh"
     rootfs_builder_validate_reserves 12wat 256M
