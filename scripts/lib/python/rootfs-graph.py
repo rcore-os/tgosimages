@@ -3,12 +3,32 @@
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
+import sys
 
 PYTHON_LIB = Path(__file__).resolve().parent
 SHELL_LIB = PYTHON_LIB.parent
 ROOT = PYTHON_LIB.parents[2]
 TEST_BUILD = ROOT / 'scripts/rootfs-test-plugins/build.sh'
+if str(PYTHON_LIB) not in sys.path:
+    sys.path.insert(0, str(PYTHON_LIB))
+from build_pipeline import phase_task
+PLUGIN_CACHE_ENV = [
+    'ALPINE_LTP_CFLAGS', 'ALPINE_LTP_FILTER_OUT_DIRS', 'ALPINE_LTP_FILTER_OUT_TESTS',
+    'ALPINE_LTP_LDFLAGS', 'ALPINE_LTP_SHA256', 'ALPINE_LTP_URL', 'CC',
+    'CYCLICTEST_NM', 'CYCLICTEST_OBJDUMP', 'CYCLICTEST_SOURCE_SHA256',
+    'CYCLICTEST_SOURCE_URL', 'IOZONE_SOURCE_SHA256', 'IOZONE_SOURCE_URL',
+    'LMBENCH_SOURCE_SHA256', 'LMBENCH_SOURCE_URL', 'PATH',
+    'ROOTFS_TEST_ALPINE_BUILDER', 'ROOTFS_TEST_BUILD_JOBS',
+    'ROOTFS_TEST_GLIBC_STATIC_BUILDER', 'ROOTFS_TEST_OFFLINE_FIXTURE_DIR',
+]
+
+
+def plugin_framework_inputs():
+    plugin_root = TEST_BUILD.parent / 'plugins'
+    return [str(path) for path in sorted(TEST_BUILD.parent.rglob('*'))
+            if path.is_file() and plugin_root not in path.parents]
 
 
 def guest_count():
@@ -69,6 +89,10 @@ def expand(task, prefix, arch, rootfs_type, args, guest_default=None):
     nodes = []
     merge_ids = []
     overlays = {}
+    plugin_directory = Path(os.environ.get('ROOTFS_TEST_PLUGIN_DIR', TEST_BUILD.parent / 'plugins')).resolve()
+    framework_inputs = plugin_framework_inputs()
+    compiler = f'{arch}-linux-gnu-gcc' if arch != 'x86_64' else 'x86_64-linux-gnu-gcc'
+    plugin_tools = [compiler] if shutil.which(compiler) else []
     safe_prefix = re.sub(r'[^A-Za-z0-9_.-]', '-', prefix)
     for scope in ('outer', 'guest'):
         plugins = selection(arch, rootfs_type, scope, requested[scope])
@@ -79,16 +103,26 @@ def expand(task, prefix, arch, rootfs_type, args, guest_default=None):
             output = root / scope / plugin
             plugin_nodes.append(node_id)
             plugin_outputs.append(str(output))
-            nodes.append(dict(id=node_id,
-                command=['bash', str(SHELL_LIB / 'rootfs-test-node.sh'), str(output),
-                         'bash', str(TEST_BUILD), 'build', '--arch', arch, '--rootfs', rootfs_type,
-                         '--scope', scope, '--tests', plugin],
-                env=dict(task['env']), resources=[]))
+            command = ['bash', str(SHELL_LIB / 'rootfs-test-node.sh'), str(output),
+                       'bash', str(TEST_BUILD), 'build', '--arch', arch, '--rootfs', rootfs_type,
+                       '--scope', scope, '--tests', plugin]
+            nodes.append(phase_task(node_id, 'build', command,
+                env=task['env'], resources=[], cache={
+                    'inputs': [*framework_inputs, str(SHELL_LIB / 'rootfs-test-node.sh'),
+                               str(plugin_directory / f'{plugin}.sh')],
+                    'outputs': [str(output)],
+                    'environment': PLUGIN_CACHE_ENV,
+                    'tools': plugin_tools,
+                }))
         merge_id = f'{safe_prefix}.overlay.{scope}'
         merged = root / f'{scope}-merged'
-        nodes.append(dict(id=merge_id, deps=plugin_nodes,
-            command=['python3', str(PYTHON_LIB / 'rootfs-overlay-merge.py'), '--output', str(merged), *plugin_outputs],
-            env=dict(task['env'])))
+        merge_command = ['python3', str(PYTHON_LIB / 'rootfs-overlay-merge.py'),
+                         '--output', str(merged), *plugin_outputs]
+        nodes.append(phase_task(merge_id, 'compose', merge_command,
+            deps=plugin_nodes, env=task['env'], cache={
+                'inputs': [str(PYTHON_LIB / 'rootfs-overlay-merge.py'), *plugin_outputs],
+                'outputs': [str(merged)],
+            }))
         merge_ids.append(merge_id)
         overlays[scope] = str(merged)
     task.setdefault('deps', []).extend(merge_ids)

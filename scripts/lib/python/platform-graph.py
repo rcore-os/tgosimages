@@ -9,6 +9,9 @@ import tempfile
 
 sys.dont_write_bytecode = True
 PYTHON_LIB = Path(__file__).resolve().parent
+if str(PYTHON_LIB) not in sys.path:
+    sys.path.insert(0, str(PYTHON_LIB))
+from build_pipeline import cache_arguments, phase_task
 SHELL_LIB = PYTHON_LIB.parent
 ROOT = PYTHON_LIB.parents[2]
 spec = importlib.util.spec_from_file_location('qemu_graph', PYTHON_LIB / 'qemu-graph.py')
@@ -61,30 +64,69 @@ def board_graph(name, declaration, args):
     for step in components:
         if step not in selected:
             continue
-        graph['tasks'].append(dict(id=f'{name}.{step}',
-            deps=[f'{name}.{dep}' for dep in dependencies.get(step, [])],
-            command=['bash', str(SHELL_LIB / 'platform-node.sh'), name, step, *options], env=env,
-            resources=declaration.get('resources', {}).get(step, [])))
+        phase = 'compose' if name == 'orangepi-5-plus' and step == 'finalize_linux_image' else 'build'
+        cache = None
+        if phase == 'compose':
+            platform_images = ROOT / 'IMAGES/orangepi'
+            rootfs_type = os.environ.get('ORANGEPI_ROOTFS_TYPE', 'orangepi-jammy')
+            guest_image = os.environ.get('ORANGEPI_GUEST_ROOTFS',
+                str(ROOT / f'IMAGES/rootfs/rootfs-aarch64-{rootfs_type}.img'))
+            base_image = os.environ.get('ORANGEPI_BASE_IMAGE',
+                str(workspace / 'orangepi-rootfs/orangepi-5-plus-base.img'))
+            cache = {
+                'inputs': [base_image, guest_image,
+                           *[str(platform_images / component) for component in
+                             ('linux', 'u-boot', 'arceos', 'starry', 'zephyr', 'freertos', 'ivc')],
+                           str(ROOT / 'scripts/platform/orangepi-5-plus.sh'),
+                           str(SHELL_LIB / 'rootfs-disk.sh'), str(SHELL_LIB / 'rootfs-compose.sh')],
+                'outputs': [str(ROOT / 'IMAGES/rootfs/orangepi-5-plus.img')],
+                'environment': ['ORANGEPI_GUEST_FREE_SIZE', 'ORANGEPI_OUTER_FREE_SIZE',
+                                'ORANGEPI_ROOTFS_TYPE', 'ROOTFS_GUEST_COUNT'],
+            }
+        graph['tasks'].append(phase_task(f'{name}.{step}', phase,
+            ['bash', str(SHELL_LIB / 'platform-node.sh'), name, step, *options],
+            deps=[f'{name}.{dep}' for dep in dependencies.get(step, [])], env=env,
+            resources=declaration.get('resources', {}).get(step, []), cache=cache))
     if name == 'orangepi-5-plus' and action != 'clean' and os.environ.get('ROOTFS_GRAPH_DISABLE') != '1':
         rootfs_task = next((task for task in graph['tasks'] if task['id'] == f'{name}.rootfs'), None)
         if rootfs_task is not None:
             graph['tasks'].remove(rootfs_task)
-            base_task = rootfs_task
-            base_task['id'] = f'{name}.rootfs.base'
-            base_task['env'] = dict(base_task['env'], ROOTFS_GRAPH_BASE_ONLY='1')
+            rootfs_type = os.environ.get('ORANGEPI_ROOTFS_TYPE', 'orangepi-jammy')
             guest_image = os.environ.get('ORANGEPI_GUEST_ROOTFS',
-                str(ROOT / 'IMAGES/rootfs/rootfs-aarch64-orangepi-jammy.img'))
-            rootfs_task = dict(id=f'{name}.rootfs', deps=[base_task['id']], env=dict(env),
-                command=['bash', str(SHELL_LIB / 'rootfs-guest-compose-node.sh'), guest_image, '',
-                         os.environ.get('ORANGEPI_GUEST_FREE_SIZE', '256M')])
-            expanded = rootfs_graph.expand(rootfs_task, f'{name}.rootfs.orangepi-jammy',
-                'aarch64', 'orangepi-jammy', options,
+                str(ROOT / f'IMAGES/rootfs/rootfs-aarch64-{rootfs_type}.img'))
+            prepared_image = workspace / f'rootfs-bases/{rootfs_type}.img'
+            base_env = dict(rootfs_task['env'], ROOTFS_GRAPH_BASE_ONLY='1',
+                            ORANGEPI_GUEST_ROOTFS=str(prepared_image))
+            base_task = phase_task(f'{name}.rootfs.base', 'prepare', rootfs_task['command'],
+                deps=rootfs_task['deps'], env=base_env, resources=rootfs_task['resources'], cache={
+                    'inputs': [str(ROOT / 'scripts/platform/orangepi-5-plus.sh'),
+                               str(SHELL_LIB / 'rootfs-compose.sh'), str(SHELL_LIB / 'rootfs.sh'),
+                               str(SHELL_LIB / 'utils.sh')],
+                    'outputs': [str(prepared_image)],
+                    'environment': ['ORANGEPI_GUEST_FREE_SIZE', 'ORANGEPI_ROOTFS_TYPE',
+                                    'ROOTFS_GUEST_COUNT'],
+                    'patches': [str(ROOT / 'patches/orangepi')],
+                })
+            rootfs_task = phase_task(f'{name}.rootfs', 'compose',
+                ['bash', str(SHELL_LIB / 'rootfs-guest-compose-node.sh'), str(prepared_image), '',
+                 os.environ.get('ORANGEPI_GUEST_FREE_SIZE', '256M'), guest_image],
+                deps=[base_task['id']], env=env)
+            expanded = rootfs_graph.expand(rootfs_task, f'{name}.rootfs.{rootfs_type}',
+                'aarch64', rootfs_type, options,
                 guest_default=os.environ.get('ORANGEPI_GUEST_TESTS', 'cyclictest,lmbench,iozone'))
             rootfs_task['command'][3] = rootfs_task['env']['ROOTFS_PREBUILT_GUEST_TEST_OVERLAY']
+            rootfs_task['cache_args'] = cache_arguments({
+                'inputs': [str(prepared_image), rootfs_task['command'][3],
+                           str(SHELL_LIB / 'rootfs-guest-compose-node.sh'),
+                           str(SHELL_LIB / 'rootfs-compose.sh')],
+                'outputs': [guest_image],
+                'environment': ['ROOTFS_GUEST_COUNT'],
+            })
             graph['tasks'] = expanded + [base_task, rootfs_task] + graph['tasks']
     if declaration.get('compose'):
-        graph['tasks'].append(dict(id=f'{name}.compose', deps=[n['id'] for n in graph['tasks']],
-            command=['bash', str(SHELL_LIB / 'platform-node.sh'), name, 'compose'], env=env))
+        graph['tasks'].append(phase_task(f'{name}.compose', 'compose',
+            ['bash', str(SHELL_LIB / 'platform-node.sh'), name, 'compose'],
+            deps=[n['id'] for n in graph['tasks']], env=env))
     return graph
 
 

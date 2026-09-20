@@ -9,8 +9,11 @@ import subprocess
 import sys
 import tempfile
 
+if str(PYTHON_LIB := Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(PYTHON_LIB))
+from build_pipeline import BuildPipeline, phase_task
+
 sys.dont_write_bytecode = True
-PYTHON_LIB = Path(__file__).resolve().parent
 SHELL_LIB = PYTHON_LIB.parent
 ROOT = PYTHON_LIB.parents[2]
 spec = importlib.util.spec_from_file_location('build_graph', PYTHON_LIB / 'build-graph.py')
@@ -19,6 +22,28 @@ spec.loader.exec_module(scheduler)
 rootfs_spec = importlib.util.spec_from_file_location('rootfs_graph', PYTHON_LIB / 'rootfs-graph.py')
 rootfs_graph = importlib.util.module_from_spec(rootfs_spec)
 rootfs_spec.loader.exec_module(rootfs_graph)
+
+ROOTFS_CACHE_ENV = [
+    'ALPINE_APK_DOCKER_ARCH', 'ALPINE_APK_DOCKER_IMAGE', 'ALPINE_BASE',
+    'ALPINE_DOCKER_DNS', 'ALPINE_DOCKER_IMAGE_PREFIX', 'ALPINE_IMG_SIZE', 'ALPINE_REL',
+    'BUSYBOX_PATCH_DIR', 'BUSYBOX_REF', 'BUSYBOX_REPO_URL',
+    'DEBIAN_IMG_SIZE', 'DEBIAN_MIRROR', 'DEBIAN_PASSWORD', 'DEBIAN_SUITE',
+    'PATH', 'ROOTFS_GUEST_COUNT',
+]
+
+
+def rootfs_outputs(directory, arch, rootfs_type):
+    outputs = [str(directory / f'rootfs-{arch}-{rootfs_type}.img')]
+    if rootfs_type == 'busybox':
+        outputs.insert(0, str(directory / f'initramfs-{arch}-busybox.cpio.gz'))
+    return outputs
+
+
+def rootfs_cache_inputs(rootfs_type):
+    names = ('build-lock.sh', 'build-paths.sh', 'build-performance.sh', 'git-source-cache.sh',
+             'log.sh', 'rootfs-compose.sh', 'rootfs-metadata.sh', 'rootfs.sh', 'utils.sh')
+    return [str(ROOT / f'scripts/rootfs/{rootfs_type}.sh'),
+            *[str(SHELL_LIB / name) for name in names]]
 
 
 def make_graph(arch, args, log_dir):
@@ -62,19 +87,28 @@ def make_graph(arch, args, log_dir):
             raise ValueError((log_dir / f'{name}-plan.log').read_text())
         steps = json.loads(description.read_text())
         nodes = []
+        rootfs_stage_dir = workspace / 'rootfs-staged'
         for step in steps:
             match = re.fullmatch(r'qemu_rootfs_(busybox|alpine|debian)_step', step)
-            node = {'id': f'{name}.{step}', 'command': command,
-                    'env': dict(env, QEMU_GRAPH_STEP=step)}
+            node = phase_task(f'{name}.{step}', 'build', command,
+                              env=dict(env, QEMU_GRAPH_STEP=step))
             if match and os.environ.get('ROOTFS_GRAPH_DISABLE') != '1':
                 rootfs_type = match.group(1)
                 base_dir = workspace / 'rootfs-bases' / rootfs_type
-                base = {'id': f'{name}.rootfs.{rootfs_type}.base', 'command': command,
-                        'env': dict(env, QEMU_GRAPH_STEP=step, ROOTFS_GRAPH_BASE_ONLY='1',
-                                    ROOTFS_GRAPH_OUTPUT_DIR=str(base_dir))}
-                node['deps'] = [base['id']]
+                pipeline = BuildPipeline(f'{name}.rootfs.{rootfs_type}', env=env)
+                base_command = command
+                base = pipeline.phase('prepare', base_command,
+                    task_id=f'{name}.rootfs.{rootfs_type}.base',
+                    env=dict(env, QEMU_GRAPH_STEP=step, ROOTFS_GRAPH_BASE_ONLY='1',
+                             ROOTFS_GRAPH_OUTPUT_DIR=str(base_dir)), cache={
+                        'inputs': rootfs_cache_inputs(rootfs_type),
+                        'outputs': rootfs_outputs(base_dir, target, rootfs_type),
+                        'environment': ROOTFS_CACHE_ENV,
+                        'patches': [str(ROOT / f'patches/{rootfs_type}')],
+                    })
+                node['deps'] = []
                 node['command'] = ['bash', str(SHELL_LIB / 'rootfs-compose-node.sh'), target, rootfs_type,
-                    str(base_dir), str(ROOT / 'IMAGES/rootfs'), '', '',
+                    str(base_dir), str(rootfs_stage_dir), '', '',
                     rootfs_graph.option(args, '--guest-free-size') or '256M',
                     rootfs_graph.option(args, '--outer-free-size') or '256M']
                 nodes.append(base)
@@ -82,12 +116,23 @@ def make_graph(arch, args, log_dir):
                                                rootfs_type, args)
                 node['command'][6] = node['env']['ROOTFS_PREBUILT_OUTER_TEST_OVERLAY']
                 node['command'][7] = node['env']['ROOTFS_PREBUILT_GUEST_TEST_OVERLAY']
+                node = pipeline.phase('compose', node['command'], task_id=node['id'], deps=node['deps'],
+                    env=node['env'], cache={
+                        'inputs': [*rootfs_outputs(base_dir, target, rootfs_type),
+                                   node['command'][6], node['command'][7],
+                                   str(SHELL_LIB / 'rootfs-compose-node.sh'),
+                                   str(SHELL_LIB / 'rootfs-compose.sh')],
+                        'outputs': rootfs_outputs(rootfs_stage_dir, target, rootfs_type),
+                        'environment': ['ROOTFS_GUEST_COUNT'],
+                    })
                 nodes.extend(expanded)
                 nodes.append(node)
             else:
                 nodes.append(node)
-        nodes.append({'id': f'{name}.compose', 'deps': [n['id'] for n in nodes],
-                      'command': command, 'env': dict(env, QEMU_GRAPH_STEP='qemu_rootfs_inject_platform_dir')})
+        compose_env = dict(env, QEMU_GRAPH_STEP='qemu_rootfs_inject_platform_dir',
+                           QEMU_ROOTFS_STAGE_DIR=str(rootfs_stage_dir))
+        nodes.append(phase_task(f'{name}.compose', 'compose', command,
+            deps=[n['id'] for n in nodes], env=compose_env))
         groups.append(nodes)
         graph['locks'].append(str(root / '.locks' / f'{name}.lock'))
         graph['locks'].append(str(ROOT / 'build/.locks' / f'platform-{name}.lock'))

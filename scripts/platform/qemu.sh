@@ -583,6 +583,30 @@ qemu_rootfs_busybox_step() { qemu_rootfs_build_step busybox; }
 qemu_rootfs_alpine_step() { qemu_rootfs_build_step alpine; }
 qemu_rootfs_debian_step() { qemu_rootfs_build_step debian; }
 
+qemu_publish_staged_rootfs() {
+    local stage_dir=${QEMU_ROOTFS_STAGE_DIR:-} rootfs_builder source
+    [[ -n $stage_dir ]] || return 0
+    [[ -d $stage_dir ]] || die "QEMU rootfs staging directory not found: $stage_dir"
+
+    # Validate the complete staged set before replacing any public output.
+    for rootfs_builder in "${ROOTFS_BUILDERS[@]}"; do
+        source="$stage_dir/rootfs-${ARCH}-${rootfs_builder}.img"
+        [[ -f $source ]] || die "Staged rootfs image not found: $source"
+        if [[ $rootfs_builder == busybox ]]; then
+            source="$stage_dir/initramfs-${ARCH}-busybox.cpio.gz"
+            [[ -f $source ]] || die "Staged initramfs not found: $source"
+        fi
+    done
+    for rootfs_builder in "${ROOTFS_BUILDERS[@]}"; do
+        rootfs_publish_target "$stage_dir/rootfs-${ARCH}-${rootfs_builder}.img" \
+            "$ROOT_DIR/IMAGES/rootfs/rootfs-${ARCH}-${rootfs_builder}.img" || return 1
+        if [[ $rootfs_builder == busybox ]]; then
+            rootfs_publish_target "$stage_dir/initramfs-${ARCH}-busybox.cpio.gz" \
+                "$ROOT_DIR/IMAGES/rootfs/initramfs-${ARCH}-busybox.cpio.gz" || return 1
+        fi
+    done
+}
+
 qemu_has_help_arg() {
     local arg
 
@@ -610,6 +634,7 @@ qemu_rootfs_inject_platform_dir() (
     local outer_reserve="${QEMU_OUTER_FREE_SIZE:-256M}"
 
     [[ ${#ROOTFS_BUILDERS[@]} -gt 0 ]] || return 0
+    qemu_publish_staged_rootfs || return 1
 
     for rootfs_builder in "${ROOTFS_BUILDERS[@]}"; do
         if [[ "${ARCH}" == "aarch64" && "${rootfs_builder}" == "alpine" ]]; then

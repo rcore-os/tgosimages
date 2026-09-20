@@ -15,6 +15,12 @@ LIB = ROOT / 'scripts/lib/python'
 spec = importlib.util.spec_from_file_location('rootfs_graph', LIB / 'rootfs-graph.py')
 rootfs_graph = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rootfs_graph)
+qemu_spec = importlib.util.spec_from_file_location('qemu_graph', LIB / 'qemu-graph.py')
+qemu_graph = importlib.util.module_from_spec(qemu_spec)
+qemu_spec.loader.exec_module(qemu_graph)
+platform_spec = importlib.util.spec_from_file_location('platform_graph', LIB / 'platform-graph.py')
+platform_graph = importlib.util.module_from_spec(platform_spec)
+platform_spec.loader.exec_module(platform_graph)
 
 
 class RootfsGraph(unittest.TestCase):
@@ -79,6 +85,94 @@ printf '{name}-%s\\n' "$scope" >"$output/{name}-$scope"
             self.assertEqual(states['rootfs.image']['state'], 'success')
             self.assertEqual(sum('.tests.' in name for name in states), 4)
             self.assertEqual(sum('.overlay.' in name for name in states), 2)
+
+            result = subprocess.run([sys.executable, str(LIB / 'build-graph.py'), str(manifest),
+                                     '--log-dir', str(work / 'logs-second')], env=env, text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            states = json.loads((work / 'logs-second/state.json').read_text())
+            cached = [state['state'] for name, state in states.items()
+                      if '.tests.' in name or '.overlay.' in name]
+            self.assertEqual(cached, ['hit'] * 6)
+
+            (plugins / 'alpha.sh').write_text((plugins / 'alpha.sh').read_text() + '\n# changed\n')
+            result = subprocess.run([sys.executable, str(LIB / 'build-graph.py'), str(manifest),
+                                     '--log-dir', str(work / 'logs-third')], env=env, text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            states = json.loads((work / 'logs-third/state.json').read_text())
+            self.assertEqual(states['rootfs.busybox.tests.outer.alpha']['state'], 'success')
+            self.assertEqual(states['rootfs.busybox.tests.guest.alpha']['state'], 'success')
+            self.assertEqual(states['rootfs.busybox.tests.outer.beta']['state'], 'hit')
+            self.assertEqual(states['rootfs.busybox.tests.guest.beta']['state'], 'hit')
+            self.assertEqual(states['rootfs.busybox.overlay.outer']['state'], 'hit')
+            self.assertEqual(states['rootfs.busybox.overlay.guest']['state'], 'hit')
+
+    def test_qemu_rootfs_uses_cached_prepare_compose_and_final_publish_phases(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+
+            def describe(_command, **kwargs):
+                Path(kwargs['env']['QEMU_GRAPH_DESCRIPTION']).write_text(
+                    json.dumps(['linux', 'qemu_rootfs_busybox_step']))
+                return subprocess.CompletedProcess([], 0)
+
+            environment = {
+                'BUILD_WORKSPACE_ROOT': str(work / 'workspaces'),
+                'BUILD_CACHE_DIR': str(work / 'cache'),
+            }
+            with mock.patch.dict(os.environ, environment, clear=False), \
+                    mock.patch.object(qemu_graph.subprocess, 'run', side_effect=describe):
+                graph = qemu_graph.make_graph(
+                    'aarch64', ['all', '--outer-tests', 'none', '--guest-tests', 'none'],
+                    work / 'logs')
+
+            tasks = {task['id']: task for task in graph['tasks']}
+            base = tasks['qemu-aarch64.rootfs.busybox.base']
+            image = tasks['qemu-aarch64.qemu_rootfs_busybox_step']
+            publish = tasks['qemu-aarch64.compose']
+            self.assertEqual(base['phase'], 'prepare')
+            self.assertIn('--output', base['cache_args'])
+            self.assertEqual(image['phase'], 'compose')
+            self.assertIn(str(work / 'workspaces/qemu-aarch64/rootfs-staged'), image['command'])
+            self.assertEqual(publish['phase'], 'compose')
+            self.assertEqual(publish['env']['QEMU_ROOTFS_STAGE_DIR'],
+                             str(work / 'workspaces/qemu-aarch64/rootfs-staged'))
+
+    def test_orangepi_guest_rootfs_is_prepared_in_workspace_then_published(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            declaration = json.loads((ROOT / 'scripts/lib/platform-tasks.json').read_text())[
+                'orangepi-5-plus']
+            with mock.patch.dict(os.environ, {
+                    'BUILD_WORKSPACE_ROOT': str(work / 'workspaces'),
+                    'BUILD_CACHE_DIR': str(work / 'cache'),
+                    'ORANGEPI_GUEST_ROOTFS': str(work / 'images/rootfs-aarch64-orangepi-jammy.img'),
+            }, clear=False):
+                graph = platform_graph.board_graph('orangepi-5-plus', declaration,
+                    ['rootfs', '--outer-tests', 'none', '--guest-tests', 'none'])
+
+            tasks = {task['id']: task for task in graph['tasks']}
+            base = tasks['orangepi-5-plus.rootfs.base']
+            image = tasks['orangepi-5-plus.rootfs']
+            prepared = work / 'workspaces/orangepi-5-plus/rootfs-bases/orangepi-jammy.img'
+            self.assertEqual(base['phase'], 'prepare')
+            self.assertEqual(base['env']['ORANGEPI_GUEST_ROOTFS'], str(prepared))
+            self.assertEqual(image['phase'], 'compose')
+            self.assertEqual(image['command'][-1], str(work / 'images/rootfs-aarch64-orangepi-jammy.img'))
+            self.assertIn('--output', image['cache_args'])
+
+            with mock.patch.dict(os.environ, {
+                    'BUILD_WORKSPACE_ROOT': str(work / 'workspaces'),
+                    'BUILD_CACHE_DIR': str(work / 'cache'),
+                    'ORANGEPI_GUEST_ROOTFS': str(work / 'images/rootfs-aarch64-orangepi-jammy.img'),
+            }, clear=False):
+                graph = platform_graph.board_graph('orangepi-5-plus', declaration,
+                    ['all', '--outer-tests', 'none', '--guest-tests', 'none'])
+            tasks = {task['id']: task for task in graph['tasks']}
+            final = tasks['orangepi-5-plus.finalize_linux_image']
+            self.assertEqual(final['phase'], 'compose')
+            self.assertIn('--output', final['cache_args'])
 
 
 if __name__ == '__main__':

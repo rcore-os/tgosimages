@@ -101,6 +101,26 @@ test_builder_argv_is_literal() (
 )
 run_ok 'rootfs builder receives literal safely quoted argv' test_builder_argv_is_literal
 
+test_staged_rootfs_publication() (
+    local fake_root="$work/staged-root" stage="$work/staged-rootfs"
+    ROOT_DIR=$fake_root ARCH=x86_64 ROOTFS_BUILDERS=(busybox alpine)
+    QEMU_ROOTFS_STAGE_DIR=$stage
+    mkdir -p "$fake_root/IMAGES/rootfs" "$stage"
+    printf busybox >"$stage/rootfs-x86_64-busybox.img"
+    printf initramfs >"$stage/initramfs-x86_64-busybox.cpio.gz"
+    printf alpine >"$stage/rootfs-x86_64-alpine.img"
+    qemu_publish_staged_rootfs
+    cmp "$stage/rootfs-x86_64-busybox.img" "$fake_root/IMAGES/rootfs/rootfs-x86_64-busybox.img"
+    cmp "$stage/initramfs-x86_64-busybox.cpio.gz" "$fake_root/IMAGES/rootfs/initramfs-x86_64-busybox.cpio.gz"
+    cmp "$stage/rootfs-x86_64-alpine.img" "$fake_root/IMAGES/rootfs/rootfs-x86_64-alpine.img"
+
+    printf old >"$fake_root/IMAGES/rootfs/rootfs-x86_64-alpine.img"
+    rm "$stage/rootfs-x86_64-alpine.img"
+    if (qemu_publish_staged_rootfs); then return 1; fi
+    [[ $(<"$fake_root/IMAGES/rootfs/rootfs-x86_64-alpine.img") == old ]]
+)
+run_ok 'QEMU compose publishes only a complete staged rootfs set' test_staged_rootfs_publication
+
 test_parallel_routing_and_order() (
     local call_log="$work/order.calls"
     ARCH=x86_64 OS=linux ROOTFS_BUILDERS=(alpine)

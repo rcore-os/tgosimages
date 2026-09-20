@@ -11,6 +11,9 @@ import tempfile
 import time
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'lib/python'))
+from build_pipeline import BuildPipeline
+
 ROOT = Path(__file__).resolve().parents[3]
 LIB = ROOT / 'scripts/lib/python'
 
@@ -87,6 +90,35 @@ os.unlink('exclusive')
         self.finish(self.launch(tasks))
         states = self.finish(self.launch(tasks))
         self.assertEqual(states['cached']['state'], 'hit')
+
+    def test_pipeline_expands_cached_prepare_build_and_compose_phases(self):
+        source = self.root / 'source'
+        source.write_text('payload')
+        pipeline = BuildPipeline('image')
+        pipeline.phase('prepare',
+            [sys.executable, '-c', "from pathlib import Path; Path('prepared').write_text(Path('source').read_text())"],
+            cache={'inputs': ['source'], 'outputs': ['prepared']})
+        pipeline.phase('build',
+            [sys.executable, '-c', "from pathlib import Path; Path('staged').write_text(Path('prepared').read_text())"],
+            cache={'inputs': ['prepared'], 'outputs': ['staged']})
+        pipeline.phase('compose',
+            [sys.executable, '-c', "from pathlib import Path; Path('image').write_text(Path('staged').read_text())"],
+            cache={'inputs': ['staged'], 'outputs': ['image']})
+        tasks = pipeline.tasks()
+        tasks.append(self.node('consumer', "from pathlib import Path; assert Path('image').read_text()=='payload'",
+                               deps=[pipeline.terminal]))
+
+        self.finish(self.launch(tasks))
+        states = self.finish(self.launch(tasks))
+
+        self.assertEqual([task['id'] for task in tasks[:3]],
+                         ['image.prepare', 'image.build', 'image.compose'])
+        self.assertEqual({states[name]['state'] for name in
+                          ('image.prepare', 'image.build', 'image.compose')}, {'hit'})
+        self.assertEqual([states[name]['phase'] for name in
+                          ('image.prepare', 'image.build', 'image.compose')],
+                         ['prepare', 'build', 'compose'])
+        self.assertEqual(states['consumer']['state'], 'success')
 
     def test_invalid_graph_does_not_execute_and_signal_releases_lock(self):
         tasks = [self.node('cycle', "open('unexpected','w').close()", deps=['cycle'])]

@@ -343,12 +343,16 @@ assert_eq initramfs "$(cat "$graph_node_output/initramfs-x86_64-busybox.cpio.gz"
     'QEMU image node changed the paired initramfs'
 
 guest_base="$work/guest-base.img"
+guest_published="$work/guest-published.img"
 cp --preserve=all --reflink=auto --sparse=always "$base" "$guest_base"
+guest_base_hash=$(sha256sum "$guest_base" | awk '{print $1}')
 normalize_tree_seconds "$guest_overlay"
 run_ok 'guest composition node injects the merged test overlay atomically' \
     env BUILD_WORK_DIR="$work" LOG_CREATE_DEFAULT_FILE=0 bash \
-        "$repo_root/scripts/lib/rootfs-guest-compose-node.sh" "$guest_base" "$guest_overlay" 2M
-run_ok 'guest composition node publishes test payload' has_path "$guest_base" /guest-tests/fake/payload
+        "$repo_root/scripts/lib/rootfs-guest-compose-node.sh" "$guest_base" "$guest_overlay" 2M "$guest_published"
+assert_eq "$guest_base_hash" "$(sha256sum "$guest_base" | awk '{print $1}')" \
+    'guest composition node changed its prepared input'
+run_ok 'guest composition node publishes test payload' has_path "$guest_published" /guest-tests/fake/payload
 
 collision_guest="$work/collision-guest"
 mkdir "$collision_guest"

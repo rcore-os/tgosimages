@@ -46,6 +46,12 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 fi
 PLATFORM_IMAGES_DIR="$ROOT_DIR/IMAGES/fixture"
 PLATFORM_ROOTFS_DIR="$ROOT_DIR/IMAGES/rootfs"
+fixture_component() {
+    [[ $BUILD_WORKSPACE_NAME != orangepi-5-plus ]] || {
+        mkdir -p "$ROOT_DIR/IMAGES/orangepi/$1"
+        printf payload >"$ROOT_DIR/IMAGES/orangepi/$1/payload"
+    }
+}
 linux() {
     touch "$PROBE_ROOT/board.started"
     if [[ ${PROBE_HOLD:-0} == 1 ]]; then
@@ -62,26 +68,42 @@ linux() {
     printf 'compiler-output board\\n'
     [[ ${PROBE_BOARD_FAIL:-0} != 1 ]] || return 23
     touch "$BUILD_WORK_DIR/linux.done"
+    fixture_component linux
 }
-arceos() { touch "$BUILD_WORK_DIR/arceos.done"; }
+arceos() { touch "$BUILD_WORK_DIR/arceos.done"; fixture_component arceos; }
 rtthread() { :; }
-zephyr() { touch "$BUILD_WORK_DIR/zephyr.done"; }
-freertos() { touch "$BUILD_WORK_DIR/freertos.done"; }
-uboot() { touch "$BUILD_WORK_DIR/uboot.done"; }
-rootfs() { test -f "$BUILD_WORK_DIR/linux.done"; touch "$BUILD_WORK_DIR/rootfs.done"; }
-starry() { touch "$BUILD_WORK_DIR/starry.done"; }
+zephyr() { touch "$BUILD_WORK_DIR/zephyr.done"; fixture_component zephyr; }
+freertos() { touch "$BUILD_WORK_DIR/freertos.done"; fixture_component freertos; }
+uboot() { touch "$BUILD_WORK_DIR/uboot.done"; fixture_component u-boot; }
+rootfs() {
+    test -f "$BUILD_WORK_DIR/linux.done"
+    touch "$BUILD_WORK_DIR/rootfs.done"
+    if [[ $BUILD_WORKSPACE_NAME == orangepi-5-plus ]]; then
+        mkdir -p "$ROOT_DIR/IMAGES/rootfs"
+        printf guest >"$ROOT_DIR/IMAGES/rootfs/rootfs-aarch64-orangepi-jammy.img"
+    fi
+}
+starry() { touch "$BUILD_WORK_DIR/starry.done"; fixture_component starry; }
 ivc() {
     test -f "$BUILD_WORK_DIR/starry.done"
     test -f "$BUILD_WORK_DIR/zephyr.done"
     touch "$BUILD_WORK_DIR/ivc.done"
+    fixture_component ivc
 }
 orangepi_build_base_image() {
     for component in linux rootfs uboot arceos starry zephyr freertos ivc; do
         test -f "$BUILD_WORK_DIR/$component.done"
     done
     touch "$BUILD_WORK_DIR/base.done"
+    mkdir -p "$BUILD_WORK_DIR/orangepi-rootfs"
+    printf base >"$BUILD_WORK_DIR/orangepi-rootfs/orangepi-5-plus-base.img"
 }
-finalize_linux_image() { test -f "$BUILD_WORK_DIR/base.done"; touch "$PROBE_ROOT/orangepi.composed"; }
+finalize_linux_image() {
+    test -f "$BUILD_WORK_DIR/base.done"
+    mkdir -p "$ROOT_DIR/IMAGES/rootfs"
+    printf final >"$ROOT_DIR/IMAGES/rootfs/orangepi-5-plus.img"
+    touch "$PROBE_ROOT/orangepi.composed"
+}
 rootfs_inject_guest_stage() { test -f "$BUILD_WORK_DIR/linux.done"; }
 ''')
             script.chmod(0o755)
@@ -219,6 +241,12 @@ qemu_rootfs_inject_platform_dir() { touch "$PROBE_ROOT/$ARCH.composed"; }
         graphs = list((self.repo / 'logs').rglob('graph.json'))
         self.assertEqual(len(graphs), 1)
         states = json.loads(graphs[0].with_name('state.json').read_text())
+        graph = json.loads(graphs[0].read_text())
+        tasks = {task['id']: task for task in graph['tasks']}
+        self.assertEqual(tasks['qemu-aarch64.linux']['phase'], 'build')
+        self.assertEqual(tasks['qemu-aarch64.compose']['phase'], 'compose')
+        self.assertEqual(tasks['phytiumpi.linux']['phase'], 'build')
+        self.assertEqual(tasks['phytiumpi.compose']['phase'], 'compose')
         self.assertEqual(states['phytiumpi.compose']['state'], 'blocked')
         self.assertEqual(states['qemu-aarch64.compose']['state'], 'success')
 
@@ -227,6 +255,10 @@ qemu_rootfs_inject_platform_dir() { touch "$PROBE_ROOT/$ARCH.composed"; }
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((self.work / 'orangepi.composed').exists())
         self.assertEqual(len(list((self.repo / 'logs').rglob('graph.json'))), 1)
+
+        result = self.invoke('orangepi-5-plus')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('HIT orangepi-5-plus.finalize_linux_image', result.stdout)
 
     def test_single_board_command_includes_dependencies(self):
         result = run(['bash', str(self.repo / 'build.sh'), 'platform', 'orangepi-5-plus', 'rootfs'], env=self.env)

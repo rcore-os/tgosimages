@@ -78,6 +78,8 @@ def validate(graph, jobs, memory):
             raise ValueError(f'{name}: invalid environment or cwd')
         if 'cache_args' in task and not strings(task['cache_args']):
             raise ValueError(f'{name}: cache_args must be an argv array')
+        if task.get('phase', 'run') not in ('prepare', 'build', 'validate', 'compose', 'run'):
+            raise ValueError(f'{name}: invalid task phase')
         task.setdefault('deps', [])
         task.setdefault('resources', [])
         task['cpu_min'] = positive(task.get('cpu_min', 1))
@@ -265,11 +267,12 @@ def execute(graph, log_dir):
                     states[name].update(state='failed', error=str(exc))
                     log('ERROR', f'FAILED {name}: {exc}')
                     continue
-                states[name].update(state='running', jobs=tool_budget, allocation=budget,
+                phase = task.get('phase', 'run')
+                states[name].update(state='running', phase=phase, jobs=tool_budget, allocation=budget,
                                     started=time.monotonic())
                 running[name] = (process, stream, task)
                 allocation = f' allocation={budget}' if tool_budget != budget else ''
-                log('INFO', f'STARTED {name}: jobs={tool_budget}{allocation} log={step_log}')
+                log('INFO', f'STARTED {name}: jobs={tool_budget}{allocation} log={step_log} phase={phase}')
             save()
             if not running and all(s['state'] != 'waiting' for s in states.values()):
                 break

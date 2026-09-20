@@ -303,8 +303,10 @@ orangepi_build_guest_rootfs() (
     image="$work/rootfs.img"
     overlay_parent="$work/overlays"
     mkdir -p "$tree" "$overlay_parent"
+    local guest_tests=$ORANGEPI_GUEST_TESTS
+    [[ ${ROOTFS_GRAPH_BASE_ONLY:-0} != 1 ]] || guest_tests=none
     rootfs_builder_prepare_test_overlays aarch64 "$ORANGEPI_ROOTFS_TYPE" none \
-        "$ORANGEPI_GUEST_TESTS" "$overlay_parent" outer_overlay guest_overlay || return 1
+        "$guest_tests" "$overlay_parent" outer_overlay guest_overlay || return 1
     mkdir -p "$guest_overlay/etc/systemd/system/serial-getty@ttyS0.service.d"
     cat >"$guest_overlay/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf" <<'EOF'
 [Service]
