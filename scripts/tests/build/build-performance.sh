@@ -116,6 +116,16 @@ git -C "$work/patched" add value
 printf 'three\n' >"$work/patched/value"
 git -C "$work/patched" diff >"$work/ordered/02.patch"
 git -C "$work/patched" reset --hard -q "$base"
+touch "$work/patched/.git/index.lock"
+checkout_ref "$work/patched" "$base"
+[[ ! -e $work/patched/.git/index.lock ]]
+printf 'PASS: checkout removes an unowned stale Git index lock\n'
+exec {held_lock_fd}>"$work/patched/.git/index.lock"
+if git_remove_stale_index_lock "$work/patched"; then exit 1; fi
+[[ -e $work/patched/.git/index.lock ]]
+exec {held_lock_fd}>&-
+rm "$work/patched/.git/index.lock"
+printf 'PASS: checkout preserves an actively owned Git index lock\n'
 prepare_patched_source "$work/patched" "$base" "$work/ordered"
 [[ $(cat "$work/patched/value") == three ]]
 prepare_patched_source "$work/patched" "$base" "$work/ordered"

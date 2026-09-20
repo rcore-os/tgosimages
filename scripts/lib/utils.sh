@@ -503,6 +503,31 @@ clone_repository() {
     fi
 }
 
+git_remove_stale_index_lock() {
+    local repo_path=$1 lock_path modified now
+    lock_path="$repo_path/.git/index.lock"
+    [[ -e $lock_path ]] || return 0
+    [[ -f $lock_path && ! -L $lock_path ]] || {
+        error "Refusing to remove unexpected Git index lock: $lock_path"
+        return 1
+    }
+    if command -v fuser >/dev/null 2>&1; then
+        if fuser -s "$lock_path" 2>/dev/null; then
+            error "Git index lock is still owned by a running process: $lock_path"
+            return 1
+        fi
+    else
+        modified=$(stat -c %Y -- "$lock_path") || return 1
+        now=$(date +%s) || return 1
+        ((now - modified >= 300)) || {
+            error "Git index lock may still be active: $lock_path"
+            return 1
+        }
+    fi
+    warn "Removing stale Git index lock: $lock_path"
+    rm -f -- "$lock_path"
+}
+
 checkout_ref() {
     # Usage: checkout_git_ref <repo_path> <ref>
     local repo_path="$1"
@@ -510,13 +535,14 @@ checkout_ref() {
     build_assert_workspace_path "$repo_path" || return
     local fetch_attempt
     local target="$ref"
-    if [[ -n ${BUILD_SOURCE_CACHE_DIR:-} ]] && ! git -C "$repo_path" cat-file -e "${ref}^{tree}" 2>/dev/null; then
-        target=$(bash "$TGOS_BUILD_LIB_DIR/git-source-cache.sh" ref "$repo_path" "$ref") || return
-        ref=$target
-    fi
     if [ ! -d "$repo_path/.git" ]; then
         error "$repo_path is not a git repository"
         return 1
+    fi
+    git_remove_stale_index_lock "$repo_path" || return
+    if [[ -n ${BUILD_SOURCE_CACHE_DIR:-} ]] && ! git -C "$repo_path" cat-file -e "${ref}^{tree}" 2>/dev/null; then
+        target=$(bash "$TGOS_BUILD_LIB_DIR/git-source-cache.sh" ref "$repo_path" "$ref") || return
+        ref=$target
     fi
     pushd "$repo_path" >/dev/null || return 1
     # Most repositories are cloned with --depth=1. Fetch only the requested ref
