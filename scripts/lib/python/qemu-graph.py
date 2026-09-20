@@ -27,6 +27,7 @@ def make_graph(arch, args, log_dir):
     log_dir.mkdir(parents=True, exist_ok=True)
     if args[0].startswith('--'):
         args.insert(0, 'all')
+    guest_count = None if args[0] == 'clean' else rootfs_graph.guest_count()
     arches = ['aarch64', 'riscv64', 'x86_64', 'loongarch64'] if arch == 'all' else [arch]
     root = Path(os.environ.get('BUILD_WORKSPACE_ROOT', ROOT / 'build/workspaces')).resolve()
     cache = Path(os.environ.get('BUILD_CACHE_DIR', ROOT / 'build/.cache')).resolve()
@@ -47,6 +48,8 @@ def make_graph(arch, args, log_dir):
                    BUILD_CACHE_DIR=str(cache), BUILD_SOURCE_CACHE_DIR=os.environ.get('BUILD_SOURCE_CACHE_DIR', str(cache / 'git')),
                    ROOTFS_TEST_BUILD_ROOT=os.environ.get('ROOTFS_TEST_BUILD_ROOT', str(workspace / 'rootfs-tests')),
                    QEMU_GRAPH_INTERNAL='execute', LOG_CREATE_DEFAULT_FILE='0')
+        if guest_count is not None:
+            env['ROOTFS_GUEST_COUNT'] = str(guest_count)
         command = ['bash', str(ROOT / 'scripts/platform/qemu.sh'), target, *args]
         description = log_dir / f'{name}.json'
         plan_env = dict(os.environ, **env)

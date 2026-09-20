@@ -214,20 +214,21 @@ scripts/rootfs/debian.sh loongarch64 --debian unstable --out_dir IMAGES/rootfs
 
 ### Outer and nested images
 
-Each ext4 builder starts from one clean base image and composes two independent
+Each ext4 builder starts from one clean base image and composes independent
 branches:
 
 ```text
 clean base
 ├── guest branch + guest test plugins -> nested rootfs
 └── outer branch + outer test plugins + /guest platform payload
-    ├── /guest/rootfs-<arch>-<type>.img (guest 1)
-    └── /guest/rootfs-<arch>-<type>-2.img (guest 2)
+    ├── /guest/rootfs-<arch>-<type>-0.img
+    ├── /guest/rootfs-<arch>-<type>-1.img
+    └── ... through -(ROOTFS_GUEST_COUNT-1).img
 ```
 
 Guest plugins install below `/guest-tests/<plugin>` in the nested image. The
-outer image contains platform payload below `/guest` and the raw nested image at
-the two paths above; outer-only platform files and `/opt/ltp` do
+outer image contains platform payload below `/guest` and the raw nested images at
+the paths above; outer-only platform files and `/opt/ltp` do
 not leak into the nested image. There is deliberately no generated
 `run-all.sh`: selecting tests packages their assets but does not choose a test
 order or run them automatically.
@@ -239,10 +240,10 @@ The defaults are:
 | Outer tests | `none` | `ltp` | `none` |
 | Nested guest tests | `cyclictest,lmbench,iozone` | `cyclictest,lmbench,iozone` | `cyclictest,lmbench,iozone` |
 
-Both guests start with identical contents and use the same `--guest-tests`
-selection. Tests build once; the resulting filesystem is stored as two independent
-regular files, never hardlinks. Writes to one do not modify the other. The first
-keeps its legacy name; the second adds `-2`. These filesystem copies initially
+`ROOTFS_GUEST_COUNT` defaults to `2` and accepts positive decimal integers.
+All guests start with identical contents and use the same `--guest-tests`
+selection. Tests build once; the resulting filesystem is stored as independently
+writable regular files, never hardlinks. Names are always zero-based. These copies initially
 share a UUID; each guest mounts its own block device.
 
 In the `platform` graph, each test plugin is a leaf task. Outer/guest overlay
@@ -251,7 +252,10 @@ lets tests across architectures and platforms share the global budget, while a
 plugin failure blocks only its dependent image chain.
 
 Each guest and the outer ext4 image reserve 256 MiB free space by default;
-`--guest-free-size` applies separately to both guests. The
+`--guest-free-size` applies separately to every guest. The outer filesystem is
+automatically expanded for all guest files, platform payloads, metadata, and
+`--outer-free-size`; raw image size therefore grows approximately linearly with
+`ROOTFS_GUEST_COUNT`. The
 uncompressed nested image is embedded as a raw file, so the raw outer image can
 grow substantially; release-time xz compression may still make the archive
 much smaller, but no compressed-size threshold is guaranteed. BusyBox ext4
@@ -425,8 +429,8 @@ Individual build commands do not publish that image. The final Ubuntu Jammy mini
 root filesystem contains all platform payloads under `/guest` and the nested rootfs:
 
 ```text
-/guest/rootfs-aarch64-orangepi-jammy.img
-/guest/rootfs-aarch64-orangepi-jammy-2.img
+/guest/rootfs-aarch64-orangepi-jammy-0.img
+/guest/rootfs-aarch64-orangepi-jammy-1.img
 └── /guest-tests/
     ├── cyclictest/
     ├── lmbench/

@@ -31,6 +31,9 @@ Verify composed outer ext4 rootfs images and their nested guest images.
   --outer-free-size <size>    Minimum outer free bytes (default: 256M)
   --outer-only-path <path>    Require path in outer and forbid it in nested (repeatable)
   -h, --help                  Show this help
+
+Environment: ROOTFS_GUEST_COUNT selects the number of zero-based guest images
+(default: 2; must be a decimal integer from 1 through 8).
 EOF
 }
 
@@ -57,6 +60,7 @@ case $selected_arch in ''|aarch64|riscv64|x86_64|loongarch64) ;; *) die "unsuppo
 case $selected_rootfs in ''|busybox|alpine|debian) ;; *) die "unsupported rootfs: $selected_rootfs" ;; esac
 guest_free_bytes=$(rootfs_parse_size_bytes "$guest_free_size") || die "invalid guest free size: $guest_free_size"
 outer_free_bytes=$(rootfs_parse_size_bytes "$outer_free_size") || die "invalid outer free size: $outer_free_size"
+guest_count=$(_rootfs_guest_count) || die "invalid ROOTFS_GUEST_COUNT: ${ROOTFS_GUEST_COUNT-2}"
 [[ $guest_tests == none || $guest_tests == all || ($guest_tests != ,* && $guest_tests != *, && $guest_tests != *,,*) ]] ||
     die "invalid guest test selection: $guest_tests"
 for path in "${outer_only_paths[@]}"; do
@@ -178,23 +182,30 @@ for outer in "${images[@]}"; do
     [[ $name =~ ^rootfs-(aarch64|riscv64|x86_64|loongarch64)-(busybox|alpine|debian)\.img$ ]]
     arch=${BASH_REMATCH[1]}
     rootfs=${BASH_REMATCH[2]}
-    nested_path="/guest/rootfs-$arch-$rootfs.img"
-    nested="$tmp_dir/nested-$arch-$rootfs.img"
+    nested_base="rootfs-$arch-$rootfs.img"
+    nested=
+    declare -A nested_inodes=()
     e2fsck -fn "$outer" >/dev/null || die "outer ext4 check failed: $outer"
-    dump_required "$outer" "$nested_path" "$nested"
-    second_path="${nested_path%.img}-2.img"
-    second="$tmp_dir/nested-$arch-$rootfs-2.img"
-    dump_required "$outer" "$second_path" "$second"
-    cmp -s "$nested" "$second" || die "guest images have different initial contents: $outer"
-    first_inode=$(_rootfs_debugfs_stat "$outer" "$nested_path" required | awk '/^Inode:/ {print $2}')
-    second_inode=$(_rootfs_debugfs_stat "$outer" "$second_path" required | awk '/^Inode:/ {print $2}')
-    [[ $first_inode != "$second_inode" ]] || die "guest images share an inode: $outer"
-    e2fsck -fn "$nested" >/dev/null || die "nested ext4 check failed: $nested_path"
+    for ((guest_index = 0; guest_index < guest_count; guest_index++)); do
+        guest_name=$(_rootfs_guest_image_name "$nested_base" "$guest_index") || die 'cannot name guest image'
+        nested_path="/guest/$guest_name"
+        guest_image="$tmp_dir/nested-$arch-$rootfs-$guest_index.img"
+        dump_required "$outer" "$nested_path" "$guest_image"
+        if [[ -z $nested ]]; then
+            nested=$guest_image
+        else
+            cmp -s "$nested" "$guest_image" || die "guest images have different initial contents: $outer"
+        fi
+        guest_inode=$(_rootfs_debugfs_stat "$outer" "$nested_path" required | awk '/^Inode:/ {print $2}')
+        [[ -z ${nested_inodes[$guest_inode]+set} ]] || die "guest images share an inode: $outer"
+        nested_inodes[$guest_inode]=1
+        e2fsck -fn "$guest_image" >/dev/null || die "nested ext4 check failed: $nested_path"
+        nested_free=$(rootfs_ext4_free_bytes "$guest_image") || die "cannot read nested free space: $nested_path"
+        ((nested_free >= guest_free_bytes)) || die "nested free space is below $guest_free_size: $nested_path"
+    done
 
     outer_free=$(rootfs_ext4_free_bytes "$outer") || die "cannot read outer free space: $outer"
-    nested_free=$(rootfs_ext4_free_bytes "$nested") || die "cannot read nested free space: $nested_path"
     ((outer_free >= outer_free_bytes)) || die "outer free space is below $outer_free_size: $outer"
-    ((nested_free >= guest_free_bytes)) || die "nested free space is below $guest_free_size: $nested_path"
 
     forbid_path "$nested" /opt/ltp
     forbid_nested_rootfs_images "$nested"

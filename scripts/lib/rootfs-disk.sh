@@ -396,7 +396,8 @@ rootfs_compose_disk_guest() (
     local base=$1 platform_source=$2 guest_input=$3 arch=$4 rootfs_type=$5
     local guest_free_value=$6 outer_free_value=$7 output=$8
     local guest_mode=${9:-overlay}
-    local output_dir output_base guest_free outer_free nested_name root_info
+    local output_dir output_base guest_free outer_free nested_name root_info guest_count
+    local capacity_stats nested_bytes nested_inodes guest_image_bytes
     local partno start size label guest_bytes guest_inodes base_lock output_lock actual_guest_free
     local lock_fd1 lock_fd2 stage=validate-inputs status
     local base_snapshot= platform_snapshot= guest_overlay= guest_image= outer_partition=
@@ -425,7 +426,7 @@ rootfs_compose_disk_guest() (
     trap cleanup_disk_compose EXIT
     trap 'exit 130' INT TERM
 
-    _rootfs_disk_require_tools basename cp dd debugfs dirname dumpe2fs e2fsck find \
+    _rootfs_disk_require_tools basename cp dd debugfs df dirname dumpe2fs e2fsck find \
         flock mkdir mktemp mv python3 realpath resize2fs rm sfdisk stat touch truncate || return 1
     [[ -f $base && ! -L $base ]] || { _rootfs_disk_error "base disk not found: $base"; return 1; }
     [[ -d $platform_source ]] || {
@@ -516,8 +517,13 @@ rootfs_compose_disk_guest() (
     stage=stage-nested-and-platform-payload
     nested_stage=$(mktemp -d "${output_dir}/.${output_base}.nested.XXXXXX") || return 1
     touch -d "@$(stat -c %Y -- "$base_snapshot")" "$guest_image" || return 1
-    _rootfs_stage_guest_pair "$guest_image" "$nested_stage" "$nested_name" || return 1
+    _rootfs_stage_guest_images "$guest_image" "$nested_stage" "$nested_name" || return 1
     _rootfs_validate_payload_tree "$nested_stage" || return 1
+    capacity_stats=$(rootfs_overlay_capacity_stats "$nested_stage") || return 1
+    read -r nested_bytes nested_inodes <<<"$capacity_stats"
+    guest_count=$(_rootfs_guest_count) || return 1
+    guest_image_bytes=$(stat -c %s -- "$guest_image") || return 1
+    info "Composing ${guest_count} guest images: each=${guest_image_bytes}B staged=${nested_bytes}B outer-reserve=${outer_free}B"
 
     stage=extract-outer-root
     outer_partition=$(mktemp "${output_dir}/.${output_base}.outer-root.XXXXXX") || return 1
@@ -543,8 +549,7 @@ rootfs_compose_disk_guest() (
     rm -f -- "$validation_partition"
     rootfs_disk_extract_partition "$outer_disk" "$start" "$size" "$validation_partition" || return 1
     _rootfs_check_clean "$validation_partition" || return 1
-    _rootfs_debugfs_stat "$validation_partition" "/guest/$nested_name" required >/dev/null || return 1
-    _rootfs_debugfs_stat "$validation_partition" "/guest/${nested_name%.img}-2.img" required >/dev/null || return 1
+    _rootfs_validate_guest_image_set "$validation_partition" "$nested_name" || return 1
 
     stage=publish-output
     touch -r "$base_snapshot" "$outer_disk" || return 1

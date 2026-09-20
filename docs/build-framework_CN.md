@@ -190,6 +190,7 @@ build_task "kernel-$arch" \
 | `BUILD_REBUILD=1` | 跳过整项任务命中检查，成功后更新记录 |
 | `BUILD_WORKSPACE_ROOT` | 工作区根目录，默认 `build/workspaces` |
 | `BUILD_SOURCE_CACHE_DIR` | Git 下载缓存，默认 `${BUILD_CACHE_DIR}/git` |
+| `ROOTFS_GUEST_COUNT` | 零编号嵌套客户机 rootfs 数量，默认 `2`，最小 `1`，无固定上限 |
 | `LOG_COLOR` | `auto` 自动终端着色、`always` 强制着色、`never` 关闭 |
 
 保留现有 `CCACHE_DIR`、CMake launcher 和 `RUSTC_WRAPPER` 等显式覆盖。图调度器按已分配 CPU 配额设置 `CARGO_BUILD_JOBS`，防止继承更大的外层预算；旧入口保留该变量的显式覆盖。缺少 ccache/sccache 时回退到普通编译。
@@ -200,13 +201,13 @@ build_task "kernel-$arch" \
 
 ## 7. 新目标验收要求
 
-使用公共 rootfs 组合流程的外层镜像必须包含两份独立 guest rootfs：`/guest/rootfs-<arch>-<type>.img` 和 `/guest/rootfs-<arch>-<type>-2.img`。两份初始内容相同，复用一次测例构建结果，以不同普通文件保存；每份分别满足 guest 空闲空间配置。组装时必须计算两份的容量，并保护两个文件名免受平台载荷或 overlay 覆盖。该规则同时适用于普通 ext4 外层镜像和香橙派分区磁盘镜像；BusyBox initramfs 仍不嵌套 guest 镜像。
+使用公共 rootfs 组合流程的外层镜像必须包含 `ROOTFS_GUEST_COUNT` 份独立 guest rootfs；该变量默认为 `2`，接受大于等于 `1` 的十进制整数，不设置固定上限。复制开始前会根据单份镜像大小和宿主机可用空间拒绝当前机器无法容纳的数量。文件从 `/guest/rootfs-<arch>-<type>-0.img` 开始零编号，直到 `-(count-1).img`。所有副本初始内容相同，复用一次测例构建结果，以不同普通文件保存；每份分别满足 guest 空闲空间配置。组装时必须计算全部副本、平台载荷、元数据及 outer 预留空间所需容量，并保护全部编号文件名，同时拒绝旧的无编号名称。该规则同时适用于普通 ext4 外层镜像和香橙派分区磁盘镜像；BusyBox initramfs 仍不嵌套 guest 镜像。
 
-rootfs 测例不得隐藏在 rootfs 镜像节点内部。图生成器把每个已选择插件展开为叶子节点，例如 `tests.guest.cyclictest`、`tests.guest.lmbench`、`tests.guest.iozone` 和 `tests.outer.ltp`；同一 scope 的插件完成后进入 `overlay.outer` 或 `overlay.guest` 合并节点。合并节点检查路径和祖先冲突，产出独占目录。干净基础 rootfs 是另一个无测例节点；最终 rootfs 镜像节点等待基础 rootfs 和两个 overlay，生成双 guest 与外层镜像。平台镜像组装再依赖最终 rootfs。
+rootfs 测例不得隐藏在 rootfs 镜像节点内部。图生成器把每个已选择插件展开为叶子节点，例如 `tests.guest.cyclictest`、`tests.guest.lmbench`、`tests.guest.iozone` 和 `tests.outer.ltp`；同一 scope 的插件完成后进入 `overlay.outer` 或 `overlay.guest` 合并节点。合并节点检查路径和祖先冲突，产出独占目录。干净基础 rootfs 是另一个无测例节点；最终 rootfs 镜像节点等待基础 rootfs 和两个 overlay，生成配置数量的 guest 与外层镜像。平台镜像组装再依赖最终 rootfs。
 
-两份 guest 共用一个 `overlay.guest` 结果，所以测例只编译一次。outer 与 guest 是不同安装范围，即使插件名称相同也保持不同节点。插件的下载、源码和 builder 缓存继续使用 `ROOTFS_TEST_BUILD_ROOT` 及文件锁；节点的线程预算来自全局调度器。QEMU 的 BusyBox/Alpine/Debian 和香橙派 guest rootfs 已采用该结构。
+所有 guest 共用一个 `overlay.guest` 结果，所以测例只编译一次。outer 与 guest 是不同安装范围，即使插件名称相同也保持不同节点。插件的下载、源码和 builder 缓存继续使用 `ROOTFS_TEST_BUILD_ROOT` 及文件锁；节点的线程预算来自全局调度器。QEMU 的 BusyBox/Alpine/Debian 和香橙派 guest rootfs 已采用该结构。
 
-香橙派的 guest 链为“基础 guest → guest overlay 注入 → 双 guest 外层磁盘组装”；QEMU 链为“基础 rootfs + outer/guest overlay → 双 guest rootfs → 平台载荷注入”。BusyBox 的基础节点同时生成 initramfs，最终 rootfs 节点使用原有双文件回滚发布，避免只更新 ext4 或 initramfs 其中一个。
+香橙派的 guest 链为“基础 guest → guest overlay 注入 → 多 guest 外层磁盘组装”；QEMU 链为“基础 rootfs + outer/guest overlay → 多 guest rootfs → 平台载荷注入”。BusyBox 的基础节点同时生成 initramfs，最终 rootfs 节点使用原有双文件回滚发布，避免只更新 ext4 或 initramfs 其中一个。
 
 接入时必须验证：首次构建成功；重复构建可以正确复用；源码、补丁、配置、工具链和依赖变化触发重建；输出损坏触发重建；失败后可以重试；并行任务不争写源码或产物；clean 不删除其他目标的数据。
 
@@ -216,7 +217,7 @@ rootfs 测例不得隐藏在 rootfs 镜像节点内部。图生成器把每个�
 
 图调度回归：`python3 scripts/tests/build-graph.py`，验证真实子进程重叠与预算回收、依赖失败传播、互斥/内存准入、缓存命中后执行下游任务和中断释放锁。产物损坏导致缓存失效由 `build-performance.sh` 覆盖。
 
-rootfs 子图回归：`python3 scripts/tests/rootfs-graph.py`，验证插件叶子并行、overlay 合并依赖和最终消费者顺序；`rootfs-compose.sh` 使用真实 ext4 验证基础节点、双 guest 组合及原子注入。
+rootfs 子图回归：`python3 scripts/tests/rootfs-graph.py`，验证插件叶子并行、overlay 合并依赖和最终消费者顺序；`rootfs-compose.sh` 使用真实 ext4 验证基础节点、可配置 guest 组合及原子注入。
 
 边界回归入口：`python3 scripts/tests/build-review-regressions.py`，覆盖编译器选择、异常进程退出、失败传播、文件类型区分及构建期间工具变化。
 

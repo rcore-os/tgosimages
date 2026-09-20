@@ -327,8 +327,8 @@ fractional_arceos_timestamp=$(stat -c '%x|%y' "$platform_stage/arceos/orangepi-5
 
 composed="$work/composed.img"
 run_ok 'a disk image composes a same-origin nested guest transactionally' \
-    rootfs_compose_disk_guest "$compose_base" "$platform_stage" "$guest_overlay" \
-        aarch64 orangepi-jammy 8M 8M "$composed"
+    env ROOTFS_GUEST_COUNT=3 bash -c 'source "$1/scripts/lib/utils.sh"; source "$1/scripts/lib/rootfs.sh"; source "$1/scripts/lib/rootfs-compose.sh"; source "$1/scripts/lib/rootfs-disk.sh"; rootfs_compose_disk_guest "$2" "$3" "$4" aarch64 orangepi-jammy 8M 8M "$5"' \
+        _ "$repo_root" "$compose_base" "$platform_stage" "$guest_overlay" "$composed"
 assert_eq "$compose_base_sha" "$(sha256sum "$compose_base" | awk '{print $1}')" \
     'composition leaves the base disk content unchanged'
 assert_eq 1700000100 "$(stat -c %Y "$compose_base")" \
@@ -341,13 +341,19 @@ read -r composed_part composed_start composed_size _ < <(rootfs_disk_find_root_p
 rootfs_disk_extract_partition "$composed" "$composed_start" "$composed_size" "$work/composed-outer.img"
 has_path "$work/composed-outer.img" /guest/linux/orangepi-5-plus || \
     fail 'outer image lacks staged platform kernel'
-has_path "$work/composed-outer.img" /guest/rootfs-aarch64-orangepi-jammy.img || \
+has_path "$work/composed-outer.img" /guest/rootfs-aarch64-orangepi-jammy-0.img || \
     fail 'outer image lacks nested Orange Pi rootfs'
-debugfs -R "dump /guest/rootfs-aarch64-orangepi-jammy.img $work/nested.img" \
+! has_path "$work/composed-outer.img" /guest/rootfs-aarch64-orangepi-jammy.img || \
+    fail 'outer image retained the legacy unnumbered Orange Pi guest name'
+debugfs -R "dump /guest/rootfs-aarch64-orangepi-jammy-0.img $work/nested.img" \
     "$work/composed-outer.img" >/dev/null 2>&1
-debugfs -R "dump /guest/rootfs-aarch64-orangepi-jammy-2.img $work/nested-2.img" \
+debugfs -R "dump /guest/rootfs-aarch64-orangepi-jammy-1.img $work/nested-2.img" \
     "$work/composed-outer.img" >/dev/null 2>&1
-run_ok 'disk composition embeds two identical guests' cmp "$work/nested.img" "$work/nested-2.img"
+debugfs -R "dump /guest/rootfs-aarch64-orangepi-jammy-2.img $work/nested-3.img" \
+    "$work/composed-outer.img" >/dev/null 2>&1
+run_ok 'disk composition embeds configured identical guests' \
+    bash -c 'cmp "$1" "$2" && cmp "$1" "$3"' _ \
+        "$work/nested.img" "$work/nested-2.img" "$work/nested-3.img"
 run_ok 'nested Orange Pi rootfs is clean' e2fsck -fn "$work/nested.img"
 assert_eq gpt-root "$(debugfs -R 'cat /etc/rootfs-marker' "$work/nested.img" 2>/dev/null)" \
     'nested rootfs comes from the unmodified Orange Pi root partition'
@@ -356,24 +362,26 @@ has_path "$work/nested.img" /guest-tests/lmbench/bin/Linux/lat_syscall || fail '
 has_path "$work/nested.img" /guest-tests/iozone/iozone || fail 'nested rootfs lacks iozone'
 ! has_path "$work/nested.img" /guest/platform/outer-only || \
     fail 'nested rootfs contains outer-only platform content'
-! has_path "$work/nested.img" /guest/rootfs-aarch64-orangepi-jammy.img || \
+! has_path "$work/nested.img" /guest/rootfs-aarch64-orangepi-jammy-0.img || \
     fail 'nested rootfs recursively contains itself'
 run_ok 'nested rootfs keeps its configured reserve' \
     test "$(rootfs_ext4_free_bytes "$work/nested.img")" -ge $((8 * 1024 * 1024))
 run_ok 'outer rootfs keeps its configured reserve' \
     test "$(rootfs_ext4_free_bytes "$work/composed-outer.img")" -ge $((8 * 1024 * 1024))
 run_ok 'the Orange Pi content validator accepts the composed fixture' \
-    bash "$repo_root/scripts/tests/orangepi-nested-content.sh" \
+    env ROOTFS_GUEST_COUNT=3 bash "$repo_root/scripts/tests/orangepi-nested-content.sh" \
         --image "$composed" --guest-free-size 8M --outer-free-size 8M --skip-elf-check
 
 prebuilt_composed="$work/prebuilt-composed.img"
 run_ok 'a disk image embeds an independently published guest rootfs' \
     rootfs_compose_disk_guest "$compose_base" "$platform_stage" "$work/nested.img" \
         aarch64 orangepi-jammy 8M 8M "$prebuilt_composed" prebuilt
+run_ok 'an additional configured guest grows the partitioned disk image' \
+    test "$(stat -c %s "$composed")" -gt "$(stat -c %s "$prebuilt_composed")"
 read -r _ prebuilt_start prebuilt_size _ < <(rootfs_disk_find_root_partition "$prebuilt_composed")
 rootfs_disk_extract_partition "$prebuilt_composed" "$prebuilt_start" "$prebuilt_size" \
     "$work/prebuilt-outer.img"
-debugfs -R "dump /guest/rootfs-aarch64-orangepi-jammy.img $work/prebuilt-nested.img" \
+debugfs -R "dump /guest/rootfs-aarch64-orangepi-jammy-0.img $work/prebuilt-nested.img" \
     "$work/prebuilt-outer.img" >/dev/null 2>&1
 assert_eq gpt-root "$(debugfs -R 'cat /etc/rootfs-marker' "$work/prebuilt-nested.img" 2>/dev/null)" \
     'prebuilt nested rootfs content is preserved'
@@ -407,7 +415,7 @@ assert_eq "$roomy_part_size" "$(partition_field "$work/roomy-output.img" 1 size)
 printf previous-output >"$work/preserved-output.img"
 protected_platform="$work/protected-platform"
 mkdir -p "$protected_platform"
-printf collision >"$protected_platform/rootfs-aarch64-orangepi-jammy.img"
+printf collision >"$protected_platform/rootfs-aarch64-orangepi-jammy-0.img"
 normalize_tree_seconds "$protected_platform"
 run_fail 'a protected nested-image collision aborts composition' \
     rootfs_compose_disk_guest "$compose_base" "$protected_platform" "$guest_overlay" \

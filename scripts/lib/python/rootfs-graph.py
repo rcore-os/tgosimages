@@ -11,6 +11,16 @@ ROOT = PYTHON_LIB.parents[2]
 TEST_BUILD = ROOT / 'scripts/rootfs-test-plugins/build.sh'
 
 
+def guest_count():
+    value = os.environ.get('ROOTFS_GUEST_COUNT', '2')
+    if not value.isascii() or not value.isdecimal():
+        raise ValueError('ROOTFS_GUEST_COUNT must be a positive decimal integer')
+    count = int(value, 10)
+    if count < 1:
+        raise ValueError('ROOTFS_GUEST_COUNT must be at least 1')
+    return count
+
+
 def option(args, name):
     result = None
     index = 0

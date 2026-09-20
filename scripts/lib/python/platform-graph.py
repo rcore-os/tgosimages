@@ -24,6 +24,7 @@ def board_graph(name, declaration, args):
     components = declaration['components']
     if action not in ['all', 'clean', *components] or action in declaration.get('private', []):
         raise ValueError(f'Unknown command for {name}: {action}')
+    guest_count = rootfs_graph.guest_count() if name == 'orangepi-5-plus' and action != 'clean' else None
     workspace_root = Path(os.environ.get('BUILD_WORKSPACE_ROOT', ROOT / 'build/workspaces')).resolve()
     workspace = workspace_root / name
     workspace.mkdir(parents=True, exist_ok=True)
@@ -38,6 +39,8 @@ def board_graph(name, declaration, args):
     env = dict(PLATFORM_GRAPH_INTERNAL='1', BUILD_WORKSPACE_NAME=name, BUILD_WORK_DIR=str(workspace),
                BUILD_CACHE_DIR=str(cache), BUILD_SOURCE_CACHE_DIR=os.environ.get('BUILD_SOURCE_CACHE_DIR', str(cache / 'git')),
                ROOTFS_TEST_BUILD_ROOT=str(workspace / 'rootfs-tests'))
+    if guest_count is not None:
+        env['ROOTFS_GUEST_COUNT'] = str(guest_count)
     graph = dict(tasks=[], locks=[str(workspace_root / '.locks' / f'{name}.lock'),
                                  str(ROOT / 'build/.locks' / f'platform-{name}.lock')])
     if action == 'clean':

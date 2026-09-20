@@ -24,6 +24,7 @@ elapsed time and propagate tool failures. They do not evaluate command strings.
 | `BUILD_REBUILD` | `0` | `1` bypasses whole-task hits and refreshes successful records |
 | `BUILD_WORKSPACE_ROOT` | `build/workspaces` | Persistent isolated task workspaces |
 | `BUILD_SOURCE_CACHE_DIR` | `<BUILD_CACHE_DIR>/git` | Shared Git download cache |
+| `ROOTFS_GUEST_COUNT` | `2` | Positive number of zero-based nested guest rootfs files; resource-limited, no fixed maximum |
 | `LOG_COLOR` | `auto` | Terminal color policy: `auto`, `always`, `never` |
 
 Existing `CCACHE_DIR`, `CMAKE_C_COMPILER_LAUNCHER`, `CMAKE_CXX_COMPILER_LAUNCHER`,
@@ -109,11 +110,15 @@ running `cleanall`, which also removes default workspaces and their locks.
 
 ### Dependency graph contract
 
-The shared rootfs composition flow embeds two independent guests at
-`/guest/rootfs-<arch>-<type>.img` and `/guest/rootfs-<arch>-<type>-2.img`.
-Both start with identical contents from one test build and occupy distinct
-regular files. Each must satisfy the guest free-space reserve. Capacity planning
-includes both files, and platform/overlay injection must protect both names.
+The shared rootfs composition flow embeds `ROOTFS_GUEST_COUNT` independent
+guests, defaulting to two. The value must be a positive decimal integer. There
+is no fixed count maximum; composition rejects counts whose guest images cannot
+fit in the available host space before copying begins.
+Names are zero-based, from `/guest/rootfs-<arch>-<type>-0.img` through
+`-(count-1).img`. All start with identical contents from one test build and
+occupy distinct regular files. Each must satisfy the guest free-space reserve.
+Capacity planning includes every file, and platform/overlay injection protects
+every configured name as well as rejecting legacy unnumbered names.
 This applies to ext4 outer images and Orange Pi partitioned disk images;
 BusyBox initramfs does not embed guests.
 
@@ -122,14 +127,14 @@ image node. Every selected plugin becomes a node such as
 `tests.guest.cyclictest` or `tests.outer.ltp`. Per-scope overlay join nodes wait
 for their plugin leaves, reject path/ancestor collisions, and publish one owned
 directory. A separate clean-base node builds without tests. The final rootfs
-node waits for the base and both joins, then produces the outer image and two
-guests; platform composition waits for that image. The two guests consume one guest-overlay result, so tests compile
+node waits for the base and both joins, then produces the outer image and the
+configured guests; platform composition waits for that image. All guests consume one guest-overlay result, so tests compile
 once. Outer and guest installations remain separate nodes even for the same
 plugin. Downloads and builder sources retain their locked
 `ROOTFS_TEST_BUILD_ROOT` cache, while CPU budgets come from the global scheduler.
 QEMU BusyBox/Alpine/Debian and the Orange Pi guest rootfs use this structure.
 Orange Pi uses clean guest → guest-overlay injection → partitioned disk
-composition. QEMU uses clean base + two overlays → dual-guest rootfs → platform
+composition. QEMU uses clean base + two overlays → multi-guest rootfs → platform
 payload injection. BusyBox retains rollback-safe paired publication for its
 initramfs and ext4 output. Validate the child graph with
 `python3 scripts/tests/rootfs-graph.py`; the real ext4 split is covered by

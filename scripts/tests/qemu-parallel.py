@@ -203,6 +203,13 @@ qemu_rootfs_inject_platform_dir() { touch "$PROBE_ROOT/$ARCH.composed"; }
         self.assertFalse((self.work / 'aarch64.composed').exists())
         self.assertTrue((self.work / 'x86_64.composed').exists())
 
+    def test_invalid_guest_count_is_rejected_before_tasks_start(self):
+        result = self.invoke(ROOTFS_GUEST_COUNT='0')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('ROOTFS_GUEST_COUNT must be from 1 through 8',
+                      result.stderr)
+        self.assertFalse((self.work / 'events.json').exists())
+
     def test_platform_all_shares_graph_and_continues_after_board_failure(self):
         result = self.invoke('all', PROBE_BOARD_FAIL='1', PROBE_GLOBAL_BARRIER='1')
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)

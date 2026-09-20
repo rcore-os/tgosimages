@@ -111,6 +111,23 @@ make_ext4() {
     mkfs.ext4 -q -F "$image"
 }
 
+guest_stage_fixture="$work/guest-stage-fixture"
+mkdir -p "$guest_stage_fixture/output"
+printf 'guest-image\n' >"$guest_stage_fixture/source.img"
+run_ok 'guest staging uses the configured zero-based image count' \
+    bash -c 'source "$1"; ROOTFS_GUEST_COUNT=3 _rootfs_stage_guest_images "$2" "$3" rootfs-test.img' \
+        _ "$compose_lib" "$guest_stage_fixture/source.img" "$guest_stage_fixture/output"
+assert_eq 'rootfs-test-0.img rootfs-test-1.img rootfs-test-2.img' \
+    "$(find "$guest_stage_fixture/output" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')" \
+    'guest staging produced unexpected names'
+assert_eq 1 "$(ROOTFS_GUEST_COUNT=1 _rootfs_guest_count)" 'guest count accepts one'
+run_fail 'guest count rejects non-decimal input' \
+    bash -c 'source "$1"; ROOTFS_GUEST_COUNT=2x _rootfs_guest_count >/dev/null' _ "$compose_lib"
+run_fail 'guest count rejects an explicitly empty value' \
+    bash -c 'source "$1"; ROOTFS_GUEST_COUNT= _rootfs_guest_count >/dev/null' _ "$compose_lib"
+run_fail 'guest count rejects values above eight' \
+    bash -c 'source "$1"; ROOTFS_GUEST_COUNT=9 _rootfs_guest_count >/dev/null' _ "$compose_lib"
+
 normalize_tree_seconds() {
     find "$1" -depth -mindepth 1 -type l -exec touch -h -d @1700000000 {} +
     find "$1" -depth -mindepth 1 ! -type l -exec touch -d @1700000000 {} +
@@ -268,14 +285,18 @@ assert_eq base "$(getfattr -n user.rootfs-image-test --only-values "$output" 2>/
 assert_eq "$base_hash" "$(sha256sum "$base" | awk '{print $1}')" 'compose changed base'
 run_ok 'outer contains outer-only payload' has_path "$output" /outer-only/fixture
 run_ok 'outer contains builder guest content' has_path "$output" /guest/builder/content
-run_ok 'outer contains nested guest image' has_path "$output" /guest/rootfs-x86_64-busybox.img
+run_ok 'outer contains nested guest image' has_path "$output" /guest/rootfs-x86_64-busybox-0.img
+run_fail 'outer does not publish the legacy unnumbered guest name' \
+    has_path "$output" /guest/rootfs-x86_64-busybox.img
+run_fail 'default count does not publish the legacy guest-two name' \
+    has_path "$output" /guest/rootfs-x86_64-busybox-2.img
 nested="$work/nested.img"
-debugfs -R "dump /guest/rootfs-x86_64-busybox.img $nested" "$output" >/dev/null 2>&1
+debugfs -R "dump /guest/rootfs-x86_64-busybox-0.img $nested" "$output" >/dev/null 2>&1
 second="$work/nested-2.img"
-debugfs -R "dump /guest/rootfs-x86_64-busybox-2.img $second" "$output" >/dev/null 2>&1
+debugfs -R "dump /guest/rootfs-x86_64-busybox-1.img $second" "$output" >/dev/null 2>&1
 run_ok 'both guests have identical initial contents' cmp "$nested" "$second"
-first_inode=$(_rootfs_debugfs_stat "$output" /guest/rootfs-x86_64-busybox.img required | awk '/^Inode:/ {print $2}')
-second_inode=$(_rootfs_debugfs_stat "$output" /guest/rootfs-x86_64-busybox-2.img required | awk '/^Inode:/ {print $2}')
+first_inode=$(_rootfs_debugfs_stat "$output" /guest/rootfs-x86_64-busybox-0.img required | awk '/^Inode:/ {print $2}')
+second_inode=$(_rootfs_debugfs_stat "$output" /guest/rootfs-x86_64-busybox-1.img required | awk '/^Inode:/ {print $2}')
 run_ok 'guest images use independent outer filesystem inodes' test "$first_inode" != "$second_inode"
 debugfs -w -R 'mkdir /independent-write' "$second" >/dev/null 2>&1
 run_fail 'writing guest two does not modify guest one' has_path "$nested" /independent-write
@@ -283,7 +304,7 @@ run_ok 'guest two reserves its own free space' bash -c 'source "$1/scripts/lib/r
 run_ok 'nested guest contains guest-test payload' has_path "$nested" /guest-tests/fake/payload
 run_fail 'nested guest excludes outer-only payload' has_path "$nested" /outer-only/fixture
 run_fail 'nested guest excludes builder guest content' has_path "$nested" /guest/builder/content
-run_fail 'nested guest is not recursive' has_path "$nested" /guest/rootfs-x86_64-busybox.img
+run_fail 'nested guest is not recursive' has_path "$nested" /guest/rootfs-x86_64-busybox-0.img
 run_ok 'nested and outer are distinct images' test "$(sha256sum "$nested" | awk '{print $1}')" != "$(sha256sum "$output" | awk '{print $1}')"
 
 graph_base="$work/graph-base.img"
@@ -295,11 +316,14 @@ normalize_tree_seconds "$outer_overlay"
 normalize_tree_seconds "$guest_overlay"
 normalize_tree_seconds "$outer_guest"
 graph_output="$work/graph-output.img"
-run_ok 'graph image node composes both guests from completed dependencies' \
-    rootfs_compose_test_images "$graph_base" "$outer_overlay" "$guest_overlay" "$outer_guest" \
-        x86_64 busybox 2M 3M "$graph_output"
-run_ok 'graph image contains guest one' has_path "$graph_output" /guest/rootfs-x86_64-busybox.img
+run_ok 'graph image node composes the configured guests from completed dependencies' \
+    env ROOTFS_GUEST_COUNT=3 bash -c 'source "$1/scripts/lib/rootfs.sh"; source "$1/scripts/lib/rootfs-compose.sh"; rootfs_compose_test_images "$2" "$3" "$4" "$5" x86_64 busybox 2M 3M "$6"' \
+        _ "$repo_root" "$graph_base" "$outer_overlay" "$guest_overlay" "$outer_guest" "$graph_output"
+run_ok 'graph image contains guest zero' has_path "$graph_output" /guest/rootfs-x86_64-busybox-0.img
+run_ok 'graph image contains guest one' has_path "$graph_output" /guest/rootfs-x86_64-busybox-1.img
 run_ok 'graph image contains guest two' has_path "$graph_output" /guest/rootfs-x86_64-busybox-2.img
+run_ok 'an additional guest grows the outer filesystem image' \
+    test "$(stat -c %s "$graph_output")" -gt "$(stat -c %s "$output")"
 
 graph_node_base="$work/graph-node-base"
 graph_node_output="$work/graph-node-output"
@@ -312,7 +336,7 @@ run_ok 'QEMU rootfs image node composes and publishes its output pair' \
     env BUILD_WORK_DIR="$work" LOG_CREATE_DEFAULT_FILE=0 bash "$repo_root/scripts/lib/rootfs-compose-node.sh" \
         x86_64 busybox "$graph_node_base" "$graph_node_output" "$outer_overlay" "$guest_overlay" 2M 3M
 run_ok 'QEMU image node publishes two guests' has_path "$graph_node_output/rootfs-x86_64-busybox.img" \
-    /guest/rootfs-x86_64-busybox-2.img
+    /guest/rootfs-x86_64-busybox-1.img
 assert_eq initramfs "$(cat "$graph_node_output/initramfs-x86_64-busybox.cpio.gz")" \
     'QEMU image node changed the paired initramfs'
 
@@ -326,11 +350,11 @@ run_ok 'guest composition node publishes test payload' has_path "$guest_base" /g
 
 collision_guest="$work/collision-guest"
 mkdir "$collision_guest"
-printf collision >"$collision_guest/rootfs-x86_64-busybox.img"
+printf collision >"$collision_guest/rootfs-x86_64-busybox-0.img"
 printf old >"$work/preserved-output"
 second_collision="$work/second-collision"
 mkdir "$second_collision"
-printf collision >"$second_collision/rootfs-x86_64-busybox-2.img"
+printf collision >"$second_collision/rootfs-x86_64-busybox-1.img"
 run_fail 'compose protects guest two from platform payload collisions' \
     rootfs_compose_test_images "$base" "$outer_overlay" "$guest_overlay" "$second_collision" \
         x86_64 busybox 2M 3M "$work/preserved-output"
@@ -340,6 +364,12 @@ run_fail 'compose rejects collision before output modification' \
     rootfs_compose_test_images "$base" "$outer_overlay" "$guest_overlay" "$collision_guest" \
         x86_64 busybox 1M 1M "$work/preserved-output"
 assert_eq "$preserved_hash" "$(sha256sum "$work/preserved-output" | awk '{print $1}')" 'collision changed output'
+extra_collision="$work/extra-collision"
+mkdir "$extra_collision"
+printf collision >"$extra_collision/rootfs-x86_64-busybox-99.img"
+run_fail 'compose rejects out-of-range guest image names from platform payloads' \
+    rootfs_compose_test_images "$base" "$outer_overlay" "$guest_overlay" "$extra_collision" \
+        x86_64 busybox 1M 1M "$work/preserved-output"
 
 test_protected_outer_overlay_collisions() {
     local kind collision_overlay="$work/protected-compose-overlay" output_hash base_before
@@ -347,9 +377,9 @@ test_protected_outer_overlay_collisions() {
         rm -rf "$collision_overlay"
         mkdir -p "$collision_overlay/guest"
         case $kind in
-            file) printf collision >"$collision_overlay/guest/rootfs-x86_64-busybox.img" ;;
-            directory) mkdir "$collision_overlay/guest/rootfs-x86_64-busybox.img" ;;
-            symlink) ln -s elsewhere "$collision_overlay/guest/rootfs-x86_64-busybox.img" ;;
+            file) printf collision >"$collision_overlay/guest/rootfs-x86_64-busybox-0.img" ;;
+            directory) mkdir "$collision_overlay/guest/rootfs-x86_64-busybox-0.img" ;;
+            symlink) ln -s elsewhere "$collision_overlay/guest/rootfs-x86_64-busybox-0.img" ;;
         esac
         printf preserved >"$work/protected-compose-output"
         output_hash=$(sha256sum "$work/protected-compose-output" | awk '{print $1}')
@@ -426,8 +456,8 @@ atomic="$work/atomic.img"
 cp --preserve=all --reflink=auto --sparse=always "$base" "$atomic"
 existing_stage="$work/existing-stage"
 mkdir -p "$existing_stage/guest"
-printf original-nested >"$existing_stage/guest/rootfs-x86_64-busybox.img"
-printf original-second >"$existing_stage/guest/rootfs-x86_64-busybox-2.img"
+printf original-nested >"$existing_stage/guest/rootfs-x86_64-busybox-0.img"
+printf original-second >"$existing_stage/guest/rootfs-x86_64-busybox-1.img"
 normalize_tree_seconds "$existing_stage"
 _rootfs_inject_tree_via_debugfs "$atomic" "$existing_stage"
 touch -d @1700000003 "$atomic"
@@ -447,9 +477,9 @@ assert_eq base "$(getfattr -n user.rootfs-image-test --only-values "$atomic" 2>/
 run_ok 'atomic injection leaves requested reserve' test "$(rootfs_ext4_free_bytes "$atomic")" -ge $((5 * 1024 * 1024))
 run_ok 'atomic injection puts guest source under guest' has_path "$atomic" /guest/more/large
 run_ok 'atomic injection puts overlay at root' has_path "$atomic" /outer-added/payload
-assert_eq original-nested "$(debugfs_cat "$atomic" /guest/rootfs-x86_64-busybox.img)" \
+assert_eq original-nested "$(debugfs_cat "$atomic" /guest/rootfs-x86_64-busybox-0.img)" \
     'atomic injection changed existing nested image bytes'
-assert_eq original-second "$(debugfs_cat "$atomic" /guest/rootfs-x86_64-busybox-2.img)" \
+assert_eq original-second "$(debugfs_cat "$atomic" /guest/rootfs-x86_64-busybox-1.img)" \
     'atomic injection changed second nested image bytes'
 
 second_source="$work/inject-second-collision"
@@ -478,7 +508,7 @@ assert_eq "$atomic_hash" "$(sha256sum "$atomic" | awk '{print $1}')" 'failed inj
 
 protected_overlay="$work/protected-overlay"
 mkdir -p "$protected_overlay/guest"
-printf overwrite >"$protected_overlay/guest/rootfs-x86_64-busybox.img"
+printf overwrite >"$protected_overlay/guest/rootfs-x86_64-busybox-0.img"
 run_fail 'atomic injection rejects an overlay targeting the protected nested image' \
     rootfs_inject_outer_payload_atomic "$atomic" "$guest_source" "$protected_overlay" \
         rootfs-x86_64-busybox.img 1M
@@ -710,7 +740,7 @@ test_concurrent_base_replacement_consistency() {
     wait "$compose_pid" || return 1
     wait "$writer_pid" || return 1
     [[ "$(debugfs_cat "$concurrent_output" /etc/base-marker)" == base ]] || return 1
-    debugfs -R "dump /guest/rootfs-x86_64-busybox.img $nested_copy" "$concurrent_output" >/dev/null 2>&1 || return 1
+    debugfs -R "dump /guest/rootfs-x86_64-busybox-0.img $nested_copy" "$concurrent_output" >/dev/null 2>&1 || return 1
     [[ "$(debugfs_cat "$nested_copy" /etc/base-marker)" == base ]] || return 1
     [[ "$(debugfs_cat "$concurrent_base" /etc/base-marker)" == new-version ]] || return 1
     e2fsck -fn "$concurrent_base" >/dev/null 2>&1

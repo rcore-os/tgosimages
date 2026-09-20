@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 LIB = ROOT / 'scripts/lib/python'
@@ -17,6 +18,17 @@ spec.loader.exec_module(rootfs_graph)
 
 
 class RootfsGraph(unittest.TestCase):
+    def test_guest_count_environment_contract(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(rootfs_graph.guest_count(), 2)
+        with mock.patch.dict(os.environ, {'ROOTFS_GUEST_COUNT': '3'}, clear=True):
+            self.assertEqual(rootfs_graph.guest_count(), 3)
+        for value in ('', '0', '9', '-2', '2x'):
+            with self.subTest(value=value), \
+                    mock.patch.dict(os.environ, {'ROOTFS_GUEST_COUNT': value}, clear=True):
+                with self.assertRaises(ValueError):
+                    rootfs_graph.guest_count()
+
     def test_plugins_are_leaf_nodes_and_consumer_waits_for_merged_overlays(self):
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary)

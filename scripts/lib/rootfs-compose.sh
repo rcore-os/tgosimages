@@ -512,11 +512,20 @@ _rootfs_validate_guest_overlay_merge() {
 }
 
 _rootfs_validate_protected_outer_path() {
-    local guest_source=$1 overlay_source=$2 protected=$3
+    local guest_source=$1 overlay_source=$2 protected=$3 root path member
     _rootfs_validate_protected_outer_file "$guest_source" "$overlay_source" "$protected" || return 1
-    # The legacy basename identifies a pair; protect its independent sibling too.
+    # Platform payloads may not provide any legacy, configured, or out-of-range
+    # member of the protected guest-image family.
     if [[ $protected == rootfs-*.img ]]; then
-        _rootfs_validate_protected_outer_file "$guest_source" "$overlay_source" "${protected%.img}-2.img" || return 1
+        for root in "$guest_source" "$overlay_source/guest"; do
+            [[ -d $root && ! -L $root ]] || continue
+            for path in "$root/${protected%.img}-"*.img; do
+                [[ -e $path || -L $path ]] || continue
+                member=${path##*/}
+                _rootfs_compose_error "payload collides with protected guest-image family: ${member}"
+                return 1
+            done
+        done
     fi
 }
 
@@ -541,12 +550,76 @@ _rootfs_validate_protected_outer_file() {
     }
 }
 
-# Build test payloads once, then stage two regular image files. Never hardlink
-# the pair: both files must remain independently writable after publication.
-_rootfs_stage_guest_pair() {
-    local image=$1 directory=$2 name=$3 member timestamp
+# Build test payloads once, then stage independently writable regular files.
+_rootfs_guest_count() {
+    local value=${ROOTFS_GUEST_COUNT-2}
+    [[ $value =~ ^[0-9]+$ ]] || {
+        _rootfs_compose_error "ROOTFS_GUEST_COUNT must be a positive decimal integer"
+        return 2
+    }
+    while [[ $value == 0* && ${#value} -gt 1 ]]; do
+        value=${value#0}
+    done
+    [[ $value != 0 ]] || {
+        _rootfs_compose_error "ROOTFS_GUEST_COUNT must be at least 1"
+        return 2
+    }
+    printf '%s\n' "$value"
+}
+
+_rootfs_guest_image_name() {
+    local name=$1 index=$2
+    [[ $name == *.img && $index =~ ^[0-9]+$ ]] || return 2
+    printf '%s-%s.img\n' "${name%.img}" "$index"
+}
+
+_rootfs_plan_guest_staging() {
+    local image=$1 directory=$2 count image_bytes required available max_count
+    count=$(_rootfs_guest_count) || return 1
+    image_bytes=$(stat -c %s -- "$image") || return 1
+    [[ $image_bytes =~ ^[0-9]+$ ]] || return 1
+    ((image_bytes > 0)) || return 1
+    available=$(df -P -B1 -- "$directory" | awk 'NR == 2 {print $4}') || return 1
+    [[ $available =~ ^[0-9]+$ ]] || return 1
+    max_count=$((available / image_bytes))
+    if ((${#count} > ${#max_count})) || \
+       { ((${#count} == ${#max_count})) && [[ $count > "$max_count" ]]; }; then
+        _rootfs_compose_error "insufficient host space for ${count} guest images: each=${image_bytes}B available=${available}B"
+        return 1
+    fi
+    required=$((count * image_bytes))
+    ((required <= available)) || return 1
+    printf '%s\n' "$count"
+}
+
+_rootfs_validate_guest_image_set() {
+    local image=$1 base=$2 count index member listing name
+    local -A expected=()
+    count=$(_rootfs_guest_count) || return 1
+    for ((index = 0; index < count; index++)); do
+        member=$(_rootfs_guest_image_name "$base" "$index") || return 1
+        expected[$member]=1
+        _rootfs_debugfs_stat "$image" "/guest/$member" required >/dev/null || return 1
+    done
+    listing=$(_rootfs_run_tool 0 debugfs -R 'ls -p "/guest"' "$image") || return 1
+    while IFS= read -r name; do
+        case $name in
+            "$base"|"${base%.img}-"*.img)
+                [[ -n ${expected[$name]+set} ]] || {
+                    _rootfs_compose_error "unexpected guest image in output: ${name}"
+                    return 1
+                }
+                ;;
+        esac
+    done < <(awk -F/ 'NF >= 6 && $6 != "" {print $6}' <<<"$listing")
+}
+
+_rootfs_stage_guest_images() {
+    local image=$1 directory=$2 name=$3 count index member timestamp
+    count=$(_rootfs_plan_guest_staging "$image" "$directory") || return 1
     timestamp=$(stat -c %Y -- "$image") || return 1
-    for member in "$name" "${name%.img}-2.img"; do
+    for ((index = 0; index < count; index++)); do
+        member=$(_rootfs_guest_image_name "$name" "$index") || return 1
         cp --preserve=mode,ownership,timestamps --reflink=auto --sparse=always -- \
             "$image" "$directory/$member" || return 1
         # Reading the first copy can change the source atime to fractional
@@ -679,7 +752,7 @@ rootfs_compose_test_images() (
         exit "$exit_status"
     ' EXIT
     trap 'exit 130' INT TERM
-    _rootfs_require_tools awk basename cp debugfs dirname dumpe2fs e2fsck find flock mkdir mktemp mv realpath resize2fs rm stat touch truncate || return 1
+    _rootfs_require_tools awk basename cp debugfs df dirname dumpe2fs e2fsck find flock mkdir mktemp mv realpath resize2fs rm stat touch truncate || return 1
     [[ "$base" != *.cpio.gz && "$output" != *.cpio.gz ]] || return 1
     [[ -f "$base" && -n "$arch" && "$arch" != */* && -n "$rootfs_type" && "$rootfs_type" != */* ]] || return 1
     output_dir=$(dirname -- "$output")
@@ -746,7 +819,7 @@ rootfs_compose_test_images() (
     mkdir -p "$nested_stage/guest"
     # The nested image becomes filesystem payload; retain ordinary metadata but
     # do not carry host-only xattrs/ACLs that the debugfs policy rejects.
-    _rootfs_stage_guest_pair "$guest_image" "$nested_stage/guest" "$nested_name" || {
+    _rootfs_stage_guest_images "$guest_image" "$nested_stage/guest" "$nested_name" || {
         rm -rf -- "$nested_stage"; rm -f -- "$guest_image" "$outer_image"
         return 1
     }
@@ -762,6 +835,7 @@ rootfs_compose_test_images() (
     _rootfs_repair_ext4 "$outer_image" || return 1
     stage=inject-outer-payload
     _rootfs_finish_outer_in_place "$outer_image" "$outer_guest" "$outer_overlay" "$outer_free" "$nested_name" || return 1
+    _rootfs_validate_guest_image_set "$outer_image" "$nested_name" || return 1
     stage=compact-outer-image
     _rootfs_compact_in_place "$outer_image" "$outer_free" || return 1
     stage=publish-outer-image

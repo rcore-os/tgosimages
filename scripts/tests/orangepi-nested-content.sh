@@ -11,6 +11,7 @@ skip_elf_check=0
 
 usage() {
     printf 'Usage: %s --image <orangepi.img> [--guest-free-size <size>] [--outer-free-size <size>] [--skip-elf-check]\n' "$0"
+    printf 'Environment: ROOTFS_GUEST_COUNT selects zero-based guest images (default 2, range 1-8).\n'
 }
 
 while (($#)); do
@@ -99,18 +100,25 @@ rootfs_disk_extract_partition "$image" "$start" "$size" "$outer" ||
     die 'cannot extract outer root partition'
 _rootfs_check_clean "$outer" || die 'outer root filesystem is not clean'
 
-nested_name=rootfs-aarch64-orangepi-jammy.img
-nested_path="/guest/$nested_name"
-image_has_path "$outer" "$nested_path" || die "missing nested image: $nested_path"
-nested="$work/$nested_name"
-dump_path "$outer" "$nested_path" "$nested" || die 'cannot extract nested root filesystem'
-second_path="/guest/${nested_name%.img}-2.img"
-second="$work/guest-2.img"
-dump_path "$outer" "$second_path" "$second" || die 'cannot extract second guest root filesystem'
-cmp -s "$nested" "$second" || die 'guest images have different initial contents'
-first_inode=$(_rootfs_debugfs_stat "$outer" "$nested_path" required | awk '/^Inode:/ {print $2}')
-second_inode=$(_rootfs_debugfs_stat "$outer" "$second_path" required | awk '/^Inode:/ {print $2}')
-[[ $first_inode != "$second_inode" ]] || die 'guest images share an inode'
+nested_base=rootfs-aarch64-orangepi-jammy.img
+guest_count=$(_rootfs_guest_count) || die 'invalid ROOTFS_GUEST_COUNT'
+nested=
+declare -A guest_inodes=()
+for ((guest_index = 0; guest_index < guest_count; guest_index++)); do
+    guest_name=$(_rootfs_guest_image_name "$nested_base" "$guest_index") || die 'cannot name guest image'
+    guest_path="/guest/$guest_name"
+    guest_file="$work/$guest_name"
+    image_has_path "$outer" "$guest_path" || die "missing nested image: $guest_path"
+    dump_path "$outer" "$guest_path" "$guest_file" || die "cannot extract nested root filesystem: $guest_path"
+    if [[ -z $nested ]]; then
+        nested=$guest_file
+    else
+        cmp -s "$nested" "$guest_file" || die 'guest images have different initial contents'
+    fi
+    guest_inode=$(_rootfs_debugfs_stat "$outer" "$guest_path" required | awk '/^Inode:/ {print $2}')
+    [[ -z ${guest_inodes[$guest_inode]+set} ]] || die 'guest images share an inode'
+    guest_inodes[$guest_inode]=1
+done
 _rootfs_check_clean "$nested" || die 'nested root filesystem is not clean'
 
 guest_free=$(rootfs_parse_size_bytes "$guest_free_value") || die 'invalid guest free size'
@@ -129,6 +137,9 @@ for test_path in \
     ((skip_elf_check)) || validate_runtime_elf "$nested" "$test_path"
 done
 
-! image_has_path "$nested" "$nested_path" || die 'nested rootfs recursively contains itself'
+for ((guest_index = 0; guest_index < guest_count; guest_index++)); do
+    guest_name=$(_rootfs_guest_image_name "$nested_base" "$guest_index") || die 'cannot name guest image'
+    ! image_has_path "$nested" "/guest/$guest_name" || die 'nested rootfs recursively contains itself'
+done
 
 printf 'Orange Pi nested rootfs validation passed: %s\n' "$image"
