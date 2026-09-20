@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 compose_lib="$repo_root/scripts/lib/rootfs-compose.sh"
 work=$(mktemp -d /tmp/rootfs-compose-test.XXXXXX)
 trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT
@@ -125,8 +125,10 @@ run_fail 'guest count rejects non-decimal input' \
     bash -c 'source "$1"; ROOTFS_GUEST_COUNT=2x _rootfs_guest_count >/dev/null' _ "$compose_lib"
 run_fail 'guest count rejects an explicitly empty value' \
     bash -c 'source "$1"; ROOTFS_GUEST_COUNT= _rootfs_guest_count >/dev/null' _ "$compose_lib"
-run_fail 'guest count rejects values above eight' \
-    bash -c 'source "$1"; ROOTFS_GUEST_COUNT=9 _rootfs_guest_count >/dev/null' _ "$compose_lib"
+assert_eq 9 "$(ROOTFS_GUEST_COUNT=9 _rootfs_guest_count)" 'guest count has no fixed upper limit'
+run_fail 'resource planning rejects an unaffordable count before copying' \
+    bash -c 'source "$1"; ROOTFS_GUEST_COUNT=999999999999999999999999 _rootfs_plan_guest_staging "$2" "$3" >/dev/null' \
+        _ "$compose_lib" "$guest_stage_fixture/source.img" "$guest_stage_fixture/output"
 
 normalize_tree_seconds() {
     find "$1" -depth -mindepth 1 -type l -exec touch -h -d @1700000000 {} +

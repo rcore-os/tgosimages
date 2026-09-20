@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(cd -- "$(dirname -- "$0")/../.." && pwd -P)
+repo_root=$(cd -- "$(dirname -- "$0")/../../.." && pwd -P)
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 mkdir -p "$work/repo/scripts/platform" "$work/repo/scripts/lib"

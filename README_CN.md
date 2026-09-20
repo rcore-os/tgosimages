@@ -324,32 +324,32 @@ QEMU 流程会透传相同选项：
 按修改范围选择对应的快速回归测试，无需每次全部运行：
 
 ```bash
-scripts/tests/rootfs-nested-content-test.sh
-scripts/tests/qemu-rootfs-test-options.sh
-scripts/tests/rootfs-builder-options.sh
-scripts/tests/rootfs-test-plugins.sh
-scripts/tests/rootfs-compose.sh
-scripts/tests/rootfs-disk.sh
-scripts/tests/orangepi-rootfs-flow.sh
-scripts/tests/starry-release-smoke.sh
+scripts/tests/rootfs/rootfs-nested-content-test.sh
+scripts/tests/rootfs/qemu-rootfs-test-options.sh
+scripts/tests/rootfs/rootfs-builder-options.sh
+scripts/tests/rootfs/rootfs-plugin-framework.sh
+scripts/tests/rootfs/rootfs-compose.sh
+scripts/tests/rootfs/rootfs-disk.sh
+scripts/tests/platform/orangepi-rootfs-flow.sh
+scripts/tests/platform/starry-release-smoke.sh
 ```
 
 构建完成后，可在不挂载镜像的情况下验证指定内容：
 
 ```bash
-scripts/tests/rootfs-nested-content.sh --image-dir IMAGES/rootfs \
+scripts/tests/rootfs/rootfs-nested-content.sh --image-dir IMAGES/rootfs \
   --arch x86_64 --rootfs busybox \
   --guest-tests cyclictest,lmbench,iozone \
   --guest-free-size 256M --outer-free-size 256M
-scripts/tests/alpine-ltp-content.sh --image-dir IMAGES/rootfs --arch x86_64
-bash scripts/tests/orangepi-nested-content.sh \
+scripts/tests/rootfs/alpine-ltp-content.sh --image-dir IMAGES/rootfs --arch x86_64
+bash scripts/tests/platform/orangepi-nested-content.sh \
   --image IMAGES/rootfs/orangepi-5-plus.img
 ```
 
 BusyBox 端到端夹具构建需要显式启用：
 
 ```bash
-scripts/tests/rootfs-builder-options.sh --integration
+scripts/tests/rootfs/rootfs-builder-options.sh --integration
 ```
 
 完整 QEMU 验证同样是可选的，并需按架构手动执行：
@@ -420,7 +420,7 @@ Orange Pi 命令分别发布各自的产物。只构建内核和 DTB：
 测例，不会自动执行 benchmark。验证命令：
 
 ```bash
-bash scripts/tests/orangepi-nested-content.sh \
+bash scripts/tests/platform/orangepi-nested-content.sh \
   --image IMAGES/rootfs/orangepi-5-plus.img
 ```
 
@@ -451,7 +451,7 @@ bash scripts/tests/orangepi-nested-content.sh \
 发布包可由镜像注册表识别为 `orangepi-5-plus-starry`（`aarch64`）。本地验证脚本：
 
 ```bash
-scripts/tests/starry-release-smoke.sh
+scripts/tests/platform/starry-release-smoke.sh
 ```
 
 QEMU Linux 的典型文件包括：

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd -P)
+repo_root=$(CDPATH= cd -- "$script_dir/../../.." && pwd -P)
 
 image=
 guest_free_value=256M
@@ -11,7 +11,7 @@ skip_elf_check=0
 
 usage() {
     printf 'Usage: %s --image <orangepi.img> [--guest-free-size <size>] [--outer-free-size <size>] [--skip-elf-check]\n' "$0"
-    printf 'Environment: ROOTFS_GUEST_COUNT selects zero-based guest images (default 2, range 1-8).\n'
+    printf 'Environment: ROOTFS_GUEST_COUNT selects zero-based guest images (default 2, minimum 1).\n'
 }
 
 while (($#)); do

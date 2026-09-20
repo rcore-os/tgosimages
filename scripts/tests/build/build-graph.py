@@ -10,7 +10,8 @@ import tempfile
 import time
 import unittest
 
-LIB = Path(__file__).resolve().parents[1] / 'lib/python'
+ROOT = Path(__file__).resolve().parents[3]
+LIB = ROOT / 'scripts/lib/python'
 
 
 class GraphTests(unittest.TestCase):

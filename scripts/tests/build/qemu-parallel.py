@@ -11,7 +11,7 @@ import tempfile
 import time
 import unittest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 ARCHES = ('aarch64', 'riscv64', 'x86_64', 'loongarch64')
 
 
@@ -206,7 +206,7 @@ qemu_rootfs_inject_platform_dir() { touch "$PROBE_ROOT/$ARCH.composed"; }
     def test_invalid_guest_count_is_rejected_before_tasks_start(self):
         result = self.invoke(ROOTFS_GUEST_COUNT='0')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('ROOTFS_GUEST_COUNT must be from 1 through 8',
+        self.assertIn('ROOTFS_GUEST_COUNT must be at least 1',
                       result.stderr)
         self.assertFalse((self.work / 'events.json').exists())
 

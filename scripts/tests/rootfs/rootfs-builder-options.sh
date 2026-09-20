@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 integration=0
 
 usage() {
     cat <<'EOF'
-Usage: scripts/tests/rootfs-builder-options.sh [--integration] [options]
+Usage: scripts/tests/rootfs/rootfs-builder-options.sh [--integration] [options]
 
 Options:
   --integration             Run the real x86_64 BusyBox composition build
@@ -74,11 +74,11 @@ source_builder() {
 
 test_harness_cli() {
     local output
-    output=$(bash "$repo_root/scripts/tests/rootfs-builder-options.sh" --help)
+    output=$(bash "$repo_root/scripts/tests/rootfs/rootfs-builder-options.sh" --help)
     [[ $output == *'Usage:'* && $output == *'--integration'* ]]
-    ! bash "$repo_root/scripts/tests/rootfs-builder-options.sh" --unknown >/dev/null 2>&1
-    ! bash "$repo_root/scripts/tests/rootfs-builder-options.sh" --build-root >/dev/null 2>&1
-    ! bash "$repo_root/scripts/tests/rootfs-builder-options.sh" --busybox-src-dir >/dev/null 2>&1
+    ! bash "$repo_root/scripts/tests/rootfs/rootfs-builder-options.sh" --unknown >/dev/null 2>&1
+    ! bash "$repo_root/scripts/tests/rootfs/rootfs-builder-options.sh" --build-root >/dev/null 2>&1
+    ! bash "$repo_root/scripts/tests/rootfs/rootfs-builder-options.sh" --busybox-src-dir >/dev/null 2>&1
 }
 run_ok 'test harness documents integration mode and rejects unknown arguments' test_harness_cli
 

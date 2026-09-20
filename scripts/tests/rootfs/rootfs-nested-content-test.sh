@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-validator="$repo_root/scripts/tests/rootfs-nested-content.sh"
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+validator="$repo_root/scripts/tests/rootfs/rootfs-nested-content.sh"
 work=$(mktemp -d /tmp/rootfs-nested-content-test.XXXXXX)
 trap 'rm -rf -- "$work"' EXIT
 warn() { printf 'warning: %s\n' "$*" >&2; }

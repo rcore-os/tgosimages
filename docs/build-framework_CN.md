@@ -213,15 +213,15 @@ rootfs 测例不得隐藏在 rootfs 镜像节点内部。图生成器把每个�
 
 使用统一日志报告缓存命中/失效原因、线程预算、耗时和错误状态。编译缓存的小型基准不能作为整个镜像提速比例的证明，完整目标需单独测量。
 
-公共回归入口：`bash scripts/tests/build-performance.sh`。它包含真实 Make/CMake 编译、线程预算、任务并发、缓存失效和补丁生命周期测试。
+公共回归入口：`bash scripts/tests/build/build-performance.sh`。它包含真实 Make/CMake 编译、线程预算、任务并发、缓存失效和补丁生命周期测试。
 
-图调度回归：`python3 scripts/tests/build-graph.py`，验证真实子进程重叠与预算回收、依赖失败传播、互斥/内存准入、缓存命中后执行下游任务和中断释放锁。产物损坏导致缓存失效由 `build-performance.sh` 覆盖。
+图调度回归：`python3 scripts/tests/build/build-graph.py`，验证真实子进程重叠与预算回收、依赖失败传播、互斥/内存准入、缓存命中后执行下游任务和中断释放锁。产物损坏导致缓存失效由 `build-performance.sh` 覆盖。
 
-rootfs 子图回归：`python3 scripts/tests/rootfs-graph.py`，验证插件叶子并行、overlay 合并依赖和最终消费者顺序；`rootfs-compose.sh` 使用真实 ext4 验证基础节点、可配置 guest 组合及原子注入。
+rootfs 子图回归：`python3 scripts/tests/rootfs/rootfs-graph.py`，验证插件叶子并行、overlay 合并依赖和最终消费者顺序；`scripts/tests/rootfs/rootfs-compose.sh` 使用真实 ext4 验证基础节点、可配置 guest 组合及原子注入。
 
-边界回归入口：`python3 scripts/tests/build-review-regressions.py`，覆盖编译器选择、异常进程退出、失败传播、文件类型区分及构建期间工具变化。
+边界回归入口：`python3 scripts/tests/build/build-review-regressions.py`，覆盖编译器选择、异常进程退出、失败传播、文件类型区分及构建期间工具变化。
 
-平台集成回归入口：`python3 scripts/tests/qemu-parallel.py`，通过本地 Git 仓库验证跨架构与跨平台调度重叠、单图汇总、香橙派阶段依赖、单平台依赖选择、失败隔离、独立补丁/配置、共享下载及工作区互斥。终端颜色与日志文件隔离由边界回归测试覆盖。
+平台集成回归入口：`python3 scripts/tests/build/qemu-parallel.py`，通过本地 Git 仓库验证跨架构与跨平台调度重叠、单图汇总、香橙派阶段依赖、单平台依赖选择、失败隔离、独立补丁/配置、共享下载及工作区互斥。终端颜色与日志文件隔离由边界回归测试覆盖。
 
 ## 附录：Zephyr 迁移案例
 

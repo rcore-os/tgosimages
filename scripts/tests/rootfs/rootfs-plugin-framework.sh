@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 build_script="$repo_root/scripts/rootfs-test-plugins/build.sh"
 common_script="$repo_root/scripts/rootfs-test-plugins/lib/common.sh"
 work=$(mktemp -d)
@@ -620,7 +620,7 @@ run_fail 'ltp rejects Debian selection through the framework' \
 
 mkdir "$work/no-ltp-images"
 run_fail 'Alpine LTP content check supports selecting one architecture' \
-    bash "$repo_root/scripts/tests/alpine-ltp-content.sh" --image-dir "$work/no-ltp-images" \
+    bash "$repo_root/scripts/tests/rootfs/alpine-ltp-content.sh" --image-dir "$work/no-ltp-images" \
         --arch x86_64
 grep -Fq 'rootfs-x86_64-alpine.img' "$work/stderr" || fail 'content check did not select x86_64'
 ! grep -Eq 'rootfs-(aarch64|riscv64|loongarch64)-alpine.img' "$work/stderr" ||

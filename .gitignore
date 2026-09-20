@@ -1,5 +1,7 @@
 **/IMAGES/
 **/build/
+!scripts/tests/build/
+!scripts/tests/build/**
 **/release/
 **/logs/
 **/tmp/

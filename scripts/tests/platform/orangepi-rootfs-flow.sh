@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd -P)
 work=$(mktemp -d /tmp/orangepi-rootfs-flow.XXXXXX)
 trap 'rm -rf -- "$work"' EXIT
 

@@ -13,7 +13,7 @@ import tempfile
 import unittest
 
 sys.dont_write_bytecode = True
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'scripts/lib/python'))
 spec = importlib.util.spec_from_file_location('task_cache', ROOT / 'scripts/lib/python/build-task.py')
 cache = importlib.util.module_from_spec(spec)

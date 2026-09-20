@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 LIB = ROOT / 'scripts/lib/python'
 spec = importlib.util.spec_from_file_location('rootfs_graph', LIB / 'rootfs-graph.py')
 rootfs_graph = importlib.util.module_from_spec(spec)
@@ -23,7 +23,9 @@ class RootfsGraph(unittest.TestCase):
             self.assertEqual(rootfs_graph.guest_count(), 2)
         with mock.patch.dict(os.environ, {'ROOTFS_GUEST_COUNT': '3'}, clear=True):
             self.assertEqual(rootfs_graph.guest_count(), 3)
-        for value in ('', '0', '9', '-2', '2x'):
+        with mock.patch.dict(os.environ, {'ROOTFS_GUEST_COUNT': '999999999999999999999999'}, clear=True):
+            self.assertEqual(rootfs_graph.guest_count(), 999999999999999999999999)
+        for value in ('', '0', '-2', '2x'):
             with self.subTest(value=value), \
                     mock.patch.dict(os.environ, {'ROOTFS_GUEST_COUNT': value}, clear=True):
                 with self.assertRaises(ValueError):

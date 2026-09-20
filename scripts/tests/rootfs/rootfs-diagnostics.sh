@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd -P)
 work=$(mktemp -d /tmp/rootfs-diagnostics.XXXXXX)
 trap 'rm -rf -- "$work"' EXIT
 export LOG_CREATE_DEFAULT_FILE=0

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
+repo_root=$(CDPATH= cd -- "$script_dir/../../.." && pwd)
 # shellcheck source=../lib/rootfs-compose.sh
 source "$repo_root/scripts/lib/rootfs-compose.sh"
 # shellcheck source=../rootfs-tests/lib/common.sh
@@ -33,7 +33,7 @@ Verify composed outer ext4 rootfs images and their nested guest images.
   -h, --help                  Show this help
 
 Environment: ROOTFS_GUEST_COUNT selects the number of zero-based guest images
-(default: 2; must be a decimal integer from 1 through 8).
+(default: 2; must be a positive decimal integer).
 EOF
 }
 

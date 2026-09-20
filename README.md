@@ -328,7 +328,7 @@ The downloaded Git source checkout is still reused and reset to the pinned ref.
 - Builds LTP through the shared, checksum-verified Alpine plugin builder
 - Generates an ext4 rootfs image
 - Currently supports `aarch64`, `loongarch64`, `riscv64`, and `x86_64`
-- `scripts/tests/alpine-ltp-content.sh` validates the LTP version, timer_create contents, runtest entries, executable bit, and ELF architecture in all four images
+- `scripts/tests/rootfs/alpine-ltp-content.sh` validates the LTP version, timer_create contents, runtest entries, executable bit, and ELF architecture in all four images
 
 ### Debian
 
@@ -347,32 +347,32 @@ Select the fast regression suites relevant to the change; running every suite
 is not required for each build:
 
 ```bash
-scripts/tests/rootfs-nested-content-test.sh
-scripts/tests/qemu-rootfs-test-options.sh
-scripts/tests/rootfs-builder-options.sh
-scripts/tests/rootfs-test-plugins.sh
-scripts/tests/rootfs-compose.sh
-scripts/tests/rootfs-disk.sh
-scripts/tests/orangepi-rootfs-flow.sh
-scripts/tests/starry-release-smoke.sh
+scripts/tests/rootfs/rootfs-nested-content-test.sh
+scripts/tests/rootfs/qemu-rootfs-test-options.sh
+scripts/tests/rootfs/rootfs-builder-options.sh
+scripts/tests/rootfs/rootfs-plugin-framework.sh
+scripts/tests/rootfs/rootfs-compose.sh
+scripts/tests/rootfs/rootfs-disk.sh
+scripts/tests/platform/orangepi-rootfs-flow.sh
+scripts/tests/platform/starry-release-smoke.sh
 ```
 
 After building, validate selected image content without mounting it:
 
 ```bash
-scripts/tests/rootfs-nested-content.sh --image-dir IMAGES/rootfs \
+scripts/tests/rootfs/rootfs-nested-content.sh --image-dir IMAGES/rootfs \
   --arch x86_64 --rootfs busybox \
   --guest-tests cyclictest,lmbench,iozone \
   --guest-free-size 256M --outer-free-size 256M
-scripts/tests/alpine-ltp-content.sh --image-dir IMAGES/rootfs --arch x86_64
-bash scripts/tests/orangepi-nested-content.sh \
+scripts/tests/rootfs/alpine-ltp-content.sh --image-dir IMAGES/rootfs --arch x86_64
+bash scripts/tests/platform/orangepi-nested-content.sh \
   --image IMAGES/rootfs/orangepi-5-plus.img
 ```
 
 The BusyBox end-to-end fixture build is opt-in:
 
 ```bash
-scripts/tests/rootfs-builder-options.sh --integration
+scripts/tests/rootfs/rootfs-builder-options.sh --integration
 ```
 
 Optional full QEMU validation is intentionally manual and per architecture:
@@ -445,7 +445,7 @@ nested and outer filesystems reserve 256 MiB each by default. The build requires
 workloads without running them. Validate a completed image with:
 
 ```bash
-bash scripts/tests/orangepi-nested-content.sh \
+bash scripts/tests/platform/orangepi-nested-content.sh \
   --image IMAGES/rootfs/orangepi-5-plus.img
 ```
 
@@ -477,7 +477,7 @@ Clean both outputs with:
 Run the deterministic packaging and registry smoke test with:
 
 ```bash
-scripts/tests/starry-release-smoke.sh
+scripts/tests/platform/starry-release-smoke.sh
 ```
 
 Typical QEMU Linux files:

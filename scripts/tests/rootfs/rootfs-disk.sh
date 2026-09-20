@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd -P)
 work=$(mktemp -d /tmp/rootfs-disk-test.XXXXXX)
 trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT
 
@@ -369,7 +369,7 @@ run_ok 'nested rootfs keeps its configured reserve' \
 run_ok 'outer rootfs keeps its configured reserve' \
     test "$(rootfs_ext4_free_bytes "$work/composed-outer.img")" -ge $((8 * 1024 * 1024))
 run_ok 'the Orange Pi content validator accepts the composed fixture' \
-    env ROOTFS_GUEST_COUNT=3 bash "$repo_root/scripts/tests/orangepi-nested-content.sh" \
+    env ROOTFS_GUEST_COUNT=3 bash "$repo_root/scripts/tests/platform/orangepi-nested-content.sh" \
         --image "$composed" --guest-free-size 8M --outer-free-size 8M --skip-elf-check
 
 prebuilt_composed="$work/prebuilt-composed.img"

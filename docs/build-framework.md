@@ -137,8 +137,8 @@ Orange Pi uses clean guest → guest-overlay injection → partitioned disk
 composition. QEMU uses clean base + two overlays → multi-guest rootfs → platform
 payload injection. BusyBox retains rollback-safe paired publication for its
 initramfs and ext4 output. Validate the child graph with
-`python3 scripts/tests/rootfs-graph.py`; the real ext4 split is covered by
-`bash scripts/tests/rootfs-compose.sh`.
+`python3 scripts/tests/rootfs/rootfs-graph.py`; the real ext4 split is covered by
+`bash scripts/tests/rootfs/rootfs-compose.sh`.
 
 New adapters declare a graph instead of nesting worker pools. Invoke
 `build_graph graph.json --log-dir logs/my-run` after sourcing the performance
@@ -183,7 +183,7 @@ Each run saves `graph.json`, `state.json`, `summary.log` and
 blocked and cancelled. Failures print a log tail. SIGINT/SIGTERM terminates task
 process groups before releasing workspaces. There is no automatic retry or
 resume; reruns revalidate source and artifact caches. Test with
-`python3 scripts/tests/build-graph.py` and `python3 scripts/tests/qemu-parallel.py`.
+`python3 scripts/tests/build/build-graph.py` and `python3 scripts/tests/build/qemu-parallel.py`.
 
 ### Console colors
 
@@ -275,12 +275,12 @@ inputs, missing/modified outputs, forced rebuilds and verified hits.
 
 ## Validation
 
-Run `bash scripts/tests/build-performance.sh` on Linux. It exercises actual
+Run `bash scripts/tests/build/build-performance.sh` on Linux. It exercises actual
 Make/CMake compilation, ccache hits, budget enforcement, task concurrency,
 input/ref/patch/environment invalidation, output tampering, overlapping patches,
 legacy adoption, local-edit preservation, and failed-patch retries.
 
-`python3 scripts/tests/qemu-parallel.py` verifies real overlapping architecture
+`python3 scripts/tests/build/qemu-parallel.py` verifies real overlapping architecture
 dispatch, isolated patches/configurations, shared downloads, concurrent limits,
 failure aggregation, and single-architecture locking with local Git fixtures.
-Terminal color routing is covered by `scripts/tests/build-review-regressions.py`.
+Terminal color routing is covered by `scripts/tests/build/build-review-regressions.py`.
