@@ -9,20 +9,30 @@ build_graph() {
 
 # The budget belongs to the invocation, not to each concurrently running tool.
 build_jobs() {
-    local jobs=${BUILD_JOBS:-32} budget=${TGOS_BUILD_JOB_BUDGET:-}
-    [[ $jobs =~ ^[1-9][0-9]*$ ]] || { error 'BUILD_JOBS must be a positive integer'; return 2; }
+    local jobs budget=${TGOS_BUILD_JOB_BUDGET:-} available
     if [[ -n $budget ]]; then
         [[ $budget =~ ^[1-9][0-9]*$ ]] || { error 'Invalid inherited build budget'; return 2; }
-        ((jobs <= budget)) || jobs=$budget
+        jobs=$budget
+    else
+        available=$(nproc) || return 1
+        [[ $available =~ ^[1-9][0-9]*$ ]] || { error 'Cannot detect available logical CPUs'; return 2; }
+        jobs=$((available * 5 / 8))
+        ((jobs > 0)) || jobs=1
     fi
     printf '%s\n' "$jobs"
 }
 
 build_child_jobs() {
-    local count=$1 index=$2 total jobs
+    local count=$1 index=$2 total jobs redundancy survivors
     [[ $count =~ ^[1-9][0-9]*$ && $index =~ ^[0-9]+$ ]] || return 2
     total=$(build_jobs) || return
-    jobs=$((total / count))
+    if [[ ${TGOS_CPU_SCOPE_ACTIVE:-0} == 1 && $count -ge 4 ]]; then
+        redundancy=$((count / 4))
+        survivors=$((count - redundancy))
+        jobs=$(((total + survivors - 1) / survivors))
+    else
+        jobs=$((total / count))
+    fi
     ((jobs > 0)) || jobs=1
     printf '%s\n' "$jobs"
 }

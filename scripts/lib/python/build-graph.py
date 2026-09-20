@@ -98,7 +98,8 @@ def validate(graph, jobs, memory):
 
 
 def execute(graph, log_dir):
-    jobs = positive(os.environ.get('BUILD_JOBS') or '32')
+    available = positive(subprocess.check_output(['nproc'], text=True).strip())
+    jobs = max(1, available * 5 // 8)
     jobs = min(jobs, positive(os.environ.get('TGOS_BUILD_JOB_BUDGET', jobs)))
     slots = min(jobs, positive(os.environ.get('BUILD_PARALLEL_TASKS', jobs)))
     memory = int(os.environ.get('BUILD_MEMORY_MB', '0'))
@@ -138,7 +139,8 @@ def execute(graph, log_dir):
 
     previous = {s: signal.signal(s, interrupted) for s in (signal.SIGINT, signal.SIGTERM)}
     try:
-        log('INFO', f'START graph: tasks={len(states)} jobs={jobs} slots={slots}; logs={log_dir}')
+        cpu_mode = 'cgroup' if os.environ.get('TGOS_CPU_SCOPE_ACTIVE') == '1' else 'static'
+        log('INFO', f'START graph: tasks={len(states)} jobs={jobs} slots={slots} cpu={cpu_mode}; logs={log_dir}')
         save()
         # Persistent workspace locks cover preparation through composition. Sorted
         # acquisition prevents deadlock between overlapping independent invocations.
@@ -200,7 +202,7 @@ def execute(graph, log_dir):
                         changed = True
             ready = [t for t in graph['tasks'] if states[t['id']]['state'] == 'waiting'
                      and all(states[d]['state'] in ('success', 'hit') for d in t['deps'])]
-            free_cpu = jobs - sum(states[n]['jobs'] for n in running)
+            free_cpu = jobs - sum(states[n]['allocation'] for n in running)
             free_memory = memory - sum(t['memory_mb'] for _, _, t in running.values())
             busy = {key for _, _, t in running.values() for key in t['resources']}
             available = slots - len(running)
@@ -227,12 +229,19 @@ def execute(graph, log_dir):
                         break
                     budgets[task['id']] += 1
                     free_cpu -= 1
+            active_count = len(running) + len(wave)
+            redundancy = active_count // 4 if active_count >= 4 else 0
+            survivors = active_count - redundancy
             for task in wave:
                 name = task['id']
                 budget = budgets[name]
+                tool_budget = budget
+                if os.environ.get('TGOS_CPU_SCOPE_ACTIVE') == '1':
+                    elastic_budget = (jobs + survivors - 1) // survivors
+                    tool_budget = max(budget, min(task['cpu_max'], elastic_budget))
                 env = dict(os.environ, **graph.get('env', {}), **task.get('env', {}))
-                env.update(TGOS_BUILD_JOB_BUDGET=str(budget), BUILD_JOBS=str(budget),
-                           CMAKE_BUILD_PARALLEL_LEVEL=str(budget), CARGO_BUILD_JOBS=str(budget),
+                env.update(TGOS_BUILD_JOB_BUDGET=str(tool_budget),
+                           CMAKE_BUILD_PARALLEL_LEVEL=str(tool_budget), CARGO_BUILD_JOBS=str(tool_budget),
                            LOG_STDIO_CAPTURED='1', LOG_TO_STDERR='1', LOG_CREATE_DEFAULT_FILE='0',
                            LOG_COLOR='never', BUILD_PARALLEL_TASKS='1')
                 env.pop('LOG_FILE', None)
@@ -256,9 +265,11 @@ def execute(graph, log_dir):
                     states[name].update(state='failed', error=str(exc))
                     log('ERROR', f'FAILED {name}: {exc}')
                     continue
-                states[name].update(state='running', jobs=budget, started=time.monotonic())
+                states[name].update(state='running', jobs=tool_budget, allocation=budget,
+                                    started=time.monotonic())
                 running[name] = (process, stream, task)
-                log('INFO', f'STARTED {name}: jobs={budget} log={step_log}')
+                allocation = f' allocation={budget}' if tool_budget != budget else ''
+                log('INFO', f'STARTED {name}: jobs={tool_budget}{allocation} log={step_log}')
             save()
             if not running and all(s['state'] != 'waiting' for s in states.values()):
                 break

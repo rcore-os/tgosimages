@@ -56,7 +56,7 @@ Make 适配器必须保留项目选择的编译器，不能根据 `CROSS_COMPILE
 
 ## 3. 并行任务必须共享资源预算
 
-`BUILD_JOBS` 表示一次构建调用的总编译线程预算；公共并行入口向子任务分配较小预算。`BUILD_PARALLEL_TASKS` 可进一步限制同时运行的任务数，超额任务排队。
+一次构建调用的总编译线程预算自动取当前进程可用逻辑 CPU 的八分之五；公共并行入口向子任务分配较小预算。`BUILD_PARALLEL_TASKS` 可进一步限制同时运行的任务数，超额任务排队。
 
 新增有依赖关系的批量入口声明任务图，通过 `build_graph <graph.json> --log-dir <日志目录>` 执行，不再嵌套创建并行池。旧入口仍可使用 `run_parallel_functions` 或 `run_sequential_targets`。共享可变源码、相同输出文件或可变配置的任务，必须声明依赖/互斥资源，或者先隔离工作区；跨进程工作区锁必须覆盖准备源码到构建完成的整个阶段，不能只锁 checkout。
 
@@ -182,7 +182,6 @@ build_task "kernel-$arch" \
 
 | 环境变量 | 含义 |
 | --- | --- |
-| `BUILD_JOBS` | 总编译线程预算，默认 `32` |
 | `BUILD_PARALLEL_TASKS` | 图调度器全局并发任务上限；旧入口为每个并行边界上限 |
 | `BUILD_HEARTBEAT_SECONDS` | 任务图心跳间隔，默认 `60` 秒；显示活动节点耗时、线程数、日志路径和最新进度 |
 | `BUILD_MEMORY_MB` | 图调度器声明内存的总预算，默认 0 不限制 |
@@ -194,7 +193,7 @@ build_task "kernel-$arch" \
 | `ROOTFS_GUEST_COUNT` | 零编号嵌套客户机 rootfs 数量，默认 `2`，最小 `1`，无固定上限 |
 | `LOG_COLOR` | `auto` 自动终端着色、`always` 强制着色、`never` 关闭 |
 
-保留现有 `CCACHE_DIR`、CMake launcher 和 `RUSTC_WRAPPER` 等显式覆盖。图调度器按已分配 CPU 配额设置 `CARGO_BUILD_JOBS`，防止继承更大的外层预算；旧入口保留该变量的显式覆盖。缺少 ccache/sccache 时回退到普通编译。
+保留现有 `CCACHE_DIR`、CMake launcher 和 `RUSTC_WRAPPER` 等显式覆盖。图调度器按自动预算分配 CPU 配额并设置 `CARGO_BUILD_JOBS`，防止节点继承更大的外层预算。缺少 ccache/sccache 时回退到普通编译。
 
 终端颜色约定：进度青色、成功绿色、警告黄色、失败红色；QEMU 架构名使用固定的不同颜色。`auto` 尊重 `NO_COLOR` 和 `TERM=dumb`。框架先保存纯文本日志，再对终端显示着色；子任务捕获流不加颜色，第三方工具原始输出不重新格式化。
 

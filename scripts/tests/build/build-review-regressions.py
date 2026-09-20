@@ -38,10 +38,10 @@ class ReviewRegressions(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.work = Path(self.temp.name)
-        self.env = dict(os.environ, LOG_CREATE_DEFAULT_FILE='0', BUILD_JOBS='2',
+        self.env = dict(os.environ, LOG_CREATE_DEFAULT_FILE='0', TGOS_BUILD_JOB_BUDGET='2',
                         BUILD_CACHE_DIR=str(self.work / 'cache'))
         for key in ('LOG_FILE', 'LOG_STDIO_CAPTURED', 'CC', 'CROSS_COMPILE',
-                    'CCACHE_DISABLE', 'BUILD_CACHE', 'TGOS_BUILD_JOB_BUDGET', 'LOG_COLOR', 'NO_COLOR'):
+                    'CCACHE_DISABLE', 'BUILD_CACHE', 'LOG_COLOR', 'NO_COLOR'):
             self.env.pop(key, None)
 
     def shell(self, body):

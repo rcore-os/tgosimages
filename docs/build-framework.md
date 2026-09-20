@@ -16,7 +16,6 @@ elapsed time and propagate tool failures. They do not evaluate command strings.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BUILD_JOBS` | `32` | Total compiler budget for this invocation |
 | `BUILD_PARALLEL_TASKS` | Current job budget | Global graph task cap; per-boundary cap for legacy runners |
 | `BUILD_HEARTBEAT_SECONDS` | `60` | Graph heartbeat interval; active nodes include elapsed time, jobs, log path, and latest progress |
 | `BUILD_MEMORY_MB` | `0` | Admission budget for declared graph memory; 0 disables it |
@@ -29,9 +28,10 @@ elapsed time and propagate tool failures. They do not evaluate command strings.
 | `LOG_COLOR` | `auto` | Terminal color policy: `auto`, `always`, `never` |
 
 Existing `CCACHE_DIR`, `CMAKE_C_COMPILER_LAUNCHER`, `CMAKE_CXX_COMPILER_LAUNCHER`,
-`RUSTC_WRAPPER` overrides remain supported. The graph scheduler sets
-`CARGO_BUILD_JOBS` to the allocated CPU budget; legacy runners preserve explicit
-Cargo overrides. Explicit
+`RUSTC_WRAPPER` overrides remain supported. The framework derives its total CPU
+budget as five eighths of the logical CPUs available to the process. The graph
+scheduler sets `CARGO_BUILD_JOBS` to each allocated node budget; legacy runners
+preserve explicit Cargo overrides. Explicit
 per-tool concurrency overrides can exceed the framework's automatic budget;
 new targets should not hard-code `-j` values. Ccache and sccache are optional:
 missing tools fall back to normal compilation. The source tree is not a cache

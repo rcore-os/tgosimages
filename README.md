@@ -600,10 +600,10 @@ Common build adapters manage compiler budgets, caches and timing. Explicit input
 ./build.sh platform qemu all
 ```
 
-By default, both the total compiler budget and the graph concurrency ceiling
-are `32`; the scheduler dynamically starts ready nodes and divides the
-available jobs between them. Set `BUILD_JOBS` to cap total CPU use, and set
-`BUILD_PARALLEL_TASKS` only when a stricter task-count limit is needed.
+By default, the total compiler budget is five eighths of the logical CPUs
+available to the process; the graph concurrency ceiling follows that budget.
+The scheduler dynamically starts ready nodes and divides jobs between them.
+Set `BUILD_PARALLEL_TASKS` only when a stricter task-count limit is needed.
 
 Architecture workspaces live under `build/workspaces/qemu-<arch>/`. Direct
 single-architecture commands use the same workspace and lock as batch builds.

@@ -5,8 +5,51 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 export LOG_CREATE_DEFAULT_FILE=0
 source "$repo_root/scripts/lib/utils.sh"
-export BUILD_CACHE_DIR="$work/cache" BUILD_JOBS=4
-if BUILD_JOBS=0 build_jobs >/dev/null 2>&1; then exit 1; fi
+source "$repo_root/scripts/lib/build-cpu-scope.sh"
+unset TGOS_BUILD_JOB_BUDGET
+nproc() { printf '8\n'; }
+automatic_jobs=$(build_jobs)
+((automatic_jobs >= 1 && automatic_jobs < 8))
+unset -f nproc
+
+scope_bin="$work/scope-bin"
+mkdir "$scope_bin"
+cat >"$scope_bin/systemd-run" <<'SCOPE'
+#!/usr/bin/env bash
+set -e
+[[ ${SCOPE_UNAVAILABLE:-0} != 1 ]] || exit 1
+printf '%s\n' "$*" >>"$SCOPE_CALLS"
+for argument in "$@"; do
+    [[ $argument != true ]] || exit 0
+done
+while [[ $# -gt 0 && $1 != env ]]; do shift; done
+shift
+exec env "$@"
+SCOPE
+chmod +x "$scope_bin/systemd-run"
+cat >"$work/scoped-command" <<'COMMAND'
+#!/usr/bin/env bash
+test "$TGOS_CPU_SCOPE_ACTIVE" = 1
+printf 'scoped\n' >"$SCOPE_RESULT"
+COMMAND
+chmod +x "$work/scoped-command"
+(
+    export PATH="$scope_bin:$PATH" SCOPE_CALLS="$work/scope.calls" SCOPE_RESULT="$work/scope.result"
+    nproc() { printf '8\n'; }
+    build_cpu_scope_reexec build "$work/scoped-command"
+)
+[[ $(<"$work/scope.result") == scoped ]]
+grep -Fq 'CPUQuota=500%' "$work/scope.calls"
+(
+    export PATH="$scope_bin:$PATH" SCOPE_UNAVAILABLE=1
+    nproc() { printf '8\n'; }
+    build_cpu_scope_reexec build "$work/scoped-command"
+    printf 'fallback\n' >"$work/scope.fallback"
+)
+[[ $(<"$work/scope.fallback") == fallback ]]
+printf 'PASS: build entry uses cgroup CPU quota with an unsupported-system fallback\n'
+
+export BUILD_CACHE_DIR="$work/cache" TGOS_BUILD_JOB_BUDGET=4
 
 # Exercise real parallel runner with a budget smaller than its task count.
 slot_task() {
@@ -15,7 +58,7 @@ slot_task() {
     sleep 0.1
     rmdir "$work/active"
 }
-BUILD_JOBS=1 PARALLEL_LOG_DIR="$work/parallel" run_parallel_functions slots \
+TGOS_BUILD_JOB_BUDGET=1 PARALLEL_LOG_DIR="$work/parallel" run_parallel_functions slots \
     'one=slot_task' 'two=slot_task' 'three=slot_task' -- >"$work/parallel.console"
 printf 'PASS: parallel fan-out respects a one-job budget\n'
 

@@ -8,6 +8,9 @@ OS_DIR="${SCRIPTS_DIR}/os"
 ROOTFS_DIR="${SCRIPTS_DIR}/rootfs"
 TOOLS_DIR="${SCRIPTS_DIR}/tools"
 
+source "${SCRIPTS_DIR}/lib/build-cpu-scope.sh"
+build_cpu_scope_reexec "${1:-}" "${SCRIPT_DIR}/build.sh" "$@"
+
 LOG_CREATE_DEFAULT_FILE="${LOG_CREATE_DEFAULT_FILE:-0}"
 source "${SCRIPTS_DIR}/lib/utils.sh"
 

@@ -195,10 +195,10 @@ build_plugin() {
         builder_script=${ROOTFS_TEST_GLIBC_STATIC_BUILDER:-"$plugin_dir/../glibc-static-builder.sh"}
         builder_image=$(ROOTFS_TEST_BUILD_ROOT="$build_root" "$builder_script" prepare --arch "$arch")
         uid=$(id -u); gid=$(id -g)
-        jobs=$(BUILD_JOBS="${ROOTFS_TEST_BUILD_JOBS:-${BUILD_JOBS:-}}" build_jobs) || return
+        jobs=$(TGOS_BUILD_JOB_BUDGET="${ROOTFS_TEST_BUILD_JOBS:-${TGOS_BUILD_JOB_BUDGET:-}}" build_jobs) || return
         docker run --rm --platform linux/amd64 \
             -e TARGET_TRIPLET="$target_triplet" -e TARGET_CC="$target_cc" -e TARGET_AR="$target_ar" \
-            -e BUILD_JOBS="$jobs" -e HOST_UID="$uid" -e HOST_GID="$gid" \
+            -e TGOS_BUILD_JOB_BUDGET="$jobs" -e HOST_UID="$uid" -e HOST_GID="$gid" \
             -v "$plugin_work_dir:/work" -v "$numactl_work_dir:/numactl" \
             "$builder_image" bash -ec '
                 trap '\''chown -R "$HOST_UID:$HOST_GID" /work /numactl'\'' EXIT
@@ -206,9 +206,9 @@ build_plugin() {
                 ./autogen.sh
                 ./configure --host="$TARGET_TRIPLET" --disable-shared --enable-static CC="$TARGET_CC" \
                     CFLAGS="-O2 -ffunction-sections -fdata-sections"
-                make -j"$BUILD_JOBS" libnuma.la
+                make -j"$TGOS_BUILD_JOB_BUDGET" libnuma.la
                 cd /work
-                make -j"$BUILD_JOBS" cyclictest no_libcpupower=1 PYLIB=/usr/lib \
+                make -j"$TGOS_BUILD_JOB_BUDGET" cyclictest no_libcpupower=1 PYLIB=/usr/lib \
                     CC="$TARGET_CC" AR="$TARGET_AR" \
                     CFLAGS="-O2 -static -ffunction-sections -fdata-sections -I/numactl" \
                     LDFLAGS="-static -Wl,--gc-sections -L/numactl/.libs"

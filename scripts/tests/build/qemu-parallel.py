@@ -113,7 +113,7 @@ with (root/'events.lock').open('a') as lock:
  data['peak']=max(data['peak'],data['active'])
  if sys.argv[2]=='start':
   data['entries'].append(dict(arch=sys.argv[3],workspace=os.environ['BUILD_WORK_DIR'],
-                             budget=int(os.environ.get('TGOS_BUILD_JOB_BUDGET', os.environ['BUILD_JOBS']))))
+                             budget=int(os.environ['TGOS_BUILD_JOB_BUDGET'])))
  file.write_text(json.dumps(data))
 ''')
         original = (ROOT / 'scripts/platform/qemu.sh').read_text()
@@ -161,11 +161,11 @@ qemu_rootfs_debian_step() { :; }
 qemu_rootfs_inject_platform_dir() { touch "$PROBE_ROOT/$ARCH.composed"; }
 '''
         (self.repo / 'scripts/platform/qemu.sh').write_text(original.replace(marker, stub + marker))
-        self.env = dict(os.environ, LOG_CREATE_DEFAULT_FILE='0', LOG_COLOR='never', BUILD_JOBS='8', BUILD_PARALLEL_TASKS='4',
+        self.env = dict(os.environ, LOG_CREATE_DEFAULT_FILE='0', LOG_COLOR='never', TGOS_BUILD_JOB_BUDGET='8', BUILD_PARALLEL_TASKS='4',
                         PROBE_ROOT=str(self.work), PROBE_UPSTREAM=upstream.as_uri(), PROBE_REF=base,
                         ROOTFS_GRAPH_DISABLE='1')
         for key in ('BUILD_WORKSPACE_NAME', 'BUILD_WORK_DIR', 'BUILD_WORKSPACE_ROOT', 'BUILD_CACHE_DIR',
-                    'BUILD_SOURCE_CACHE_DIR', 'TGOS_BUILD_JOB_BUDGET', 'LOG_FILE', 'LOG_DIR',
+                    'BUILD_SOURCE_CACHE_DIR', 'LOG_FILE', 'LOG_DIR',
                     'PLATFORM_LOG_RUN_DIR', 'LOG_STDIO_CAPTURED', 'PARALLEL_STEP_CALLBACK'):
             self.env.pop(key, None)
 

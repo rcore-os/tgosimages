@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -19,9 +20,9 @@ class GraphTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.env = dict(os.environ, BUILD_JOBS='4', BUILD_PARALLEL_TASKS='2',
+        self.env = dict(os.environ, TGOS_BUILD_JOB_BUDGET='4', BUILD_PARALLEL_TASKS='2',
                         BUILD_MEMORY_MB='2', LOG_COLOR='never', BUILD_CACHE_DIR=str(self.root / 'cache'))
-        for key in ('TGOS_BUILD_JOB_BUDGET', 'BUILD_REBUILD', 'BUILD_CACHE', 'LOG_FILE'):
+        for key in ('BUILD_REBUILD', 'BUILD_CACHE', 'LOG_FILE'):
             self.env.pop(key, None)
 
     def node(self, name, code='pass', **kwargs):
@@ -121,7 +122,7 @@ os.unlink('exclusive')
         self.assertFalse((self.root / 'late-output').exists())
 
     def test_heartbeat_reports_active_progress_and_wait_reasons(self):
-        self.env.update(BUILD_JOBS='2', BUILD_PARALLEL_TASKS='1', BUILD_HEARTBEAT_SECONDS='0.1')
+        self.env.update(TGOS_BUILD_JOB_BUDGET='2', BUILD_PARALLEL_TASKS='1', BUILD_HEARTBEAT_SECONDS='0.1')
         active = '''import time
 print("compiling drivers/virtio/virtio_ring.o", flush=True)
 time.sleep(.35)
@@ -159,6 +160,47 @@ print("captured after append", flush=True)
         contents = (self.root / 'logs/steps/direct-log.log').read_text()
         self.assertIn('direct append', contents)
         self.assertIn('captured after append', contents)
+
+    def test_automatic_budget_preserves_cpu_headroom(self):
+        self.env.pop('TGOS_BUILD_JOB_BUDGET')
+        fake_bin = self.root / 'fake-bin'
+        fake_bin.mkdir()
+        fake_nproc = fake_bin / 'nproc'
+        fake_nproc.write_text('#!/bin/sh\nprintf "8\\n"\n')
+        fake_nproc.chmod(0o755)
+        self.env['PATH'] = f'{fake_bin}{os.pathsep}{self.env["PATH"]}'
+        process = self.launch([self.node('only')])
+        output, _ = process.communicate(timeout=10)
+        self.assertEqual(process.returncode, 0, output)
+        match = re.search(r'START graph: tasks=1 jobs=([0-9]+)', output)
+        self.assertIsNotNone(match, output)
+        self.assertGreater(int(match.group(1)), 0)
+        self.assertGreater(int(match.group(1)), 1)
+        self.assertLess(int(match.group(1)), 8)
+
+    def test_cpu_scope_adds_headroom_for_a_quarter_of_active_nodes(self):
+        self.env.update(TGOS_BUILD_JOB_BUDGET='8', BUILD_PARALLEL_TASKS='4',
+                        TGOS_CPU_SCOPE_ACTIVE='1')
+        fake_bin = self.root / 'fake-bin'
+        fake_bin.mkdir()
+        fake_nproc = fake_bin / 'nproc'
+        fake_nproc.write_text('#!/bin/sh\nprintf "16\\n"\n')
+        fake_nproc.chmod(0o755)
+        self.env['PATH'] = f'{fake_bin}{os.pathsep}{self.env["PATH"]}'
+        code = '''import os,time
+from pathlib import Path
+name=os.environ["NAME"]
+Path(name).write_text(os.environ["TGOS_BUILD_JOB_BUDGET"])
+while len(list(Path(".").glob("node-*"))) < 4:
+    time.sleep(.01)
+time.sleep(.1)
+'''
+        tasks = [self.node(f'task-{index}', code, env={'NAME': f'node-{index}'})
+                 for index in range(4)]
+        process = self.launch(tasks)
+        output, _ = process.communicate(timeout=20)
+        self.assertEqual(process.returncode, 0, output)
+        self.assertEqual({(self.root / f'node-{index}').read_text() for index in range(4)}, {'3'}, output)
 
 
 if __name__ == '__main__':

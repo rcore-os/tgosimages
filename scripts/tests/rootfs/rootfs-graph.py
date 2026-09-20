@@ -50,7 +50,7 @@ mkdir -p "$output"
 printf '{name}-%s\\n' "$scope" >"$output/{name}-$scope"
 ''')
                 script.chmod(0o755)
-            env = dict(os.environ, ROOTFS_TEST_PLUGIN_DIR=str(plugins), BUILD_JOBS='4',
+            env = dict(os.environ, ROOTFS_TEST_PLUGIN_DIR=str(plugins), TGOS_BUILD_JOB_BUDGET='4',
                        BUILD_PARALLEL_TASKS='4', BUILD_CACHE_DIR=str(work / 'cache'), LOG_COLOR='never')
             old = os.environ.get('ROOTFS_TEST_PLUGIN_DIR')
             os.environ['ROOTFS_TEST_PLUGIN_DIR'] = str(plugins)
