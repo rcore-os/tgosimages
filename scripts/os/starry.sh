@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p build && cd build && pwd -P)"
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 source "${SCRIPT_DIR}/../lib/utils.sh"
 
@@ -170,7 +171,7 @@ starry_build() {
     [[ -f "${config_path}" ]] || die "StarryOS build config not found: ${config_path}"
     build_config="$(starry_config_for_build "${config_path}")"
 
-    build_cmd=(cargo xtask starry build -c "${build_config}")
+    build_cmd=(build_cargo xtask starry build -c "${build_config}")
     build_cmd+=("${STARRY_ARGS[@]}")
     ensure_musl_toolchain aarch64
     info "Building StarryOS from ${STARRY_REF}"

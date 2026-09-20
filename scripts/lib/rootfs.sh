@@ -44,6 +44,26 @@ _rootfs_run_tool() {
     return "$status"
 }
 
+rootfs_normalize_tree_seconds() {
+    local tree="$1" path atime mtime inventory
+    inventory=$(mktemp) || return 1
+    if ! find -P "$tree" -depth -print0 >"$inventory"; then
+        rm -f -- "$inventory"
+        return 1
+    fi
+    while IFS= read -r -d '' path; do
+        read -r atime mtime < <(stat -c '%X %Y' -- "$path") || { rm -f -- "$inventory"; return 1; }
+        if [[ -L $path ]]; then
+            touch -h -a -d "@$atime" "$path" || { rm -f -- "$inventory"; return 1; }
+            touch -h -m -d "@$mtime" "$path" || { rm -f -- "$inventory"; return 1; }
+        else
+            touch -a -d "@$atime" "$path" || { rm -f -- "$inventory"; return 1; }
+            touch -m -d "@$mtime" "$path" || { rm -f -- "$inventory"; return 1; }
+        fi
+    done <"$inventory"
+    rm -f -- "$inventory"
+}
+
 rootfs_stage_guest_tree() {
     local stage_dir="$1"
     local source_dir="$2"
@@ -61,6 +81,9 @@ rootfs_stage_guest_tree() {
     else
         cp -a "${source_dir}/." "${guest_dir}/"
     fi
+    # debugfs stores whole-second inode timestamps. This tree is a private
+    # staging copy, so normalize it without changing caller-owned artifacts.
+    rootfs_normalize_tree_seconds "$stage_dir"
 }
 
 rootfs_prepare_target() {

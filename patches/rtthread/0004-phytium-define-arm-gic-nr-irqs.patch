@@ -1,0 +1,12 @@
+diff --git a/bsp/phytium/board/phytium_cpu.h b/bsp/phytium/board/phytium_cpu.h
+--- a/bsp/phytium/board/phytium_cpu.h
++++ b/bsp/phytium/board/phytium_cpu.h
+@@ -40,6 +40,8 @@
+     #define MAX_HANDLERS 1024
+ #endif
+ 
++#define ARM_GIC_NR_IRQS MAX_HANDLERS
++
+ #define GIC_IRQ_START 0
+ #define GIC_ACK_INTID_MASK 0x000003ff
+ #define RT_CORE_AFF(x) (CORE##x##_AFF | 0x80000000)

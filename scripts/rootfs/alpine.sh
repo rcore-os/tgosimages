@@ -5,7 +5,8 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ALPINE_SCRIPT_DIR="${SCRIPT_DIR}"
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 source "${SCRIPT_DIR}/../lib/utils.sh"
 source "${SCRIPT_DIR}/../lib/rootfs-compose.sh"
@@ -138,8 +139,8 @@ alpine_usage() {
     printf '  --out_dir <dir>               Output directory (default image: IMAGES/rootfs/rootfs-<arch>-alpine.img)\n'
     printf '  --guest <dir>                 Guest directory to copy into rootfs /guest\n'
     printf '  --outer-tests <list>          Tests installed in the outer image (default: ltp)\n'
-    printf '  --guest-tests <list>          Tests installed in the nested guest image (default from rootfs-tests)\n'
-    printf '  --guest-free-size <size>      Free space reserved in nested guest image (default: 256M)\n'
+    printf '  --guest-tests <list>          Tests installed identically in all guest images (default from rootfs-test-plugins)\n'
+    printf '  --guest-free-size <size>      Free space reserved in each guest image (default: 256M)\n'
     printf '  --outer-free-size <size>      Free space reserved in outer image (default: 256M)\n'
     printf '  --img-size <size>             Output image size (default: 2G)\n'
     printf '\n'
@@ -605,10 +606,10 @@ alpine_validate_legacy_ltp_environment() {
     [[ ${ALPINE_LTP_PREFIX:-/opt/ltp} == /opt/ltp ]] ||
         die "ALPINE_LTP_PREFIX is no longer configurable; use /opt/ltp with --outer-tests ltp"
     [[ -z ${ALPINE_LTP_DOCKER_IMAGE:-} ]] ||
-        die "ALPINE_LTP_DOCKER_IMAGE is unsupported by rootfs-tests; unset it"
+        die "ALPINE_LTP_DOCKER_IMAGE is unsupported by rootfs-test-plugins; unset it"
     case ${ALPINE_LTP_DOCKER_INSTALL_PACKAGES:-0} in
     0|'') ;;
-    *) die "ALPINE_LTP_DOCKER_INSTALL_PACKAGES is unsupported by rootfs-tests; use 0" ;;
+    *) die "ALPINE_LTP_DOCKER_INSTALL_PACKAGES is unsupported by rootfs-test-plugins; use 0" ;;
     esac
 }
 
@@ -726,10 +727,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                 die "--out_dir can only be used for a single architecture build"
             fi
 
-            for arch in "${ALPINE_ARCHES[@]}"; do
-                ALPINE_ARCH="${arch}"
+            alpine_arch_target() {
+                ALPINE_ARCH=$1
                 alpine
-            done
+            }
+            run_sequential_targets rootfs "alpine all" alpine_arch_target "${ALPINE_ARCHES[@]}" --
             ;;
         clean)
             alpine_parse_args "$@"

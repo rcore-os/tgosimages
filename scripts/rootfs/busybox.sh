@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 source "${SCRIPT_DIR}/../lib/utils.sh"
 source "${SCRIPT_DIR}/../lib/rootfs-compose.sh"
@@ -45,8 +46,8 @@ mkfs_usage() {
     printf '  --out_dir <dir>               Output directory (default images: IMAGES/rootfs/{initramfs-<arch>-busybox.cpio.gz,rootfs-<arch>-busybox.img})\n'
     printf '  --guest <dir>                 Guest directory to copy into rootfs /guest\n'
     printf '  --outer-tests <list>          Tests installed in the outer image (default: none)\n'
-    printf '  --guest-tests <list>          Tests installed in the nested guest image (default from rootfs-tests)\n'
-    printf '  --guest-free-size <size>      Free space reserved in nested guest image (default: 256M)\n'
+    printf '  --guest-tests <list>          Tests installed identically in all guest images (default from rootfs-test-plugins)\n'
+    printf '  --guest-free-size <size>      Free space reserved in each guest image (default: 256M)\n'
     printf '  --outer-free-size <size>      Free space reserved in outer image (default: 256M)\n'
     printf '\n'
     printf 'Environment Variables:\n'
@@ -141,18 +142,18 @@ mkfs_build_busybox() {
     fi
     pushd "${BUSYBOX_BUILD_SRC_DIR:-$BUSYBOX_SRC_DIR}" >/dev/null
     info "Cleaning: make distclean"
-    make distclean
+    build_make distclean
 
     info "Configuring: make defconfig"
-    make defconfig
+    build_make defconfig
 
-    info "Building: make -j$(nproc) CROSS_COMPILE=$cross"
+    info "Building: make -j$(build_jobs) CROSS_COMPILE=$cross"
     sed -i 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
     sed -i 's/^CONFIG_TC=y$/# CONFIG_TC is not set/' .config
     # BusyBox defconfig may enable x86 SHA-NI acceleration, which breaks
     # non-x86 cross builds because the matching assembly implementation is not used.
     sed -i 's/^CONFIG_SHA1_HWACCEL=y$/# CONFIG_SHA1_HWACCEL is not set/' .config
-    make -j$(nproc) CROSS_COMPILE="$cross"
+    build_make CROSS_COMPILE="$cross"
     popd >/dev/null
 }
 
@@ -429,7 +430,7 @@ mkfs_pack_fs() {
     dd if=/dev/zero of="$img_tmp" bs=1M count=$size_mb status=none
     mkfs.ext4 -q -F "$img_tmp"
     if ! command -v debugfs >/dev/null 2>&1; then
-        echo "Error: debugfs not found. Please install: sudo apt install e2fsprogs" >&2
+        error "debugfs not found. Please install: sudo apt install e2fsprogs"
         cd "$old_pwd"
         return 1
     fi
@@ -510,10 +511,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             ;;
         all)
             mkfs_parse_args "$@"
-            for arch in "${MKFS_ARCHES[@]}"; do
-                MKFS_ARCH="${arch}"
+            busybox_arch_target() {
+                MKFS_ARCH=$1
                 mkfs
-            done
+            }
+            run_sequential_targets rootfs "busybox all" busybox_arch_target "${MKFS_ARCHES[@]}" --
             ;;
         clean)
             mkfs_parse_args "$@"

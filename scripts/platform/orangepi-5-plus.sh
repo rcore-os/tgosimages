@@ -4,7 +4,11 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    source "${ROOT_DIR}/scripts/lib/platform-graph-entry.sh"
+fi
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 # Repository and directory configuration
 LINUX_REPO_URL="https://github.com/orangepi-xunlong/orangepi-build.git"
@@ -55,7 +59,7 @@ orangepi_configure_source_excludes() {
     exclude_file="${git_dir}/info/exclude"
     mkdir -p "$(dirname -- "$exclude_file")"
     touch "$exclude_file"
-    for pattern in /scripts/wget-log '/scripts/wget-log.[0-9]*' /u-boot-work/; do
+    for pattern in /scripts/wget-log '/scripts/wget-log.[0-9]*' /u-boot-work/ /.patch_stamps/; do
         grep -Fqx -- "$pattern" "$exclude_file" || printf '%s\n' "$pattern" >>"$exclude_file"
     done
 }
@@ -299,8 +303,10 @@ orangepi_build_guest_rootfs() (
     image="$work/rootfs.img"
     overlay_parent="$work/overlays"
     mkdir -p "$tree" "$overlay_parent"
+    local guest_tests=$ORANGEPI_GUEST_TESTS
+    [[ ${ROOTFS_GRAPH_BASE_ONLY:-0} != 1 ]] || guest_tests=none
     rootfs_builder_prepare_test_overlays aarch64 "$ORANGEPI_ROOTFS_TYPE" none \
-        "$ORANGEPI_GUEST_TESTS" "$overlay_parent" outer_overlay guest_overlay || return 1
+        "$guest_tests" "$overlay_parent" outer_overlay guest_overlay || return 1
     mkdir -p "$guest_overlay/etc/systemd/system/serial-getty@ttyS0.service.d"
     cat >"$guest_overlay/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf" <<'EOF'
 [Service]
@@ -610,7 +616,13 @@ all() {
     # sequential. The remaining stages use independent source/work trees.
     linux "$@" || status=1
     rootfs "$@" || status=1
-    if ! run_parallel_functions "all" uboot arceos starry zephyr freertos -- "$@"; then
+    local parallel_status restore_errexit=0
+    [[ $- != *e* ]] || restore_errexit=1
+    set +e
+    run_parallel_functions "all" uboot arceos starry zephyr freertos -- "$@"
+    parallel_status=$?
+    if ((restore_errexit)); then set -e; fi
+    if ((parallel_status != 0)); then
         status=1
         warn "Some Orange Pi platform targets failed; continuing with AXIVC payload build"
     fi
@@ -638,6 +650,8 @@ uboot() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    source "${SCRIPT_DIR}/../lib/platform-log.sh"
+    platform_log_init "$@"
     cmd="${1:-}"
     if [[ -z "${cmd}" ]]; then
         cmd="all"

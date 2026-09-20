@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 TGOSIMAGES_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="${TGOSIMAGES_ROOT}/build"
+source "${TGOSIMAGES_ROOT}/scripts/lib/build-paths.sh"
+build_paths_init "$TGOSIMAGES_ROOT"
 
 source "${TGOSIMAGES_ROOT}/scripts/lib/utils.sh"
 
@@ -195,8 +196,8 @@ build_user_apps() {
 
     ensure_musl_toolchain aarch64
     info "Building Starry userspace AXIVC programs from ivc-sdk"
-    make -C "${IVC_SDK_DIR}" clean-linux BUILD_DIR="${IVC_BUILD_DIR}"
-    make -C "${IVC_SDK_DIR}" all BUILD_DIR="${IVC_BUILD_DIR}"
+    build_make -C "${IVC_SDK_DIR}" clean-linux BUILD_DIR="${IVC_BUILD_DIR}"
+    build_make -C "${IVC_SDK_DIR}" all BUILD_DIR="${IVC_BUILD_DIR}"
 }
 
 build_zephyr_image() {

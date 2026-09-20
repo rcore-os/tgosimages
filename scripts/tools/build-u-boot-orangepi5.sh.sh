@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/log.sh"
+source "$(dirname -- "${BASH_SOURCE[0]}")/../lib/build-performance.sh"
+ROOT_DIR=$(cd "$TGOS_BUILD_LIB_DIR/../.." && pwd -P)
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
+source "${ROOT_DIR}/scripts/lib/download-archive.sh"
+
 ########################################
 # Config
 ########################################
@@ -17,7 +24,8 @@ export TMPDIR="${TMPROOT}"
 export TEMP="${TMPROOT}"
 export TMP="${TMPROOT}"
 
-RKBIN_SOURCE="https://github.com/rockchip-linux/rkbin/archive/refs/heads/master.tar.gz"
+RKBIN_REF="${RKBIN_REF:-ecb4fcbe954edf38b3ae037d5de6d9f5bccf81f4}"
+RKBIN_SOURCE="https://github.com/rockchip-linux/rkbin/archive/${RKBIN_REF}.tar.gz"
 
 ATF_VERSION="v2.12.0"
 ATF_SOURCE="https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/${ATF_VERSION}.tar.gz"
@@ -37,14 +45,13 @@ export CROSS_COMPILE=aarch64-linux-gnu-
 # Helpers
 ########################################
 
-log() {
-    echo
-    echo "[$1] $2"
+build_step() {
+    info "Step $1: $2"
 }
 
 need_cmd() {
     command -v "$1" >/dev/null 2>&1 || {
-        echo "Error: command not found: $1" >&2
+        error "Command not found: $1"
         exit 1
     }
 }
@@ -66,7 +73,7 @@ mkdir -p \
 # Step 1: install dependencies
 ########################################
 
-log "1/6" "install dependencies"
+build_step "1/6" "install dependencies"
 
 sudo ln -snf "/usr/share/zoneinfo/${TZ}" /etc/localtime
 echo "${TZ}" | sudo tee /etc/timezone >/dev/null
@@ -120,6 +127,8 @@ sudo apt-get install --no-install-recommends -y \
 
 need_cmd curl
 need_cmd tar
+need_cmd flock
+need_cmd sha256sum
 need_cmd make
 need_cmd "${CROSS_COMPILE}gcc"
 
@@ -127,12 +136,13 @@ need_cmd "${CROSS_COMPILE}gcc"
 # Step 2: download rkbin and extract tpl
 ########################################
 
-log "2/6" "download rkbin and extract tpl.bin"
+build_step "2/6" "download rkbin and extract tpl.bin"
 
 rm -rf "${WORKDIR}/src/rkbin"
 mkdir -p "${WORKDIR}/src/rkbin"
 
-curl -L "${RKBIN_SOURCE}" | tar -xz -C "${WORKDIR}/src/rkbin" --strip-components=1
+download_archive "$RKBIN_SOURCE" "${WORKDIR}/downloads/rkbin-${RKBIN_REF}.tar.gz" \
+    "${WORKDIR}/src/rkbin" "${RKBIN_SHA256:-}"
 
 TPL_FILE="$(
     ls -1 "${WORKDIR}/src/rkbin/bin/rk35" | \
@@ -141,54 +151,56 @@ TPL_FILE="$(
 )"
 
 if [ -z "${TPL_FILE}" ]; then
-    echo "Error: failed to find rk3588 DDR binary in rkbin" >&2
+    error "failed to find rk3588 DDR binary in rkbin"
     exit 1
 fi
 
 cp "${WORKDIR}/src/rkbin/bin/rk35/${TPL_FILE}" "${WORKDIR}/rkbin/tpl.bin"
 
-echo "TPL_FILE=${TPL_FILE}"
-echo "TPL => ${WORKDIR}/rkbin/tpl.bin"
+info "TPL_FILE=${TPL_FILE}"
+info "TPL => ${WORKDIR}/rkbin/tpl.bin"
 
 ########################################
 # Step 3: build ATF BL31
 ########################################
 
-log "3/6" "download and build ARM Trusted Firmware (BL31)"
+build_step "3/6" "download and build ARM Trusted Firmware (BL31)"
 
 rm -rf "${WORKDIR}/src/atf"
 mkdir -p "${WORKDIR}/src/atf"
 
-curl -L "${ATF_SOURCE}" | tar -xz -C "${WORKDIR}/src/atf" --strip-components=1
+download_archive "$ATF_SOURCE" "${WORKDIR}/downloads/atf-${ATF_VERSION}.tar.gz" \
+    "${WORKDIR}/src/atf" "${ATF_SHA256:-}"
 
 pushd "${WORKDIR}/src/atf" >/dev/null
-CFLAGS=--param=min-pagesize=0 make -j"$(nproc)" DEBUG=0 PLAT=rk3588 bl31
+CFLAGS=--param=min-pagesize=0 build_make DEBUG=0 PLAT=rk3588 bl31
 cp build/rk3588/release/bl31/bl31.elf "${WORKDIR}/atf/bl31.elf"
 popd >/dev/null
 
 if [ ! -f "${WORKDIR}/atf/bl31.elf" ]; then
-    echo "Error: BL31 build failed, ${WORKDIR}/atf/bl31.elf not found" >&2
+    error "BL31 build failed, ${WORKDIR}/atf/bl31.elf not found"
     exit 1
 fi
 
-echo "BL31 => ${WORKDIR}/atf/bl31.elf"
+info "BL31 => ${WORKDIR}/atf/bl31.elf"
 
 ########################################
 # Step 4: download U-Boot
 ########################################
 
-log "4/6" "download U-Boot"
+build_step "4/6" "download U-Boot"
 
 rm -rf "${WORKDIR}/src/u-boot"
 mkdir -p "${WORKDIR}/src/u-boot"
 
-curl -L "${U_BOOT_SOURCE}" | tar -xz -C "${WORKDIR}/src/u-boot" --strip-components=1
+download_archive "$U_BOOT_SOURCE" "${WORKDIR}/downloads/u-boot-${U_BOOT_VERSION}.tar.gz" \
+    "${WORKDIR}/src/u-boot" "${U_BOOT_SHA256:-}"
 
 ########################################
 # Step 5: build U-Boot
 ########################################
 
-log "5/6" "build U-Boot for Orange Pi 5"
+build_step "5/6" "build U-Boot for Orange Pi 5"
 
 export ROCKCHIP_TPL="${WORKDIR}/rkbin/tpl.bin"
 export BL31="${WORKDIR}/atf/bl31.elf"
@@ -198,18 +210,18 @@ mkdir -p "${WORKDIR}/build/u-boot"
 
 pushd "${WORKDIR}/src/u-boot" >/dev/null
 
-make O="${WORKDIR}/build/u-boot" -j"$(nproc)" \
+build_make O="${WORKDIR}/build/u-boot" \
     CROSS_COMPILE="${CROSS_COMPILE}" \
     "${DEFCONFIG}_defconfig"
 
-make O="${WORKDIR}/build/u-boot" -j"$(nproc)" \
+build_make O="${WORKDIR}/build/u-boot" \
     CROSS_COMPILE="${CROSS_COMPILE}" \
     HOSTLDLIBS_mkimage="-lssl -lcrypto"
 
 popd >/dev/null
 
 if [ ! -f "${WORKDIR}/build/u-boot/u-boot-rockchip-spi.bin" ]; then
-    echo "Error: U-Boot build failed, output bin not found" >&2
+    error "U-Boot build failed, output bin not found"
     exit 1
 fi
 
@@ -217,11 +229,11 @@ fi
 # Step 6: collect output
 ########################################
 
-log "6/6" "collect output"
+build_step "6/6" "collect output"
 
 cp "${WORKDIR}/build/u-boot/u-boot-rockchip-spi.bin" \
    "${WORKDIR}/out/${NAME}.bin"
 
-echo "Done."
-echo "Output file: ${WORKDIR}/out/${NAME}.bin"
+success "Done."
+info "Output file: ${WORKDIR}/out/${NAME}.bin"
 ls -lh "${WORKDIR}/out/${NAME}.bin"

@@ -8,6 +8,9 @@ OS_DIR="${SCRIPTS_DIR}/os"
 ROOTFS_DIR="${SCRIPTS_DIR}/rootfs"
 TOOLS_DIR="${SCRIPTS_DIR}/tools"
 
+source "${SCRIPTS_DIR}/lib/build-cpu-scope.sh"
+build_cpu_scope_reexec "${1:-}" "${SCRIPT_DIR}/build.sh" "$@"
+
 LOG_CREATE_DEFAULT_FILE="${LOG_CREATE_DEFAULT_FILE:-0}"
 source "${SCRIPTS_DIR}/lib/utils.sh"
 
@@ -32,7 +35,7 @@ usage() {
     printf '%s\n' "  qemu-riscv64         -> scripts/platform/qemu.sh riscv64"
     printf '%s\n' "  qemu-loongarch64     -> scripts/platform/qemu.sh loongarch64"
     printf '%s\n' "  qemu                 -> scripts/platform/qemu.sh all"
-    printf '%s\n' "  all                  -> build all platform targets sequentially with rootfs and all os if applicable"
+    printf '%s\n' "  all                  -> build board targets sequentially and QEMU architectures in parallel"
     printf '%s\n' "  clean                -> clean all platform targets"
     printf '%s\n' ""
     printf '%s\n' "OS Targets:"
@@ -86,9 +89,11 @@ usage() {
 run_checked_script() {
     local script_path="$1"
     shift || true
-    [[ -f "$script_path" ]] || { echo "[ERROR] Script not found: $script_path" >&2; exit 1; }
+    [[ -f "$script_path" ]] || { error "Script not found: $script_path"; exit 1; }
     chmod +x "$script_path" 2>/dev/null || true
-    echo "Running: $script_path $*"
+    if [[ $script_path != "${PLATFORM_DIR}/"* ]]; then
+        info "Running: $script_path $*"
+    fi
     exec "$script_path" "$@"
 }
 
@@ -121,17 +126,17 @@ run_parallel_targets() {
         targets+=("$1")
         shift
     done
-    [[ "${1:-}" == "--" ]] || { echo "[ERROR] Missing run_parallel_targets separator" >&2; exit 1; }
+    [[ "${1:-}" == "--" ]] || { error "Missing run_parallel_targets separator"; exit 1; }
     shift
     target_args=("$@")
 
     mkdir -p "$log_dir"
     : >"$summary_log"
 
-    printf '[%s] START %s %s\n' "$(date '+%F %T')" "$group" "$action" | tee -a "$summary_log"
-    printf '[%s] Log directory: %s\n' "$(date '+%F %T')" "$log_dir" | tee -a "$summary_log"
-    printf '[%s] Targets: %s\n' "$(date '+%F %T')" "${targets[*]}" | tee -a "$summary_log"
-    printf '[%s] Arguments: %s\n' "$(date '+%F %T')" "${target_args[*]:-(none)}" | tee -a "$summary_log"
+    log_summary "$summary_log" INFO 'START %s %s' "$group" "$action"
+    log_summary "$summary_log" INFO 'Log directory: %s' "$log_dir"
+    log_summary "$summary_log" INFO 'Targets: %s' "${targets[*]}"
+    log_summary "$summary_log" INFO 'Arguments: %s' "${target_args[*]:-(none)}"
 
     local pids=()
     local pid_targets=()
@@ -142,7 +147,8 @@ run_parallel_targets() {
     local pid_progress_lines=()
     local pid_arches=()
     local pid_arch_start_times=()
-    local now
+    local now child_index=0 child_jobs parallel_limit
+    parallel_limit=$(build_parallel_limit "${#targets[@]}") || return
     for target in "${targets[@]}"; do
         local target_log="${log_dir}/${target}.log"
         local status_file="${log_dir}/${target}.status"
@@ -150,21 +156,25 @@ run_parallel_targets() {
         local command=("$0" "$group" "$target" "${target_args[@]}")
         rm -f "${status_file}"
         : >"$progress_file"
-        printf '[%s] QUEUE %s: %s\n' "$(date '+%F %T')" "$target" "$target_log" | tee -a "$summary_log"
+        log_summary "$summary_log" INFO 'QUEUE %s: %s' "$target" "$target_log"
+        build_wait_slot "$parallel_limit" "${pids[@]}"
+        child_jobs=$(build_child_jobs "$parallel_limit" "$child_index") || return
+        child_index=$((child_index + 1))
         (
+            export TGOS_BUILD_JOB_BUDGET="$child_jobs"
             set +e
             {
-                printf '[%s] START %s %s\n' "$(date '+%F %T')" "$group" "$target"
+                log_format INFO 'START %s %s' "$group" "$target"
                 printf 'cwd=%s\n' "$(pwd)"
                 printf 'command='
                 printf '%q ' "${command[@]}"
                 printf '\n\n'
-                LOG_FILE="$target_log" LOG_TO_STDERR=0 BUILD_PROGRESS_FILE="$progress_file" "${command[@]}"
+                LOG_FILE="$target_log" LOG_TO_STDERR=1 LOG_STDIO_CAPTURED=1 BUILD_PROGRESS_FILE="$progress_file" "${command[@]}"
                 status=$?
-                printf '\n[%s] END %s %s status=%s\n' "$(date '+%F %T')" "$group" "$target" "$status"
+                log_format INFO 'END %s %s status=%s' "$group" "$target" "$status"
                 printf '%s\n' "$status" >"${status_file}"
                 exit "$status"
-            } >"$target_log" 2>&1
+            } >>"$target_log" 2>&1
         ) &
         pid=$!
         pids+=("$pid")
@@ -176,7 +186,7 @@ run_parallel_targets() {
         pid_progress_lines+=(0)
         pid_arches+=("")
         pid_arch_start_times+=(0)
-        printf '[%s] STARTED %s: pid=%s\n' "$(date '+%F %T')" "$target" "$pid" | tee -a "$summary_log"
+        log_summary "$summary_log" INFO 'STARTED %s: pid=%s' "$target" "$pid"
     done
 
     local remaining="${#pids[@]}"
@@ -193,6 +203,9 @@ run_parallel_targets() {
             # transition must be included when reporting a failed target.
             target_finished=0
             [[ ! -f "${pid_status_files[$i]}" ]] || target_finished=1
+            if ! kill -0 "${pids[$i]}" 2>/dev/null; then
+                target_finished=1
+            fi
             mapfile -t -s "${pid_progress_lines[$i]}" progress_entries <"${pid_progress_files[$i]}"
             pid_progress_lines[$i]=$((pid_progress_lines[$i] + ${#progress_entries[@]}))
             for entry in "${progress_entries[@]}"; do
@@ -200,26 +213,24 @@ run_parallel_targets() {
                 [[ $arch =~ ^[a-zA-Z0-9_-]+$ && $arch_started =~ ^[0-9]+$ ]] || continue
                 pid_arches[$i]=$arch
                 pid_arch_start_times[$i]=$arch_started
-                printf '[%s] BUILDING %s/%s\n' "$(date '+%F %T')" "${pid_targets[$i]}" "$arch" | tee -a "$summary_log"
+                log_summary "$summary_log" INFO 'BUILDING %s/%s' "${pid_targets[$i]}" "$arch"
             done
             [[ $target_finished -eq 1 ]] || continue
             pid="${pids[$i]}"
             target="${pid_targets[$i]}"
             target_log="${pid_logs[$i]}"
-            status="$(<"${pid_status_files[$i]}")"
-            wait "$pid" 2>/dev/null || true
+            build_reap_task "$pid" "${pid_status_files[$i]}" status
             rm -f "${pid_status_files[$i]}" "${pid_progress_files[$i]}"
             unset 'pids[i]'
             progressed=1
             if [[ "${status}" -eq 0 ]]; then
-                printf '[%s] DONE %s: log=%s\n' "$(date '+%F %T')" "$target" "$target_log" | tee -a "$summary_log"
+                log_summary "$summary_log" SUCCESS 'DONE %s: log=%s' "$target" "$target_log"
             else
                 failed=1
                 display_target="$target${pid_arches[$i]:+/${pid_arches[$i]}}"
                 failed_targets+=("$display_target")
-                printf '[%s] FAILED %s: status=%s log=%s\n' "$(date '+%F %T')" "$display_target" "$status" "$target_log" | tee -a "$summary_log"
-                printf '[%s] FAILURE LOG %s (last 40 lines):\n' "$(date '+%F %T')" "$display_target" | tee -a "$summary_log"
-                tail -n 40 -- "$target_log" | tee -a "$summary_log"
+                log_summary "$summary_log" ERROR 'FAILED %s: status=%s log=%s' "$display_target" "$status" "$target_log"
+                log_failure_tail "$summary_log" "$display_target" "$target_log"
             fi
             remaining=$((remaining - 1))
         done
@@ -237,7 +248,7 @@ run_parallel_targets() {
                 fi
                 running+=("${display_target}:${elapsed}s")
             done
-            printf '[%s] RUNNING %s %s: %s\n' "$(date '+%F %T')" "$group" "$action" "${running[*]}" | tee -a "$summary_log"
+            log_summary "$summary_log" INFO 'RUNNING %s %s: %s' "$group" "$action" "${running[*]}"
             next_heartbeat=$((now + heartbeat_interval))
         fi
 
@@ -245,11 +256,11 @@ run_parallel_targets() {
     done
 
     if [[ "$failed" -eq 0 ]]; then
-        printf '[%s] COMPLETE %s %s: all targets finished successfully\n' "$(date '+%F %T')" "$group" "$action" | tee -a "$summary_log"
+        log_summary "$summary_log" SUCCESS 'COMPLETE %s %s: all targets finished successfully' "$group" "$action"
     else
-        printf '[%s] COMPLETE %s %s: failed targets=%s\n' "$(date '+%F %T')" "$group" "$action" "${failed_targets[*]}" | tee -a "$summary_log"
+        log_summary "$summary_log" ERROR 'COMPLETE %s %s: failed targets=%s' "$group" "$action" "${failed_targets[*]}"
     fi
-    printf '[%s] Summary log: %s\n' "$(date '+%F %T')" "$summary_log" | tee -a "$summary_log"
+    log_summary "$summary_log" INFO 'Summary log: %s' "$summary_log"
 
     return "$failed"
 }
@@ -269,7 +280,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         platform)
             target="${1:-}"
             shift || true
-            [[ -n "$target" ]] || { echo "[ERROR] Missing platform target" >&2; usage; exit 2; }
+            [[ -n "$target" ]] || { error "Missing platform target"; usage; exit 2; }
             case "$target" in
                 phytiumpi|roc-rk3568-pc|evm3588|tac-e400-plc|orangepi-5-plus|rdk-s100p|bst-a1000)
                     script_path="${PLATFORM_DIR}/${target}.sh"
@@ -293,26 +304,32 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                     fi
                     run_checked_script "$script_path" "$qemu_cmd" "${qemu_args[@]}"
                     ;;
-                all)
-                    extra_args=("$@")
-                    for p in phytiumpi roc-rk3568-pc evm3588 tac-e400-plc orangepi-5-plus rdk-s100p bst-a1000 qemu-aarch64 qemu-x86_64 qemu-riscv64 qemu-loongarch64; do
-                        if [[ ${#extra_args[@]} -eq 0 ]]; then
-                            echo "Building: $p all"
-                            "$0" platform "$p" all || { echo "[ERROR] $p build failed" >&2; exit 1; }
-                        else
-                            echo "Building: $p ${extra_args[*]}"
-                            "$0" platform "$p" "${extra_args[@]}" || { echo "[ERROR] $p build failed" >&2; exit 1; }
+                all|clean)
+                    if [[ $target == all && ${1:-all} != clean ]]; then
+                        platform_graph_help=0
+                        for argument in "$@"; do
+                            case $argument in help|-h|--help) platform_graph_help=1 ;; esac
+                        done
+                        if ((platform_graph_help == 0)); then
+                            exec python3 "${SCRIPTS_DIR}/lib/python/platform-graph.py" all "$@"
                         fi
-                    done
-                    ;;
-                clean)
-                    for p in phytiumpi roc-rk3568-pc evm3588 tac-e400-plc orangepi-5-plus rdk-s100p bst-a1000 qemu-aarch64 qemu-x86_64 qemu-riscv64 qemu-loongarch64; do
-                        echo "Cleaning: $p"
-                        "$0" platform "$p" clean || { echo "[ERROR] $p clean failed" >&2; exit 1; }
-                    done
+                    fi
+                    platform_targets=(phytiumpi roc-rk3568-pc evm3588 tac-e400-plc orangepi-5-plus rdk-s100p bst-a1000 qemu)
+                    extra_args=("$@")
+                    if [[ $target == clean ]]; then
+                        extra_args=(clean)
+                    elif [[ ${#extra_args[@]} -eq 0 ]]; then
+                        extra_args=(all)
+                    fi
+                    platform_batch_target() {
+                        local platform=$1
+                        shift
+                        bash "$0" platform "$platform" "$@"
+                    }
+                    run_sequential_targets platform "platform $target" platform_batch_target "${platform_targets[@]}" -- "${extra_args[@]}"
                     ;;
                 *)
-                    echo "[ERROR] Unknown platform target: $target" >&2
+                    error "Unknown platform target: $target"
                     usage
                     exit 2
                     ;;
@@ -321,7 +338,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         os)
             target="${1:-}"
             shift || true
-            [[ -n "$target" ]] || { echo "[ERROR] Missing OS target" >&2; usage; exit 2; }
+            [[ -n "$target" ]] || { error "Missing OS target"; usage; exit 2; }
             case "$target" in
                 all)
                     os_args=("$@")
@@ -338,7 +355,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                     run_checked_script "$script_path" "$@"
                     ;;
                 *)
-                    echo "[ERROR] Unknown independent OS target: $target" >&2
+                    error "Unknown independent OS target: $target"
                     usage
                     exit 2
                     ;;
@@ -347,7 +364,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         rootfs)
             target="${1:-}"
             shift || true
-            [[ -n "$target" ]] || { echo "[ERROR] Missing rootfs target" >&2; usage; exit 2; }
+            [[ -n "$target" ]] || { error "Missing rootfs target"; usage; exit 2; }
             case "$target" in
                 all)
                     rootfs_args=("$@")
@@ -365,7 +382,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                     run_checked_script "$script_path" "$@"
                     ;;
                 *)
-                    echo "[ERROR] Unknown rootfs target: $target" >&2
+                    error "Unknown rootfs target: $target"
                     usage
                     exit 2
                     ;;
@@ -382,19 +399,19 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                     run_checked_script "${TOOLS_DIR}/github.sh" "$@"
                     ;;
                 *)
-                    echo "[ERROR] Unknown release subcommand: $subcmd" >&2
+                    error "Unknown release subcommand: $subcmd"
                     usage
                     exit 2
                     ;;
             esac
             ;;
         cleanall|distclean)
-            echo "[CLEANALL] Removing build, IMAGES and release directories"
+            info "CLEANALL: Removing build, IMAGES and release directories"
             rm -rf build IMAGES release
-            echo "[CLEANALL] Removed all directories"
+            info "CLEANALL: Removed all directories"
             ;;
         *)
-            echo "[ERROR] Unknown command or target: $cmd" >&2
+            error "Unknown command or target: $cmd"
             usage
             exit 2
             ;;

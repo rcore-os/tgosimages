@@ -7,7 +7,7 @@ fi
 
 _rootfs_compose_lib_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 source "${_rootfs_compose_lib_dir}/build-lock.sh"
-ROOTFS_TEST_BUILD=${ROOTFS_TEST_BUILD:-"${_rootfs_compose_lib_dir}/../rootfs-tests/build.sh"}
+ROOTFS_TEST_BUILD=${ROOTFS_TEST_BUILD:-"${_rootfs_compose_lib_dir}/../rootfs-test-plugins/build.sh"}
 if ! declare -F _rootfs_inject_tree_via_debugfs >/dev/null; then
     # shellcheck source=rootfs.sh
     source "${_rootfs_compose_lib_dir}/rootfs.sh"
@@ -76,23 +76,7 @@ _rootfs_builder_validate_test_selection() {
 }
 
 _rootfs_builder_normalize_overlay_seconds() {
-    local overlay=$1 path atime mtime inventory
-    inventory=$(mktemp) || return 1
-    if ! find -P "$overlay" -depth -print0 >"$inventory"; then
-        rm -f -- "$inventory"
-        return 1
-    fi
-    while IFS= read -r -d '' path; do
-        read -r atime mtime < <(stat -c '%X %Y' -- "$path") || { rm -f -- "$inventory"; return 1; }
-        if [[ -L $path ]]; then
-            touch -h -a -d "@$atime" "$path" || { rm -f -- "$inventory"; return 1; }
-            touch -h -m -d "@$mtime" "$path" || { rm -f -- "$inventory"; return 1; }
-        else
-            touch -a -d "@$atime" "$path" || { rm -f -- "$inventory"; return 1; }
-            touch -m -d "@$mtime" "$path" || { rm -f -- "$inventory"; return 1; }
-        fi
-    done <"$inventory"
-    rm -f -- "$inventory"
+    rootfs_normalize_tree_seconds "$1"
 }
 
 rootfs_builder_prepare_test_overlays() {
@@ -102,6 +86,29 @@ rootfs_builder_prepare_test_overlays() {
     }
     local arch=$1 rootfs_type=$2 outer_tests=$3 guest_tests=$4 parent=$5 outer_var=$6 guest_var=$7
     local owner="rootfs-${arch}-${rootfs_type}" prepared_outer_overlay prepared_guest_overlay
+    if [[ ${ROOTFS_GRAPH_BASE_ONLY:-0} == 1 ]]; then
+        prepared_outer_overlay="$parent/base-only-outer"
+        prepared_guest_overlay="$parent/base-only-guest"
+        mkdir -p -- "$prepared_outer_overlay" "$prepared_guest_overlay" || return 1
+        printf -v "$outer_var" '%s' "$prepared_outer_overlay"
+        printf -v "$guest_var" '%s' "$prepared_guest_overlay"
+        return 0
+    fi
+    if [[ -n ${ROOTFS_PREBUILT_OUTER_TEST_OVERLAY:-} || -n ${ROOTFS_PREBUILT_GUEST_TEST_OVERLAY:-} ]]; then
+        [[ -n ${ROOTFS_PREBUILT_OUTER_TEST_OVERLAY:-} && -n ${ROOTFS_PREBUILT_GUEST_TEST_OVERLAY:-} ]] || {
+            _rootfs_compose_error 'both prebuilt test overlays are required'
+            return 1
+        }
+        prepared_outer_overlay=$(cd -- "$ROOTFS_PREBUILT_OUTER_TEST_OVERLAY" && pwd -P) || return 1
+        prepared_guest_overlay=$(cd -- "$ROOTFS_PREBUILT_GUEST_TEST_OVERLAY" && pwd -P) || return 1
+        _rootfs_builder_normalize_overlay_seconds "$prepared_outer_overlay" || return 1
+        _rootfs_builder_normalize_overlay_seconds "$prepared_guest_overlay" || return 1
+        rootfs_validate_payload_tree "$prepared_outer_overlay" || return 1
+        rootfs_validate_payload_tree "$prepared_guest_overlay" || return 1
+        printf -v "$outer_var" '%s' "$prepared_outer_overlay"
+        printf -v "$guest_var" '%s' "$prepared_guest_overlay"
+        return 0
+    fi
     _rootfs_builder_validate_test_selection "$arch" "$rootfs_type" outer "$outer_tests" || return 1
     _rootfs_builder_validate_test_selection "$arch" "$rootfs_type" guest "$guest_tests" || return 1
     mkdir -p -- "$parent" || return 1
@@ -489,6 +496,24 @@ _rootfs_validate_guest_overlay_merge() {
 }
 
 _rootfs_validate_protected_outer_path() {
+    local guest_source=$1 overlay_source=$2 protected=$3 root path member
+    _rootfs_validate_protected_outer_file "$guest_source" "$overlay_source" "$protected" || return 1
+    # Platform payloads may not provide any legacy, configured, or out-of-range
+    # member of the protected guest-image family.
+    if [[ $protected == rootfs-*.img ]]; then
+        for root in "$guest_source" "$overlay_source/guest"; do
+            [[ -d $root && ! -L $root ]] || continue
+            for path in "$root/${protected%.img}-"*.img; do
+                [[ -e $path || -L $path ]] || continue
+                member=${path##*/}
+                _rootfs_compose_error "payload collides with protected guest-image family: ${member}"
+                return 1
+            done
+        done
+    fi
+}
+
+_rootfs_validate_protected_outer_file() {
     local guest_source=$1 overlay_source=$2 protected=$3
     [[ -n "$protected" && "$protected" != */* && "$protected" != . && "$protected" != .. ]] || return 1
     [[ ! -e "$guest_source/$protected" && ! -L "$guest_source/$protected" ]] || {
@@ -507,6 +532,84 @@ _rootfs_validate_protected_outer_path() {
         _rootfs_compose_error "overlay payload collides with protected image: guest/${protected}"
         return 1
     }
+}
+
+# Build test payloads once, then stage independently writable regular files.
+_rootfs_guest_count() {
+    local value=${ROOTFS_GUEST_COUNT-2}
+    [[ $value =~ ^[0-9]+$ ]] || {
+        _rootfs_compose_error "ROOTFS_GUEST_COUNT must be a positive decimal integer"
+        return 2
+    }
+    while [[ $value == 0* && ${#value} -gt 1 ]]; do
+        value=${value#0}
+    done
+    [[ $value != 0 ]] || {
+        _rootfs_compose_error "ROOTFS_GUEST_COUNT must be at least 1"
+        return 2
+    }
+    printf '%s\n' "$value"
+}
+
+_rootfs_guest_image_name() {
+    local name=$1 index=$2
+    [[ $name == *.img && $index =~ ^[0-9]+$ ]] || return 2
+    printf '%s-%s.img\n' "${name%.img}" "$index"
+}
+
+_rootfs_plan_guest_staging() {
+    local image=$1 directory=$2 count image_bytes required available max_count
+    count=$(_rootfs_guest_count) || return 1
+    image_bytes=$(stat -c %s -- "$image") || return 1
+    [[ $image_bytes =~ ^[0-9]+$ ]] || return 1
+    ((image_bytes > 0)) || return 1
+    available=$(df -P -B1 -- "$directory" | awk 'NR == 2 {print $4}') || return 1
+    [[ $available =~ ^[0-9]+$ ]] || return 1
+    max_count=$((available / image_bytes))
+    if ((${#count} > ${#max_count})) || \
+       { ((${#count} == ${#max_count})) && [[ $count > "$max_count" ]]; }; then
+        _rootfs_compose_error "insufficient host space for ${count} guest images: each=${image_bytes}B available=${available}B"
+        return 1
+    fi
+    required=$((count * image_bytes))
+    ((required <= available)) || return 1
+    printf '%s\n' "$count"
+}
+
+_rootfs_validate_guest_image_set() {
+    local image=$1 base=$2 count index member listing name
+    local -A expected=()
+    count=$(_rootfs_guest_count) || return 1
+    for ((index = 0; index < count; index++)); do
+        member=$(_rootfs_guest_image_name "$base" "$index") || return 1
+        expected[$member]=1
+        _rootfs_debugfs_stat "$image" "/guest/$member" required >/dev/null || return 1
+    done
+    listing=$(_rootfs_run_tool 0 debugfs -R 'ls -p "/guest"' "$image") || return 1
+    while IFS= read -r name; do
+        case $name in
+            "$base"|"${base%.img}-"*.img)
+                [[ -n ${expected[$name]+set} ]] || {
+                    _rootfs_compose_error "unexpected guest image in output: ${name}"
+                    return 1
+                }
+                ;;
+        esac
+    done < <(awk -F/ 'NF >= 6 && $6 != "" {print $6}' <<<"$listing")
+}
+
+_rootfs_stage_guest_images() {
+    local image=$1 directory=$2 name=$3 count index member timestamp
+    count=$(_rootfs_plan_guest_staging "$image" "$directory") || return 1
+    timestamp=$(stat -c %Y -- "$image") || return 1
+    for ((index = 0; index < count; index++)); do
+        member=$(_rootfs_guest_image_name "$name" "$index") || return 1
+        cp --preserve=mode,ownership,timestamps --reflink=auto --sparse=always -- \
+            "$image" "$directory/$member" || return 1
+        # Reading the first copy can change the source atime to fractional
+        # seconds. Both payload files must satisfy the debugfs timestamp policy.
+        touch -d "@$timestamp" "$directory/$member" || return 1
+    done
 }
 
 _rootfs_paths_alias() {
@@ -608,6 +711,16 @@ rootfs_compose_test_images() (
     local base_lock output_lock lock_fd1 lock_fd2 capacity_stats guest_bytes guest_inodes
     local stage=validate-inputs exit_status
     guest_image= outer_image= nested_stage= guest_overlay_snapshot= base_snapshot=
+    if [[ ${ROOTFS_GRAPH_BASE_ONLY:-0} == 1 ]]; then
+        trap '[[ -z ${outer_image:-} ]] || rm -f -- "$outer_image"' EXIT
+        mkdir -p -- "$(dirname -- "$output")" || return 1
+        outer_image=$(mktemp "$(dirname -- "$output")/.${output##*/}.base-only.XXXXXX") || return 1
+        cp --preserve=all --reflink=auto --sparse=always -- "$base" "$outer_image" || return 1
+        mv -T -- "$outer_image" "$output" || return 1
+        outer_image=
+        trap - EXIT
+        return 0
+    fi
     trap '
         exit_status=$?
         if ((exit_status != 0)); then
@@ -623,7 +736,7 @@ rootfs_compose_test_images() (
         exit "$exit_status"
     ' EXIT
     trap 'exit 130' INT TERM
-    _rootfs_require_tools awk basename cp debugfs dirname dumpe2fs e2fsck find flock mkdir mktemp mv realpath resize2fs rm stat touch truncate || return 1
+    _rootfs_require_tools awk basename cp debugfs df dirname dumpe2fs e2fsck find flock mkdir mktemp mv realpath resize2fs rm stat touch truncate || return 1
     [[ "$base" != *.cpio.gz && "$output" != *.cpio.gz ]] || return 1
     [[ -f "$base" && -n "$arch" && "$arch" != */* && -n "$rootfs_type" && "$rootfs_type" != */* ]] || return 1
     output_dir=$(dirname -- "$output")
@@ -690,8 +803,7 @@ rootfs_compose_test_images() (
     mkdir -p "$nested_stage/guest"
     # The nested image becomes filesystem payload; retain ordinary metadata but
     # do not carry host-only xattrs/ACLs that the debugfs policy rejects.
-    cp --preserve=mode,ownership,timestamps --reflink=auto --sparse=always -- \
-        "$guest_image" "$nested_stage/guest/$nested_name" || {
+    _rootfs_stage_guest_images "$guest_image" "$nested_stage/guest" "$nested_name" || {
         rm -rf -- "$nested_stage"; rm -f -- "$guest_image" "$outer_image"
         return 1
     }
@@ -707,6 +819,7 @@ rootfs_compose_test_images() (
     _rootfs_repair_ext4 "$outer_image" || return 1
     stage=inject-outer-payload
     _rootfs_finish_outer_in_place "$outer_image" "$outer_guest" "$outer_overlay" "$outer_free" "$nested_name" || return 1
+    _rootfs_validate_guest_image_set "$outer_image" "$nested_name" || return 1
     stage=compact-outer-image
     _rootfs_compact_in_place "$outer_image" "$outer_free" || return 1
     stage=publish-outer-image
@@ -721,4 +834,29 @@ rootfs_compose_test_images() (
     base_snapshot=
     build_lock_release "$lock_fd2"
     build_lock_release "$lock_fd1"
+)
+
+rootfs_compose_guest_tests_atomic() (
+    local image=$1 overlay=$2 reserve_value=$3 directory base temporary= lock_fd capacity bytes inodes reserve
+    directory=$(dirname -- "$image")
+    base=$(basename -- "$image")
+    reserve=$(rootfs_parse_size_bytes "$reserve_value") || return 1
+    _rootfs_validate_payload_tree "$overlay" || return 1
+    capacity=$(rootfs_overlay_capacity_stats "$overlay") || return 1
+    read -r bytes inodes <<<"$capacity"
+    trap '[[ -z ${temporary:-} ]] || rm -f -- "$temporary"; build_lock_release_all' EXIT
+    trap 'exit 130' INT TERM
+    build_lock_acquire lock_fd "${image}.lock" || return 1
+    _rootfs_ext4_stats "$image" >/dev/null || return 1
+    _rootfs_check_clean "$image" || return 1
+    temporary=$(mktemp "${directory}/.${base}.guest-tests.XXXXXX") || return 1
+    cp --preserve=all --reflink=auto --sparse=always -- "$image" "$temporary" || return 1
+    _rootfs_resize_for_capacity_in_place "$temporary" "$bytes" "$reserve" "$inodes" || return 1
+    _rootfs_inject_tree_via_debugfs "$temporary" "$overlay" || return 1
+    _rootfs_compact_in_place "$temporary" "$reserve" || return 1
+    touch -r "$image" "$temporary" || return 1
+    mv -T -- "$temporary" "$image" || return 1
+    temporary=
+    build_lock_release "$lock_fd"
+    trap - EXIT INT TERM
 )

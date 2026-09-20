@@ -4,7 +4,11 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    source "${ROOT_DIR}/scripts/lib/platform-graph-entry.sh"
+fi
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 # Repository and directory configuration
 LINUX_REPO_URL=""
@@ -63,8 +67,14 @@ linux() {
 
     if [[ "$@" != *"clean"* ]]; then
         if $is_remote; then
-            info "Building remotely via SSH: ssh ${REMOTE_HOST} cd '${REMOTE_DIR}' && ./build.sh firefly_rk3568_roc-rk3568-pc_ubuntu_defconfig && ./build.sh $@"
-            ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && ./build.sh firefly_rk3568_roc-rk3568-pc_ubuntu_defconfig && ./build.sh $@"
+            local remote_command quoted option
+            printf -v remote_command 'bash -s -- %q' "$REMOTE_DIR"
+            for option in "$@"; do
+                printf -v quoted '%q' "$option"
+                remote_command+=" $quoted"
+            done
+            info "Building remotely via SSH: ${REMOTE_HOST} ${remote_command}"
+            ssh "$REMOTE_HOST" "$remote_command" < "$SCRIPT_DIR/../lib/firefly-sdk-build.sh"
 
             info "Copying build artifacts: -> $linux_images_dir"
             mkdir -p "${linux_images_dir}"
@@ -79,11 +89,11 @@ linux() {
             info "Detected REMOTE_HOST ($REMOTE_HOST) is the current machine; building locally in ${REMOTE_DIR}"
             # If the REMOTE_DIR doesn't exist locally, fall back to running commands in place (assume local repo available at REMOTE_DIR)
             if [[ -d "$REMOTE_DIR" ]]; then
-                (cd "$REMOTE_DIR" && ./build.sh firefly_rk3568_roc-rk3568-pc_ubuntu_defconfig && ./build.sh $@)
+                bash "$SCRIPT_DIR/../lib/firefly-sdk-build.sh" "$REMOTE_DIR" "$@"
             else
                 # If REMOTE_DIR is unavailable, attempt to run build in current directory as a best-effort
                 info "Local REMOTE_DIR ${REMOTE_DIR} not found; running ./build.sh here as fallback"
-                ./build.sh firefly_rk3568_roc-rk3568-pc_ubuntu_defconfig && ./build.sh $@
+                bash "$SCRIPT_DIR/../lib/firefly-sdk-build.sh" . "$@"
             fi
 
             info "Copying build artifacts: -> $linux_images_dir"
@@ -141,6 +151,8 @@ rtthread() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    source "${SCRIPT_DIR}/../lib/platform-log.sh"
+    platform_log_init "$@"
     cmd="${1:-}"
     if [[ "${cmd}" =~ ^(all|clean)$ ]]; then
         LOG_CREATE_DEFAULT_FILE="${LOG_CREATE_DEFAULT_FILE:-0}"

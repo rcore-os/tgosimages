@@ -4,7 +4,11 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    source "${ROOT_DIR}/scripts/lib/platform-graph-entry.sh"
+fi
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 # Repository and directory configuration
 LINUX_REPO_URL=""
@@ -34,6 +38,28 @@ usage() {
     printf '  scripts/evm3588.sh all            # Build everything\n'
     printf '  scripts/evm3588.sh linux          # Build only Linux\n'
 }
+
+run_evm3588_sdk() (
+    local sdk_dir="$1"
+    local python_shim_dir=""
+    local python3_path
+    shift
+
+    if ! command -v python >/dev/null 2>&1; then
+        python3_path=$(command -v python3) || {
+            error "EVM3588 SDK requires Python, but python3 is not available"
+            exit 127
+        }
+        python_shim_dir=$(mktemp -d "${TMPDIR:-/tmp}/tgosimages-python.XXXXXX")
+        trap 'rm -f -- "$python_shim_dir/python"; rmdir -- "$python_shim_dir"' EXIT
+        ln -s -- "$python3_path" "$python_shim_dir/python"
+        export PATH="$python_shim_dir:$PATH"
+        info "Using python3 compatibility shim for the EVM3588 SDK"
+    fi
+
+    cd "$sdk_dir"
+    ./build.sh "$@"
+)
 
 linux() {
     local linux_images_dir="${PLATFORM_IMAGES_DIR}/linux"
@@ -77,10 +103,10 @@ linux() {
         else
             info "Detected REMOTE_HOST ($REMOTE_HOST) is the current machine; building locally in ${REMOTE_DIR}"
             if [[ -d "$REMOTE_DIR" ]]; then
-                (cd "$REMOTE_DIR" && ./build.sh $@)
+                run_evm3588_sdk "$REMOTE_DIR" "$@"
             else
                 info "Local REMOTE_DIR ${REMOTE_DIR} not found; running ./build.sh here as fallback"
-                ./build.sh $@
+                run_evm3588_sdk . "$@"
             fi
 
             info "Copying build artifacts: -> $linux_images_dir"
@@ -123,6 +149,8 @@ arceos() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    source "${SCRIPT_DIR}/../lib/platform-log.sh"
+    platform_log_init "$@"
     cmd="${1:-}"
     if [[ "${cmd}" =~ ^(all|clean)$ ]]; then
         LOG_CREATE_DEFAULT_FILE="${LOG_CREATE_DEFAULT_FILE:-0}"
