@@ -583,29 +583,63 @@ qemu_rootfs_busybox_step() { qemu_rootfs_build_step busybox; }
 qemu_rootfs_alpine_step() { qemu_rootfs_build_step alpine; }
 qemu_rootfs_debian_step() { qemu_rootfs_build_step debian; }
 
-qemu_publish_staged_rootfs() {
-    local stage_dir=${QEMU_ROOTFS_STAGE_DIR:-} rootfs_builder source
-    [[ -n $stage_dir ]] || return 0
+qemu_copy_staged_rootfs() {
+    local stage_dir=$1 compose_dir=$2 rootfs_builder source
     [[ -d $stage_dir ]] || die "QEMU rootfs staging directory not found: $stage_dir"
-
-    # Validate the complete staged set before replacing any public output.
+    mkdir -p -- "$compose_dir"
     for rootfs_builder in "${ROOTFS_BUILDERS[@]}"; do
         source="$stage_dir/rootfs-${ARCH}-${rootfs_builder}.img"
         [[ -f $source ]] || die "Staged rootfs image not found: $source"
+        cp --preserve=all --reflink=auto --sparse=always -- "$source" \
+            "$compose_dir/rootfs-${ARCH}-${rootfs_builder}.img" || return 1
         if [[ $rootfs_builder == busybox ]]; then
             source="$stage_dir/initramfs-${ARCH}-busybox.cpio.gz"
             [[ -f $source ]] || die "Staged initramfs not found: $source"
-        fi
-    done
-    for rootfs_builder in "${ROOTFS_BUILDERS[@]}"; do
-        rootfs_publish_target "$stage_dir/rootfs-${ARCH}-${rootfs_builder}.img" \
-            "$ROOT_DIR/IMAGES/rootfs/rootfs-${ARCH}-${rootfs_builder}.img" || return 1
-        if [[ $rootfs_builder == busybox ]]; then
-            rootfs_publish_target "$stage_dir/initramfs-${ARCH}-busybox.cpio.gz" \
-                "$ROOT_DIR/IMAGES/rootfs/initramfs-${ARCH}-busybox.cpio.gz" || return 1
+            cp --preserve=all --reflink=auto --sparse=always -- "$source" \
+                "$compose_dir/initramfs-${ARCH}-busybox.cpio.gz" || return 1
         fi
     done
 }
+
+qemu_validate_required_guest_files() {
+    local relative
+    while IFS= read -r relative; do
+        [[ -z $relative ]] || [[ -f $PLATFORM_IMAGES_DIR/$relative ]] ||
+            die "Required QEMU guest image not found: $PLATFORM_IMAGES_DIR/$relative"
+    done <<<"${QEMU_REQUIRED_GUEST_FILES:-}"
+}
+
+qemu_publish_composed_rootfs() (
+    local compose_dir=$1 rootfs_builder source target temporary
+    local -a temporaries=() targets=()
+    cleanup_publish() {
+        local path
+        for path in "${temporaries[@]}"; do [[ -z $path ]] || rm -f -- "$path"; done
+    }
+    trap cleanup_publish EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    for rootfs_builder in "${ROOTFS_BUILDERS[@]}"; do
+        source="$compose_dir/rootfs-${ARCH}-${rootfs_builder}.img"
+        target="$ROOT_DIR/IMAGES/rootfs/rootfs-${ARCH}-${rootfs_builder}.img"
+        mkdir -p -- "${target%/*}"
+        temporary=$(mktemp "${target}.publish.XXXXXX") || return 1
+        cp --preserve=all --reflink=auto --sparse=always -- "$source" "$temporary" || return 1
+        temporaries+=("$temporary") targets+=("$target")
+        if [[ $rootfs_builder == busybox ]]; then
+            source="$compose_dir/initramfs-${ARCH}-busybox.cpio.gz"
+            target="$ROOT_DIR/IMAGES/rootfs/initramfs-${ARCH}-busybox.cpio.gz"
+            temporary=$(mktemp "${target}.publish.XXXXXX") || return 1
+            cp --preserve=all --reflink=auto --sparse=always -- "$source" "$temporary" || return 1
+            temporaries+=("$temporary") targets+=("$target")
+        fi
+    done
+    for rootfs_builder in "${!temporaries[@]}"; do
+        mv -T -- "${temporaries[$rootfs_builder]}" "${targets[$rootfs_builder]}" || return 1
+        temporaries[$rootfs_builder]=
+    done
+    trap - EXIT INT TERM
+)
 
 qemu_has_help_arg() {
     local arg
@@ -623,6 +657,8 @@ qemu_has_help_arg() {
 qemu_rootfs_inject_platform_dir() (
     local guest_dir="${PLATFORM_IMAGES_DIR}"
     local stage_dir
+    local rootfs_dir="${ROOT_DIR}/IMAGES/rootfs"
+    local composed_rootfs_dir=""
     local ivc_overlay_dir="${BUILD_DIR}/qemu-${ARCH}-ivc-rootfs-overlay"
     local rootfs_builder
     local has_aarch64_alpine=0
@@ -634,7 +670,16 @@ qemu_rootfs_inject_platform_dir() (
     local outer_reserve="${QEMU_OUTER_FREE_SIZE:-256M}"
 
     [[ ${#ROOTFS_BUILDERS[@]} -gt 0 ]] || return 0
-    qemu_publish_staged_rootfs || return 1
+    qemu_validate_required_guest_files || return 1
+    if [[ -n ${QEMU_ROOTFS_STAGE_DIR:-} ]]; then
+        composed_rootfs_dir=$(mktemp -d "${BUILD_DIR}/qemu-rootfs-final-${ARCH}.XXXXXX") || return 1
+        if ! qemu_copy_staged_rootfs "$QEMU_ROOTFS_STAGE_DIR" "$composed_rootfs_dir"; then
+            rm -rf -- "$composed_rootfs_dir"
+            return 1
+        fi
+        rootfs_dir=$composed_rootfs_dir
+    fi
+    trap '[[ -z "${stage_dir:-}" ]] || rm -rf "${stage_dir}"; [[ -z "${alpine_stage_dir:-}" ]] || rm -rf "${alpine_stage_dir}"; [[ -z "${composed_rootfs_dir:-}" ]] || rm -rf "${composed_rootfs_dir}"' EXIT
 
     for rootfs_builder in "${ROOTFS_BUILDERS[@]}"; do
         if [[ "${ARCH}" == "aarch64" && "${rootfs_builder}" == "alpine" ]]; then
@@ -649,7 +694,6 @@ qemu_rootfs_inject_platform_dir() (
     fi
 
     stage_dir="$(mktemp -d "${BUILD_DIR}/qemu-rootfs-${ARCH}.XXXXXX")"
-    trap 'rm -rf "${stage_dir}"; [[ -z "${alpine_stage_dir:-}" ]] || rm -rf "${alpine_stage_dir}"' EXIT
     empty_overlay_dir="${stage_dir}/empty-overlay"
     mkdir -p "${empty_overlay_dir}"
     if [[ -d "${guest_dir}" ]]; then
@@ -682,7 +726,7 @@ qemu_rootfs_inject_platform_dir() (
 
     for rootfs_builder in "${ROOTFS_BUILDERS[@]}"; do
         protected_basename="rootfs-${ARCH}-${rootfs_builder}.img"
-        outer_image="${ROOT_DIR}/IMAGES/rootfs/${protected_basename}"
+        outer_image="${rootfs_dir}/${protected_basename}"
         builder_guest_dir="${stage_dir}/guest"
         if [[ "${ARCH}" == "aarch64" && "${rootfs_builder}" == "alpine" ]]; then
             builder_guest_dir="${alpine_stage_dir}/guest"
@@ -690,7 +734,7 @@ qemu_rootfs_inject_platform_dir() (
         case "${rootfs_builder}" in
             busybox)
                 _rootfs_builder_normalize_overlay_seconds "${builder_guest_dir}" || return 1
-                rootfs_inject_guest_stage "${ROOT_DIR}/IMAGES/rootfs/initramfs-${ARCH}-busybox.cpio.gz" "${builder_guest_dir}" || return 1
+                rootfs_inject_guest_stage "${rootfs_dir}/initramfs-${ARCH}-busybox.cpio.gz" "${builder_guest_dir}" || return 1
                 # Reading the staging tree while repacking cpio can advance
                 # atime with nanosecond precision. Normalize this private copy
                 # again before the strict ext4 payload validation.
@@ -718,12 +762,16 @@ qemu_rootfs_inject_platform_dir() (
                 die "Unsupported rootfs builder: ${rootfs_builder} (supported: busybox, alpine, debian)"
                 ;;
         esac
+        _rootfs_validate_guest_image_set "$outer_image" "$protected_basename" || return 1
         success "Root filesystem injection completed: ${rootfs_builder}"
     done
+
+    [[ -z $composed_rootfs_dir ]] || qemu_publish_composed_rootfs "$composed_rootfs_dir" || return 1
 
     trap - EXIT
     rm -rf "${stage_dir}"
     [[ -z "${alpine_stage_dir}" ]] || rm -rf "${alpine_stage_dir}"
+    [[ -z "${composed_rootfs_dir}" ]] || rm -rf "${composed_rootfs_dir}"
 )
 
 qemu_build_os_and_rootfs() {

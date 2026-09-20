@@ -138,6 +138,7 @@ printf '{name}-%s\\n' "$scope" >"$output/{name}-$scope"
             self.assertEqual(publish['phase'], 'compose')
             self.assertEqual(publish['env']['QEMU_ROOTFS_STAGE_DIR'],
                              str(work / 'workspaces/qemu-aarch64/rootfs-staged'))
+            self.assertEqual(publish['env']['QEMU_REQUIRED_GUEST_FILES'], 'linux/linux-qemu')
 
     def test_orangepi_guest_rootfs_is_prepared_in_workspace_then_published(self):
         with tempfile.TemporaryDirectory() as temporary:

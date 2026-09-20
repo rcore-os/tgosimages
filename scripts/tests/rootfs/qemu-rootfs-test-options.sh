@@ -102,24 +102,32 @@ test_builder_argv_is_literal() (
 run_ok 'rootfs builder receives literal safely quoted argv' test_builder_argv_is_literal
 
 test_staged_rootfs_publication() (
-    local fake_root="$work/staged-root" stage="$work/staged-rootfs"
-    ROOT_DIR=$fake_root ARCH=x86_64 ROOTFS_BUILDERS=(busybox alpine)
+    local fake_root="$work/staged-root" stage="$work/staged-rootfs" public before
+    ROOT_DIR=$fake_root BUILD_DIR="$fake_root/build" ARCH=x86_64 ROOTFS_BUILDERS=(alpine)
     QEMU_ROOTFS_STAGE_DIR=$stage
-    mkdir -p "$fake_root/IMAGES/rootfs" "$stage"
-    printf busybox >"$stage/rootfs-x86_64-busybox.img"
-    printf initramfs >"$stage/initramfs-x86_64-busybox.cpio.gz"
-    printf alpine >"$stage/rootfs-x86_64-alpine.img"
-    qemu_publish_staged_rootfs
-    cmp "$stage/rootfs-x86_64-busybox.img" "$fake_root/IMAGES/rootfs/rootfs-x86_64-busybox.img"
-    cmp "$stage/initramfs-x86_64-busybox.cpio.gz" "$fake_root/IMAGES/rootfs/initramfs-x86_64-busybox.cpio.gz"
-    cmp "$stage/rootfs-x86_64-alpine.img" "$fake_root/IMAGES/rootfs/rootfs-x86_64-alpine.img"
+    QEMU_REQUIRED_GUEST_FILES=linux/linux-qemu
+    PLATFORM_IMAGES_DIR="$fake_root/IMAGES/qemu-x86_64"
+    public="$fake_root/IMAGES/rootfs/rootfs-x86_64-alpine.img"
+    mkdir -p "$BUILD_DIR" "$fake_root/IMAGES/rootfs" "$PLATFORM_IMAGES_DIR/linux" "$stage"
+    printf kernel >"$PLATFORM_IMAGES_DIR/linux/linux-qemu"
+    printf prepared >"$stage/rootfs-x86_64-alpine.img"
+    printf old >"$public"
+    rootfs_stage_guest_tree() { mkdir -p "$1/guest"; cp -a "$2/." "$1/guest/"; }
+    _rootfs_builder_normalize_overlay_seconds() { :; }
+    _rootfs_validate_protected_outer_path() { :; }
+    rootfs_inject_outer_payload_atomic() { printf injected >>"$1"; }
+    _rootfs_validate_guest_image_set() { :; }
+    qemu_rootfs_inject_platform_dir
+    [[ $(<"$stage/rootfs-x86_64-alpine.img") == prepared ]]
+    [[ $(<"$public") == preparedinjected ]]
 
-    printf old >"$fake_root/IMAGES/rootfs/rootfs-x86_64-alpine.img"
-    rm "$stage/rootfs-x86_64-alpine.img"
-    if (qemu_publish_staged_rootfs); then return 1; fi
-    [[ $(<"$fake_root/IMAGES/rootfs/rootfs-x86_64-alpine.img") == old ]]
+    printf old >"$public"
+    before=$(sha256sum "$public" | awk '{print $1}')
+    rootfs_inject_outer_payload_atomic() { return 77; }
+    if (qemu_rootfs_inject_platform_dir); then return 1; fi
+    [[ $before == $(sha256sum "$public" | awk '{print $1}') ]]
 )
-run_ok 'QEMU compose publishes only a complete staged rootfs set' test_staged_rootfs_publication
+run_ok 'QEMU compose injects and validates private copies before publishing' test_staged_rootfs_publication
 
 test_parallel_routing_and_order() (
     local call_log="$work/order.calls"
@@ -179,6 +187,7 @@ test_injection_routing_and_order() (
         [[ ! -e $2/arceos/ivc-only ]] || ivc_guest=yes
         printf 'atomic:%s:%s:%s:%s:%s:ivc-guest=%s\n' "$1" "$2" "$3" "$4" "$5" "$ivc_guest" >>"$call_log"
     }
+    _rootfs_validate_guest_image_set() { :; }
     qemu_rootfs_inject_platform_dir || return 1
     [[ $(grep -c '^initramfs:' "$call_log") -eq 1 ]]
     [[ $(grep -c '^atomic:' "$call_log") -eq 3 ]]
@@ -228,11 +237,13 @@ test_real_ext4_platform_injection() (
     touch -d @1700000000.5 "$PLATFORM_IMAGES_DIR/linux/linux-qemu" "$PLATFORM_IMAGES_DIR/linux" "$PLATFORM_IMAGES_DIR"
     make_ext4 "$nested"
     make_ext4 "$outer"
-    cp "$nested" "$seed/guest/rootfs-x86_64-debian.img"
+    cp "$nested" "$seed/guest/rootfs-x86_64-debian-0.img"
+    cp "$nested" "$seed/guest/rootfs-x86_64-debian-1.img"
+    _rootfs_builder_normalize_overlay_seconds "$seed"
     _rootfs_inject_tree_via_debugfs "$outer" "$seed"
-    dump_ext4_path "$outer" /guest/rootfs-x86_64-debian.img "$before_dump"
+    dump_ext4_path "$outer" /guest/rootfs-x86_64-debian-0.img "$before_dump"
     qemu_rootfs_inject_platform_dir || return 1
-    dump_ext4_path "$outer" /guest/rootfs-x86_64-debian.img "$after_dump" || return 1
+    dump_ext4_path "$outer" /guest/rootfs-x86_64-debian-0.img "$after_dump" || return 1
     [[ $(sha256sum "$before_dump" | awk '{print $1}') == $(sha256sum "$after_dump" | awk '{print $1}') ]] || return 1
     debugfs -R 'stat /guest/linux/linux-qemu' "$outer" 2>/dev/null | grep -q '^Inode:' || return 1
     [[ $(rootfs_ext4_free_bytes "$outer") -ge $((2 * 1024 * 1024)) ]] || return 1

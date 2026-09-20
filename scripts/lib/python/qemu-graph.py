@@ -88,6 +88,16 @@ def make_graph(arch, args, log_dir):
         steps = json.loads(description.read_text())
         nodes = []
         rootfs_stage_dir = workspace / 'rootfs-staged'
+        required_guest_files = []
+        guest_outputs = {
+            'linux': 'linux/linux-qemu',
+            'arceos': 'arceos/arceos-qemu',
+            'zephyr': 'zephyr/zephyr-qemu',
+            'freertos': 'freertos/freertos-qemu.bin',
+        }
+        for step in steps:
+            if step in guest_outputs:
+                required_guest_files.append(guest_outputs[step])
         for step in steps:
             match = re.fullmatch(r'qemu_rootfs_(busybox|alpine|debian)_step', step)
             node = phase_task(f'{name}.{step}', 'build', command,
@@ -130,7 +140,9 @@ def make_graph(arch, args, log_dir):
             else:
                 nodes.append(node)
         compose_env = dict(env, QEMU_GRAPH_STEP='qemu_rootfs_inject_platform_dir',
-                           QEMU_ROOTFS_STAGE_DIR=str(rootfs_stage_dir))
+                           QEMU_REQUIRED_GUEST_FILES='\n'.join(required_guest_files))
+        if os.environ.get('ROOTFS_GRAPH_DISABLE') != '1':
+            compose_env['QEMU_ROOTFS_STAGE_DIR'] = str(rootfs_stage_dir)
         nodes.append(phase_task(f'{name}.compose', 'compose', command,
             deps=[n['id'] for n in nodes], env=compose_env))
         groups.append(nodes)
