@@ -5,6 +5,7 @@ from collections import deque
 import datetime
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -24,6 +25,31 @@ def positive(value):
     if number < 1:
         raise ValueError('resource limits must be positive integers')
     return number
+
+
+def positive_seconds(value):
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError('heartbeat interval must be a positive number')
+    return number
+
+
+def last_progress_line(path, read_bytes=8192, display_chars=300):
+    """Read one bounded, printable progress line without loading a growing log."""
+    try:
+        with path.open('rb') as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size - read_bytes))
+            data = stream.read()
+    except OSError:
+        return '(log unavailable)'
+    for raw_line in reversed(data.splitlines()):
+        line = raw_line.decode(errors='replace').strip()
+        if line:
+            line = ''.join(character if character.isprintable() or character == '\t' else '?' for character in line)
+            return line if len(line) <= display_chars else f'{line[:display_chars - 3]}...'
+    return '(no output yet)'
 
 
 def validate(graph, jobs, memory):
@@ -72,10 +98,11 @@ def validate(graph, jobs, memory):
 
 
 def execute(graph, log_dir):
-    jobs = positive(os.environ.get('BUILD_JOBS') or subprocess.check_output(['nproc'], text=True).strip())
+    jobs = positive(os.environ.get('BUILD_JOBS') or '32')
     jobs = min(jobs, positive(os.environ.get('TGOS_BUILD_JOB_BUDGET', jobs)))
     slots = min(jobs, positive(os.environ.get('BUILD_PARALLEL_TASKS', jobs)))
     memory = int(os.environ.get('BUILD_MEMORY_MB', '0'))
+    heartbeat_seconds = positive_seconds(os.environ.get('BUILD_HEARTBEAT_SECONDS', '60'))
     if memory < 0:
         raise ValueError('BUILD_MEMORY_MB must be nonnegative')
     validate(graph, jobs, memory)
@@ -150,12 +177,14 @@ def execute(graph, log_dir):
                 state.update(state='success' if code == 0 else 'failed', status=code,
                              elapsed=round(time.monotonic() - state.pop('started'), 3))
                 marker = log_dir / 'steps' / f'{name}.cache-hit'
+                step_log = log_dir / 'steps' / f'{name}.log'
                 if code == 0 and 'cache_args' in task and marker.exists():
                     state['state'] = 'hit'
                 log('SUCCESS' if code == 0 else 'ERROR',
-                    f'{"HIT" if state["state"] == "hit" else "FINISHED" if code == 0 else "FAILED"} {name}: status={code} elapsed={state["elapsed"]}s')
+                    f'{"HIT" if state["state"] == "hit" else "FINISHED" if code == 0 else "FAILED"} '
+                    f'{name}: status={code} log={step_log} elapsed={state["elapsed"]}s')
                 if code:
-                    with (log_dir / 'steps' / f'{name}.log').open(errors='replace') as output:
+                    with step_log.open(errors='replace') as output:
                         for line in deque(output, maxlen=20):
                             log('ERROR', f'{name}: {line.rstrip()}')
                 del running[name]
@@ -215,7 +244,8 @@ def execute(graph, log_dir):
                     env['TGOS_TASK_CACHE_RESULT'] = str(marker)
                     command = [sys.executable, str(PYTHON_LIB / 'build-task.py'),
                                name, *task['cache_args'], '--', *command]
-                stream = (log_dir / 'steps' / f'{name}.log').open('w')
+                step_log = log_dir / 'steps' / f'{name}.log'
+                stream = step_log.open('w')
                 try:
                     process = subprocess.Popen(command, cwd=task.get('cwd', graph.get('cwd')),
                                                env=env, stdout=stream, stderr=subprocess.STDOUT,
@@ -227,12 +257,28 @@ def execute(graph, log_dir):
                     continue
                 states[name].update(state='running', jobs=budget, started=time.monotonic())
                 running[name] = (process, stream, task)
-                log('INFO', f'STARTED {name}: jobs={budget}')
+                log('INFO', f'STARTED {name}: jobs={budget} log={step_log}')
             save()
             if not running and all(s['state'] != 'waiting' for s in states.values()):
                 break
-            if time.monotonic() - heartbeat >= 30:
+            if time.monotonic() - heartbeat >= heartbeat_seconds:
                 log('INFO', f'RUNNING graph: active={len(running)} waiting={sum(s["state"] == "waiting" for s in states.values())}')
+                now = time.monotonic()
+                for name in running:
+                    state = states[name]
+                    step_log = log_dir / 'steps' / f'{name}.log'
+                    log('INFO', f'RUNNING {name}: elapsed={now - state["started"]:.1f}s jobs={state["jobs"]} '
+                        f'log={step_log} last={last_progress_line(step_log)}')
+                dependency_wait = 0
+                resource_wait = 0
+                for task in graph['tasks']:
+                    if states[task['id']]['state'] != 'waiting':
+                        continue
+                    if all(states[dependency]['state'] in ('success', 'hit') for dependency in task['deps']):
+                        resource_wait += 1
+                    else:
+                        dependency_wait += 1
+                log('INFO', f'WAITING graph: dependencies={dependency_wait} resources={resource_wait}')
                 heartbeat = time.monotonic()
             time.sleep(0.05)
         failed = any(s['state'] not in ('success', 'hit') for s in states.values())

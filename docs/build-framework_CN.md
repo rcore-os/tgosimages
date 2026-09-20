@@ -182,8 +182,9 @@ build_task "kernel-$arch" \
 
 | 环境变量 | 含义 |
 | --- | --- |
-| `BUILD_JOBS` | 总编译线程预算，默认 `nproc` |
+| `BUILD_JOBS` | 总编译线程预算，默认 `32` |
 | `BUILD_PARALLEL_TASKS` | 图调度器全局并发任务上限；旧入口为每个并行边界上限 |
+| `BUILD_HEARTBEAT_SECONDS` | 任务图心跳间隔，默认 `60` 秒；显示活动节点耗时、线程数、日志路径和最新进度 |
 | `BUILD_MEMORY_MB` | 图调度器声明内存的总预算，默认 0 不限制 |
 | `BUILD_CACHE=0` | 关闭框架编译缓存及整项任务缓存 |
 | `BUILD_CACHE_DIR` | 缓存根目录，默认 `build/.cache` |

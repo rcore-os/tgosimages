@@ -120,6 +120,30 @@ os.unlink('exclusive')
         time.sleep(.7)
         self.assertFalse((self.root / 'late-output').exists())
 
+    def test_heartbeat_reports_active_progress_and_wait_reasons(self):
+        self.env.update(BUILD_JOBS='2', BUILD_PARALLEL_TASKS='1', BUILD_HEARTBEAT_SECONDS='0.1')
+        active = '''import time
+print("compiling drivers/virtio/virtio_ring.o", flush=True)
+time.sleep(.35)
+'''
+        tasks = [self.node('active', active), self.node('resource-wait'),
+                 self.node('dependency-wait', deps=['active'])]
+        process = self.launch(tasks)
+        output, _ = process.communicate(timeout=10)
+        self.assertEqual(process.returncode, 0, output)
+        step_log = self.root / 'logs/steps/active.log'
+        self.assertIn(f'STARTED active: jobs=2 log={step_log}', output)
+        self.assertRegex(output, r'RUNNING active: elapsed=0\.[0-9]+s jobs=2 ')
+        self.assertIn(f'log={step_log}', output)
+        self.assertIn('last=compiling drivers/virtio/virtio_ring.o', output)
+        self.assertIn('WAITING graph: dependencies=1 resources=1', output)
+
+    def test_failure_reports_step_log_path(self):
+        process = self.launch([self.node('bad', 'raise SystemExit(7)')])
+        output, _ = process.communicate(timeout=10)
+        self.assertEqual(process.returncode, 1, output)
+        self.assertIn(f'FAILED bad: status=7 log={self.root / "logs/steps/bad.log"}', output)
+
 
 if __name__ == '__main__':
     unittest.main()

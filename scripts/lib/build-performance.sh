@@ -9,7 +9,7 @@ build_graph() {
 
 # The budget belongs to the invocation, not to each concurrently running tool.
 build_jobs() {
-    local jobs=${BUILD_JOBS:-$(nproc)} budget=${TGOS_BUILD_JOB_BUDGET:-}
+    local jobs=${BUILD_JOBS:-32} budget=${TGOS_BUILD_JOB_BUDGET:-}
     [[ $jobs =~ ^[1-9][0-9]*$ ]] || { error 'BUILD_JOBS must be a positive integer'; return 2; }
     if [[ -n $budget ]]; then
         [[ $budget =~ ^[1-9][0-9]*$ ]] || { error 'Invalid inherited build budget'; return 2; }

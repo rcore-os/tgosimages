@@ -565,7 +565,11 @@ logs/platform/<平台>-<操作>-<时间>-<唯一标识>/
 公共构建入口统一管理线程预算、编译缓存及耗时日志；声明完整输入后，可使用补丁感知的源码准备和整项任务缓存。新增目标的接入方式、环境变量和缓存失效规则见 [全局构建规范与目标接入要求](docs/build-framework_CN.md)。
 
 ```bash
-BUILD_JOBS=16 BUILD_PARALLEL_TASKS=4 ./build.sh platform qemu all
+./build.sh platform qemu all
 ```
+
+默认情况下，总编译线程预算和任务图并发上限都是 `32`；调度器根据依赖动态启动
+已就绪节点，并在这些节点之间分配线程。`BUILD_JOBS` 用于限制总 CPU 用量，只有需要
+进一步限制同时运行的节点数时才设置 `BUILD_PARALLEL_TASKS`。
 
 各架构使用 `build/workspaces/qemu-<架构>/`，单架构命令也使用相同工作区和锁。Git 下载缓存共用 `build/.cache/git/`，checkout、补丁状态和中间产物独立。旧构建目录保留，新工作区首次使用时会重新准备源码。

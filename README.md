@@ -597,8 +597,13 @@ Host build entry points (platform, os, rootfs, apps, release) and helper scripts
 Common build adapters manage compiler budgets, caches and timing. Explicit input declarations enable patch-aware source preparation and whole-task caching. See the [build framework guide](docs/build-framework.md) for target integration, configuration and invalidation rules.
 
 ```bash
-BUILD_JOBS=16 BUILD_PARALLEL_TASKS=4 ./build.sh platform qemu all
+./build.sh platform qemu all
 ```
+
+By default, both the total compiler budget and the graph concurrency ceiling
+are `32`; the scheduler dynamically starts ready nodes and divides the
+available jobs between them. Set `BUILD_JOBS` to cap total CPU use, and set
+`BUILD_PARALLEL_TASKS` only when a stricter task-count limit is needed.
 
 Architecture workspaces live under `build/workspaces/qemu-<arch>/`. Direct
 single-architecture commands use the same workspace and lock as batch builds.

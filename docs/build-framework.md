@@ -16,8 +16,9 @@ elapsed time and propagate tool failures. They do not evaluate command strings.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BUILD_JOBS` | `nproc` | Total compiler budget for this invocation |
+| `BUILD_JOBS` | `32` | Total compiler budget for this invocation |
 | `BUILD_PARALLEL_TASKS` | Current job budget | Global graph task cap; per-boundary cap for legacy runners |
+| `BUILD_HEARTBEAT_SECONDS` | `60` | Graph heartbeat interval; active nodes include elapsed time, jobs, log path, and latest progress |
 | `BUILD_MEMORY_MB` | `0` | Admission budget for declared graph memory; 0 disables it |
 | `BUILD_CACHE` | `1` | `0` disables compiler/task caching; `1`/`auto` use available backends |
 | `BUILD_CACHE_DIR` | `build/.cache` | Compiler caches and task manifests |
