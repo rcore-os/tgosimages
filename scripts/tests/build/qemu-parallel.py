@@ -76,8 +76,15 @@ rtthread() { :; }
 zephyr() { touch "$BUILD_WORK_DIR/zephyr.done"; fixture_component zephyr; }
 freertos() { touch "$BUILD_WORK_DIR/freertos.done"; fixture_component freertos; }
 uboot() { touch "$BUILD_WORK_DIR/uboot.done"; fixture_component u-boot; }
+orangepi_uboot_deb() {
+    test -f "$BUILD_WORK_DIR/linux.done"
+    touch "$BUILD_WORK_DIR/orangepi-uboot-deb.done"
+}
 rootfs() {
     test -f "$BUILD_WORK_DIR/linux.done"
+    if [[ $BUILD_WORKSPACE_NAME == orangepi-5-plus ]]; then
+        test -f "$BUILD_WORK_DIR/orangepi-uboot-deb.done"
+    fi
     touch "$BUILD_WORK_DIR/rootfs.done"
     if [[ $BUILD_WORKSPACE_NAME == orangepi-5-plus ]]; then
         mkdir -p "$ROOT_DIR/IMAGES/rootfs"
@@ -201,7 +208,8 @@ qemu_rootfs_debian_step() { :; }
 qemu_rootfs_inject_platform_dir() { touch "$PROBE_ROOT/$ARCH.composed"; }
 '''
         (self.repo / 'scripts/platform/qemu.sh').write_text(original.replace(marker, stub + marker))
-        self.env = dict(os.environ, LOG_CREATE_DEFAULT_FILE='0', LOG_COLOR='never', TGOS_BUILD_JOB_BUDGET='8', BUILD_PARALLEL_TASKS='4',
+        self.env = dict(os.environ, LOG_CREATE_DEFAULT_FILE='0', LOG_COLOR='never',
+                        TGOS_CPU_SCOPE_ACTIVE='0', TGOS_BUILD_JOB_BUDGET='8', BUILD_PARALLEL_TASKS='4',
                         PROBE_ROOT=str(self.work), PROBE_UPSTREAM=upstream.as_uri(), PROBE_REF=base,
                         ROOTFS_GRAPH_DISABLE='1')
         for key in ('BUILD_WORKSPACE_NAME', 'BUILD_WORK_DIR', 'BUILD_WORKSPACE_ROOT', 'BUILD_CACHE_DIR',

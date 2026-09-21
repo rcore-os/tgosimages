@@ -226,11 +226,17 @@ printf '{name}-%s\\n' "$scope" >"$output/{name}-$scope"
                     ['rootfs', '--outer-tests', 'none', '--guest-tests', 'none'])
 
             tasks = {task['id']: task for task in graph['tasks']}
+            linux = tasks['orangepi-5-plus.linux']
+            uboot_deb = tasks['orangepi-5-plus.orangepi_uboot_deb']
             base = tasks['orangepi-5-plus.rootfs.base']
             image = tasks['orangepi-5-plus.rootfs']
             prepared = work / 'workspaces/orangepi-5-plus/rootfs-bases/orangepi-jammy.img'
             self.assertEqual(base['phase'], 'prepare')
             self.assertEqual(base['env']['ORANGEPI_GUEST_ROOTFS'], str(prepared))
+            self.assertEqual(uboot_deb['deps'], [linux['id']])
+            self.assertEqual(base['deps'], [uboot_deb['id']])
+            self.assertIn(str(work / 'workspaces/orangepi-5-plus/orangepi/output/debs'),
+                          base['cache_args'])
             self.assertEqual(image['phase'], 'compose')
             self.assertEqual(image['command'][-1], str(work / 'images/rootfs-aarch64-orangepi-jammy.img'))
             self.assertIn('--output', image['cache_args'])

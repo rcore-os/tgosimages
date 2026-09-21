@@ -73,7 +73,18 @@ run_ok 'Orange Pi source safety ignores framework patch metadata but rejects use
 # Exercise the real archive-to-ext4 path with small local benchmark fixtures.
 fixture_tree="$work/rootfs-fixture"
 fixture_archive="$work/jammy-minimal-arm64.fixture.tar.lz4"
-fixture_output="$work/rootfs-fixture.img"
+fixture_image_dir="$work/formal-rootfs-images"
+fixture_output="$fixture_image_dir/rootfs-fixture.img"
+fixture_wrapper="$work/fixture-wrapper"
+fixture_mktemp_log="$work/fixture-mktemp.log"
+mkdir "$fixture_image_dir" "$fixture_wrapper"
+real_mktemp=$(command -v mktemp)
+cat >"$fixture_wrapper/mktemp" <<'MKTEMP'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$MKTEMP_LOG"
+exec "$REAL_MKTEMP" "$@"
+MKTEMP
+chmod +x "$fixture_wrapper/mktemp"
 mkdir -p "$fixture_tree/etc"
 printf orangepi-jammy >"$fixture_tree/etc/rootfs-marker"
 FAKEROOTDONTTRYCHOWN=1 fakeroot -- bash -euo pipefail -c \
@@ -94,7 +105,27 @@ rootfs_builder_prepare_test_overlays() {
     printf -v "$guest_var" '%s' "$parent/guest"
 }
 run_ok 'Orange Pi archive becomes a benchmark guest ext4' \
-    orangepi_build_guest_rootfs "$fixture_archive" "$fixture_output"
+    env PATH="$fixture_wrapper:$PATH" MKTEMP_LOG="$fixture_mktemp_log" \
+        REAL_MKTEMP="$real_mktemp" bash -c '
+            source "$1/scripts/platform/orangepi-5-plus.sh"
+            source "$1/scripts/lib/rootfs-compose.sh"
+            info() { :; }; success() { :; }; warn() { printf "warning: %s\n" "$*" >&2; }
+            rootfs_builder_prepare_test_overlays() {
+                local parent=$5 outer_var=$6 guest_var=$7
+                mkdir -p "$parent/outer" "$parent/guest/guest-tests/cyclictest" \
+                    "$parent/guest/guest-tests/lmbench/bin/Linux" "$parent/guest/guest-tests/iozone"
+                printf cyclic >"$parent/guest/guest-tests/cyclictest/cyclictest"
+                printf lmbench >"$parent/guest/guest-tests/lmbench/bin/Linux/lat_syscall"
+                printf iozone >"$parent/guest/guest-tests/iozone/iozone"
+                find "$parent" -exec touch -h -d @0 {} +
+                printf -v "$outer_var" %s "$parent/outer"
+                printf -v "$guest_var" %s "$parent/guest"
+            }
+            BUILD_DIR=$2 ORANGEPI_GUEST_FREE_SIZE=8M
+            orangepi_build_guest_rootfs "$3" "$4"
+        ' _ "$repo_root" "$BUILD_DIR" "$fixture_archive" "$fixture_output"
+run_ok 'Orange Pi guest rootfs keeps publication temporaries out of the image directory' \
+    bash -c '! grep -F -- "$1/" "$2"' _ "$fixture_image_dir" "$fixture_mktemp_log"
 run_ok 'generated guest ext4 is clean' e2fsck -fn "$fixture_output"
 assert_eq orangepi-jammy "$(debugfs -R 'cat /etc/rootfs-marker' "$fixture_output" 2>/dev/null)" \
     'guest rootfs retains upstream content'

@@ -156,10 +156,13 @@ orangepi_prepare_source() {
 
 orangepi_run_upstream() (
     local build_opt=$1
+    local clean_level=${2:-}
+    local args=(BOARD=orangepi5plus BRANCH=current BUILD_OPT="$build_opt" RELEASE=jammy
+                BUILD_MINIMAL=yes BUILD_DESKTOP=no KERNEL_CONFIGURE=no)
     cd "$LINUX_SRC_DIR"
     info "Starting Orange Pi ${build_opt} build"
-    ./build.sh BOARD=orangepi5plus BRANCH=current BUILD_OPT="$build_opt" RELEASE=jammy \
-        BUILD_MINIMAL=yes BUILD_DESKTOP=no KERNEL_CONFIGURE=no
+    [[ -z $clean_level ]] || args+=(CLEAN_LEVEL="$clean_level")
+    ./build.sh "${args[@]}"
 )
 
 orangepi_configure_gpt() {
@@ -287,16 +290,17 @@ with tarfile.open(fileobj=sys.stdin.buffer, mode="r|") as archive:
 }
 
 orangepi_build_guest_rootfs() (
-    local archive=$1 output=$2 work tree image overlay_parent outer_overlay guest_overlay
-    local reserve pending_bytes pending_inodes lock_fd output_dir output_base publish=
+    local archive=$1 output=$2 work publish_stage tree image overlay_parent outer_overlay guest_overlay
+    local reserve pending_bytes pending_inodes lock_fd output_base publish=
     for tool in debugfs du lz4 mke2fs python3 tar truncate; do
         command -v "$tool" >/dev/null 2>&1 || { warn "required tool not found: $tool"; return 1; }
     done
     [[ -f $archive && ! -L $archive ]] || { warn "rootfs archive not found: $archive"; return 1; }
     reserve=$(rootfs_parse_size_bytes "$ORANGEPI_GUEST_FREE_SIZE") || return 1
     mkdir -p "$(dirname -- "$output")" "${BUILD_DIR}/orangepi-rootfs"
+    rootfs_create_staging_dir "$output" orangepi-guest publish_stage || return 1
     work=$(mktemp -d "${BUILD_DIR}/orangepi-rootfs/guest.XXXXXX") || return 1
-    trap 'rm -rf -- "$work"; [[ -z ${publish:-} ]] || rm -f -- "$publish"; build_lock_release_all' EXIT
+    trap 'rm -rf -- "$work" "$publish_stage"; build_lock_release_all' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
     tree="$work/tree"
@@ -339,10 +343,9 @@ EOF
     _rootfs_compact_in_place "$image" "$reserve" || return 1
     _rootfs_check_clean "$image" || return 1
     touch -r "$archive" "$image"
-    output_dir=$(dirname -- "$output")
     output_base=$(basename -- "$output")
     build_lock_acquire lock_fd "${output}.lock" || return 1
-    publish=$(mktemp "${output_dir}/.${output_base}.publish.XXXXXX") || return 1
+    publish=$(mktemp "${publish_stage}/${output_base}.publish.XXXXXX") || return 1
     cp --preserve=all --reflink=auto --sparse=always -- "$image" "$publish" || return 1
     mv -T -- "$publish" "$output" || return 1
     publish=
@@ -458,6 +461,13 @@ build_uboot() {
     success "U-Boot built successfully. Output: ${uboot_images_dir}/u-boot-orangepi5-spi.bin"
 }
 
+orangepi_uboot_deb() {
+    orangepi_prepare_source
+    # Rebuild only the upstream U-Boot package. Preserve the kernel package
+    # produced by the linux node for the following rootfs node.
+    orangepi_run_upstream u-boot ubootdebs,oldcache
+}
+
 linux() {
     local linux_images_dir="${PLATFORM_IMAGES_DIR}/linux"
     local chosen_overlay_dts="${LINUX_PATCH_DIR}/orangepi-5-plus-chosen-overlay.dts"
@@ -494,7 +504,9 @@ rootfs() (
         return
     fi
     orangepi_prepare_source
-    orangepi_run_upstream rootfs
+    # linux and orangepi_uboot_deb already produced the packages consumed by
+    # debootstrap. Do not let the upstream default clean them here.
+    orangepi_run_upstream rootfs oldcache
     archive=$(orangepi_select_rootfs_archive) || return 1
     orangepi_build_guest_rootfs "$archive" "$ORANGEPI_GUEST_ROOTFS"
 )
@@ -506,7 +518,7 @@ orangepi_build_base_image() (
     before_images=$(mktemp "${BUILD_DIR}/orangepi-images-before.XXXXXX") || return 1
     trap 'rm -f -- "$before_images"' EXIT
     orangepi_snapshot_images "$LINUX_SRC_DIR/output/images" "$before_images"
-    orangepi_run_upstream image
+    orangepi_run_upstream image oldcache
     selected_image=$(orangepi_select_built_image "$LINUX_SRC_DIR/output/images" "$before_images") || return 1
     mkdir -p "$(dirname -- "$ORANGEPI_BASE_IMAGE")"
     rootfs_publish_target "$selected_image" "$ORANGEPI_BASE_IMAGE"

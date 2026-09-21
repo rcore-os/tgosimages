@@ -104,6 +104,25 @@ assert_eq() {
     [[ "$1" == "$2" ]] || fail "$3 (expected '$1', got '$2')"
 }
 
+test_stale_staging_reclamation() (
+    local staging_root="$work/stale-staging" output_dir="$work/stale-images"
+    local dead="$work/stale-staging/dead.fixture" alive="$work/stale-staging/alive.fixture"
+    local process_stat process_tail process_start created
+    mkdir -p "$dead" "$alive" "$output_dir"
+    printf '999999 1\n' >"$dead/.owner"
+    process_stat=$(<"/proc/$BASHPID/stat")
+    process_tail=${process_stat##*) }
+    set -- $process_tail
+    process_start=${20}
+    printf '%s %s\n' "$BASHPID" "$process_start" >"$alive/.owner"
+    touch -d '5 minutes ago' "$dead" "$alive"
+    ROOTFS_STAGING_DIR=$staging_root ROOTFS_STAGING_MAX_AGE_MINUTES=1 \
+        rootfs_create_staging_dir "$output_dir/final.img" test created
+    [[ ! -e $dead && -d $alive && -f $created/.owner ]]
+)
+run_ok 'rootfs staging reclaims only expired directories without a live owner' \
+    test_stale_staging_reclamation
+
 make_ext4() {
     local image=$1
     truncate -s 32M "$image"
@@ -329,27 +348,48 @@ run_ok 'an additional guest grows the outer filesystem image' \
 
 graph_node_base="$work/graph-node-base"
 graph_node_output="$work/graph-node-output"
-mkdir "$graph_node_base" "$graph_node_output"
+graph_node_work="$work/graph-node-work"
+graph_node_bin="$work/graph-node-bin"
+graph_node_mktemp_log="$work/graph-node-mktemp.log"
+mkdir "$graph_node_base" "$graph_node_output" "$graph_node_work" "$graph_node_bin"
+real_mktemp=$(command -v mktemp)
+cat >"$graph_node_bin/mktemp" <<'MKTEMP'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$MKTEMP_LOG"
+exec "$REAL_MKTEMP" "$@"
+MKTEMP
+chmod +x "$graph_node_bin/mktemp"
 cp --preserve=all --reflink=auto --sparse=always "$base" "$graph_node_base/rootfs-x86_64-busybox.img"
 printf initramfs >"$graph_node_base/initramfs-x86_64-busybox.cpio.gz"
 normalize_tree_seconds "$outer_overlay"
 normalize_tree_seconds "$guest_overlay"
 run_ok 'QEMU rootfs image node composes and publishes its output pair' \
-    env BUILD_WORK_DIR="$work" LOG_CREATE_DEFAULT_FILE=0 bash "$repo_root/scripts/lib/rootfs-compose-node.sh" \
+    env BUILD_WORK_DIR="$graph_node_work" LOG_CREATE_DEFAULT_FILE=0 PATH="$graph_node_bin:$PATH" \
+        MKTEMP_LOG="$graph_node_mktemp_log" REAL_MKTEMP="$real_mktemp" \
+        bash "$repo_root/scripts/lib/rootfs-compose-node.sh" \
         x86_64 busybox "$graph_node_base" "$graph_node_output" "$outer_overlay" "$guest_overlay" 2M 3M
+run_ok 'QEMU rootfs image node keeps composition temporaries out of the image directory' \
+    bash -c '! grep -F -- "$1/" "$2"' _ "$graph_node_output" "$graph_node_mktemp_log"
 run_ok 'QEMU image node publishes two guests' has_path "$graph_node_output/rootfs-x86_64-busybox.img" \
     /guest/rootfs-x86_64-busybox-1.img
 assert_eq initramfs "$(cat "$graph_node_output/initramfs-x86_64-busybox.cpio.gz")" \
     'QEMU image node changed the paired initramfs'
 
 guest_base="$work/guest-base.img"
-guest_published="$work/guest-published.img"
+guest_output_dir="$work/guest-images"
+guest_work_dir="$work/guest-work"
+guest_mktemp_log="$work/guest-mktemp.log"
+guest_published="$guest_output_dir/guest-published.img"
+mkdir "$guest_output_dir" "$guest_work_dir"
 cp --preserve=all --reflink=auto --sparse=always "$base" "$guest_base"
 guest_base_hash=$(sha256sum "$guest_base" | awk '{print $1}')
 normalize_tree_seconds "$guest_overlay"
 run_ok 'guest composition node injects the merged test overlay atomically' \
-    env BUILD_WORK_DIR="$work" LOG_CREATE_DEFAULT_FILE=0 bash \
+    env BUILD_WORK_DIR="$guest_work_dir" LOG_CREATE_DEFAULT_FILE=0 \
+        PATH="$graph_node_bin:$PATH" MKTEMP_LOG="$guest_mktemp_log" REAL_MKTEMP="$real_mktemp" bash \
         "$repo_root/scripts/lib/rootfs-guest-compose-node.sh" "$guest_base" "$guest_overlay" 2M "$guest_published"
+run_ok 'guest composition node keeps temporaries out of the image directory' \
+    bash -c '! grep -F -- "$1/" "$2"' _ "$guest_output_dir" "$guest_mktemp_log"
 assert_eq "$guest_base_hash" "$(sha256sum "$guest_base" | awk '{print $1}')" \
     'guest composition node changed its prepared input'
 run_ok 'guest composition node publishes test payload' has_path "$guest_published" /guest-tests/fake/payload

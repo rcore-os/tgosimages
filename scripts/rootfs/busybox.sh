@@ -161,8 +161,12 @@ mkfs_pair_checkpoint() { :; }
 
 mkfs_publish_pair() (
     local init_candidate=$1 init_final=$2 image_candidate=$3 image_final=$4
-    local lock_path="${init_final}.pair.lock" init_backup="${init_final}.old.$$" image_backup="${image_final}.old.$$"
+    local backup_dir=${5:-$(dirname -- "$init_final")}
+    local lock_path="${init_final}.pair.lock"
+    local init_backup="${backup_dir}/.${init_final##*/}.old.$$"
+    local image_backup="${backup_dir}/.${image_final##*/}.old.$$"
     local init_old=0 image_old=0 init_new=0 image_new=0 committed=0 lock_fd status=0 pending_signal=0
+    mkdir -p -- "$backup_dir" || return 1
     trap 'build_lock_release_all' EXIT
     build_lock_acquire lock_fd "$lock_path" || return 1
     # Signal handlers only record intent throughout the critical section. This
@@ -327,11 +331,12 @@ mkfs_pack_fs() {
     OUTPUT_DIR="${MKFS_OUT_DIR:-${ROOT_DIR}/IMAGES/rootfs}"
     mkdir -p "$OUTPUT_DIR"
     local abs_out="$OUTPUT_DIR/initramfs-${MKFS_ARCH}-busybox.cpio.gz"
-    local abs_tmp="${abs_out}.publish.$$"
     local img_out="$OUTPUT_DIR/rootfs-${MKFS_ARCH}-busybox.img"
-    local img_tmp="${img_out}.base.tmp.$$"
-    local img_publish="${img_out}.publish.$$"
-    local old_pwd
+    local staging_dir abs_tmp img_tmp img_publish old_pwd
+    rootfs_create_staging_dir "$img_out" "busybox-${MKFS_ARCH}" staging_dir
+    abs_tmp="${staging_dir}/initramfs-${MKFS_ARCH}-busybox.cpio.gz"
+    img_tmp="${staging_dir}/rootfs-${MKFS_ARCH}-busybox.base.img"
+    img_publish="${staging_dir}/rootfs-${MKFS_ARCH}-busybox.composed.img"
     
     # Convert guest directory to absolute path before changing directory
     if [[ -n "$MKFS_GUEST_DIR" ]]; then
@@ -351,7 +356,8 @@ mkfs_pack_fs() {
                "${MKFS_CLEANUP_INITRAMFS_TMP:-}" \
                "${MKFS_CLEANUP_ROOTFS_TMP:-}" \
                "${img_publish:-}" \
-               "${composition_dir:-}"
+               "${composition_dir:-}" \
+               "${staging_dir:-}"
         [[ -z ${MKFS_CLEANUP_ROOTFS_TMP:-} ]] || rm -f -- "${MKFS_CLEANUP_ROOTFS_TMP}.lock"
         [[ -z ${img_publish:-} ]] || rm -f -- "${img_publish}.lock"
     }
@@ -452,7 +458,7 @@ mkfs_pack_fs() {
         "$MKFS_GUEST_FREE_SIZE" "$MKFS_OUTER_FREE_SIZE" "$img_publish" || return 1
     # Pair publication is failure-safe for cooperating readers holding this
     # persistent lock; two path renames cannot be atomic to lock-free readers.
-    mkfs_publish_pair "$abs_tmp" "$abs_out" "$img_publish" "$img_out" || return 1
+    mkfs_publish_pair "$abs_tmp" "$abs_out" "$img_publish" "$img_out" "$staging_dir" || return 1
     rm -f -- "$img_tmp" "${img_tmp}.lock"
     echo "Minimal ramfs created: $abs_out"
     du -h "$abs_out" | awk '{print "Size: "$1}'

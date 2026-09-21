@@ -10,10 +10,11 @@ if [[ $image == "$output" ]]; then
     exit
 fi
 mkdir -p -- "$(dirname -- "$output")"
-temporary=$(mktemp "$(dirname -- "$output")/.${output##*/}.compose.XXXXXX")
+rootfs_create_staging_dir "$output" guest-compose staging_dir
+temporary=$(mktemp "${staging_dir}/${output##*/}.compose.XXXXXX")
 lock_fd=
 cleanup() {
-    rm -f -- "$temporary"
+    rm -rf -- "$staging_dir"
     [[ -z $lock_fd ]] || build_lock_release "$lock_fd" 2>/dev/null || true
 }
 trap cleanup EXIT

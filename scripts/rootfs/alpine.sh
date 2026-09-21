@@ -614,10 +614,12 @@ alpine_validate_legacy_ltp_environment() {
 }
 
 alpine_create_rootfs() {
-    local rootfs_dir
-    local rootfs_img_tmp="${ALPINE_ROOTFS_IMG}.base.tmp.$$"
+    local rootfs_dir staging_dir rootfs_img_tmp composed_img publish_fd=
+    rootfs_create_staging_dir "$ALPINE_ROOTFS_IMG" "alpine-${ALPINE_ARCH}" staging_dir
+    rootfs_img_tmp="${staging_dir}/rootfs-${ALPINE_ARCH}-alpine.base.img"
+    composed_img="${staging_dir}/rootfs-${ALPINE_ARCH}-alpine.composed.img"
     rootfs_dir="$(mktemp -d "${ALPINE_WORK_DIR}/rootfs.XXXXXX")"
-    trap 'alpine_cleanup_rootfs_dir "'"${rootfs_dir}"'"; rm -f "'"${rootfs_img_tmp}"'" "'"${rootfs_img_tmp}.lock"'"; rm -rf -- "${composition_dir:-}"' EXIT
+    trap 'alpine_cleanup_rootfs_dir "'"${rootfs_dir}"'"; rm -rf -- "'"${staging_dir}"'" "${composition_dir:-}"; [[ -z ${publish_fd:-} ]] || build_lock_release "$publish_fd" 2>/dev/null || true' EXIT
 
     info "Creating Alpine rootfs image ${ALPINE_ROOTFS_IMG} (${ALPINE_IMG_SIZE})"
     rm -f "${rootfs_img_tmp}"
@@ -657,8 +659,12 @@ alpine_create_rootfs() {
 
     rootfs_compose_test_images "${rootfs_img_tmp}" "${ALPINE_OUTER_TEST_OVERLAY}" \
         "${ALPINE_GUEST_TEST_OVERLAY}" "${ALPINE_OUTER_GUEST_DIR}" "${ALPINE_ARCH}" alpine \
-        "${ALPINE_GUEST_FREE_SIZE}" "${ALPINE_OUTER_FREE_SIZE}" "${ALPINE_ROOTFS_IMG}"
-    rm -f -- "${rootfs_img_tmp}" "${rootfs_img_tmp}.lock"
+        "${ALPINE_GUEST_FREE_SIZE}" "${ALPINE_OUTER_FREE_SIZE}" "$composed_img"
+    build_lock_acquire publish_fd "${ALPINE_ROOTFS_IMG}.lock"
+    mv -T -- "$composed_img" "$ALPINE_ROOTFS_IMG"
+    build_lock_release "$publish_fd"
+    publish_fd=
+    rm -rf -- "$staging_dir"
     trap - EXIT
     alpine_cleanup_rootfs_dir "${rootfs_dir}"
 

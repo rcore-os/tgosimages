@@ -610,34 +610,76 @@ qemu_validate_required_guest_files() {
 }
 
 qemu_publish_composed_rootfs() (
-    local compose_dir=$1 rootfs_builder source target temporary
-    local -a temporaries=() targets=()
+    local compose_dir=$1 rootfs_builder source target temporary publish_stage= lock_fd lock_path index
+    local committed=0
+    local -a temporaries=() targets=() backups=() lock_fds=()
     cleanup_publish() {
-        local path
+        local path fd rollback_index
+        if ((committed == 0)); then
+            for rollback_index in "${!targets[@]}"; do
+                [[ -n ${backups[$rollback_index]+set} ]] || continue
+                [[ ! -e ${temporaries[$rollback_index]} ]] || continue
+                if [[ -n ${backups[$rollback_index]} ]]; then
+                    cp --preserve=all --reflink=auto --sparse=always -- \
+                        "${backups[$rollback_index]}" "${targets[$rollback_index]}" || true
+                else
+                    rm -f -- "${targets[$rollback_index]}"
+                fi
+            done
+        fi
         for path in "${temporaries[@]}"; do [[ -z $path ]] || rm -f -- "$path"; done
+        [[ -z $publish_stage ]] || rm -rf -- "$publish_stage"
+        for fd in "${lock_fds[@]}"; do build_lock_release "$fd" 2>/dev/null || true; done
     }
     trap cleanup_publish EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
+    rootfs_create_staging_dir "$ROOT_DIR/IMAGES/rootfs/.publication" \
+        "qemu-${ARCH}-publish" publish_stage || return 1
     for rootfs_builder in "${ROOTFS_BUILDERS[@]}"; do
         source="$compose_dir/rootfs-${ARCH}-${rootfs_builder}.img"
         target="$ROOT_DIR/IMAGES/rootfs/rootfs-${ARCH}-${rootfs_builder}.img"
         mkdir -p -- "${target%/*}"
-        temporary=$(mktemp "${target}.publish.XXXXXX") || return 1
+        temporary=$(mktemp "${publish_stage}/rootfs-${ARCH}-${rootfs_builder}.publish.XXXXXX") || return 1
         cp --preserve=all --reflink=auto --sparse=always -- "$source" "$temporary" || return 1
         temporaries+=("$temporary") targets+=("$target")
         if [[ $rootfs_builder == busybox ]]; then
             source="$compose_dir/initramfs-${ARCH}-busybox.cpio.gz"
             target="$ROOT_DIR/IMAGES/rootfs/initramfs-${ARCH}-busybox.cpio.gz"
-            temporary=$(mktemp "${target}.publish.XXXXXX") || return 1
+            temporary=$(mktemp "${publish_stage}/initramfs-${ARCH}-busybox.publish.XXXXXX") || return 1
             cp --preserve=all --reflink=auto --sparse=always -- "$source" "$temporary" || return 1
             temporaries+=("$temporary") targets+=("$target")
         fi
     done
-    for rootfs_builder in "${!temporaries[@]}"; do
-        mv -T -- "${temporaries[$rootfs_builder]}" "${targets[$rootfs_builder]}" || return 1
-        temporaries[$rootfs_builder]=
+    while IFS= read -r lock_path; do
+        build_lock_acquire lock_fd "$lock_path" || return 1
+        lock_fds+=("$lock_fd")
+    done < <(printf '%s.lock\n' "${targets[@]}" | LC_ALL=C sort -u)
+    for index in "${!targets[@]}"; do
+        if [[ -e ${targets[$index]} ]]; then
+            backups[$index]="${publish_stage}/backup-${index}"
+            cp --preserve=all --reflink=auto --sparse=always -- \
+                "${targets[$index]}" "${backups[$index]}" || return 1
+        else
+            backups[$index]=
+        fi
     done
+    for index in "${!temporaries[@]}"; do
+        if mv -T -- "${temporaries[$index]}" "${targets[$index]}"; then
+            temporaries[$index]=
+            continue
+        fi
+        # A wrapper or signal can report failure after rename completed.
+        if [[ ! -e ${temporaries[$index]} && -e ${targets[$index]} ]]; then
+            temporaries[$index]=
+        fi
+        return 1
+    done
+    committed=1
+    for lock_fd in "${lock_fds[@]}"; do build_lock_release "$lock_fd"; done
+    lock_fds=()
+    rm -rf -- "$publish_stage"
+    publish_stage=
     trap - EXIT INT TERM
 )
 
@@ -658,6 +700,7 @@ qemu_rootfs_inject_platform_dir() (
     local guest_dir="${PLATFORM_IMAGES_DIR}"
     local stage_dir
     local rootfs_dir="${ROOT_DIR}/IMAGES/rootfs"
+    local source_rootfs_dir
     local composed_rootfs_dir=""
     local ivc_overlay_dir="${BUILD_DIR}/qemu-${ARCH}-ivc-rootfs-overlay"
     local rootfs_builder
@@ -671,14 +714,13 @@ qemu_rootfs_inject_platform_dir() (
 
     [[ ${#ROOTFS_BUILDERS[@]} -gt 0 ]] || return 0
     qemu_validate_required_guest_files || return 1
-    if [[ -n ${QEMU_ROOTFS_STAGE_DIR:-} ]]; then
-        composed_rootfs_dir=$(mktemp -d "${BUILD_DIR}/qemu-rootfs-final-${ARCH}.XXXXXX") || return 1
-        if ! qemu_copy_staged_rootfs "$QEMU_ROOTFS_STAGE_DIR" "$composed_rootfs_dir"; then
-            rm -rf -- "$composed_rootfs_dir"
-            return 1
-        fi
-        rootfs_dir=$composed_rootfs_dir
+    source_rootfs_dir=${QEMU_ROOTFS_STAGE_DIR:-$rootfs_dir}
+    composed_rootfs_dir=$(mktemp -d "${BUILD_DIR}/qemu-rootfs-final-${ARCH}.XXXXXX") || return 1
+    if ! qemu_copy_staged_rootfs "$source_rootfs_dir" "$composed_rootfs_dir"; then
+        rm -rf -- "$composed_rootfs_dir"
+        return 1
     fi
+    rootfs_dir=$composed_rootfs_dir
     trap '[[ -z "${stage_dir:-}" ]] || rm -rf "${stage_dir}"; [[ -z "${alpine_stage_dir:-}" ]] || rm -rf "${alpine_stage_dir}"; [[ -z "${composed_rootfs_dir:-}" ]] || rm -rf "${composed_rootfs_dir}"' EXIT
 
     for rootfs_builder in "${ROOTFS_BUILDERS[@]}"; do
@@ -766,7 +808,7 @@ qemu_rootfs_inject_platform_dir() (
         success "Root filesystem injection completed: ${rootfs_builder}"
     done
 
-    [[ -z $composed_rootfs_dir ]] || qemu_publish_composed_rootfs "$composed_rootfs_dir" || return 1
+    qemu_publish_composed_rootfs "$composed_rootfs_dir" || return 1
 
     trap - EXIT
     rm -rf "${stage_dir}"

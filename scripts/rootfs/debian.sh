@@ -379,9 +379,13 @@ EOF_RESOLV
         "
 
     info "Packing ext4 image ${DEBIAN_ROOTFS_IMG} (${DEBIAN_IMG_SIZE})..."
-    local debian_rootfs_tmp="${DEBIAN_ROOTFS_IMG}.base.tmp.$$"
+    local staging_dir debian_rootfs_tmp composed_img publish_fd=
+    rootfs_create_staging_dir "$DEBIAN_ROOTFS_IMG" "debian-${DEBIAN_ARCH}" staging_dir
+    debian_rootfs_tmp="${staging_dir}/rootfs-${DEBIAN_ARCH}-debian.base.img"
+    composed_img="${staging_dir}/rootfs-${DEBIAN_ARCH}-debian.composed.img"
     cleanup_rootfs_tmp() {
-        rm -f "${debian_rootfs_tmp}" "${debian_rootfs_tmp}.lock"
+        rm -rf -- "$staging_dir"
+        [[ -z ${publish_fd:-} ]] || build_lock_release "$publish_fd" 2>/dev/null || true
         cleanup_volume
     }
     trap cleanup_rootfs_tmp EXIT
@@ -389,8 +393,12 @@ EOF_RESOLV
     debian_pack_rootfs_volume "$volume_name" "$debian_rootfs_tmp"
     rootfs_compose_test_images "${debian_rootfs_tmp}" "${DEBIAN_OUTER_TEST_OVERLAY}" \
         "${DEBIAN_GUEST_TEST_OVERLAY}" "${DEBIAN_OUTER_GUEST_DIR}" "${DEBIAN_ARCH}" debian \
-        "${DEBIAN_GUEST_FREE_SIZE}" "${DEBIAN_OUTER_FREE_SIZE}" "${DEBIAN_ROOTFS_IMG}"
-    rm -f -- "${debian_rootfs_tmp}" "${debian_rootfs_tmp}.lock"
+        "${DEBIAN_GUEST_FREE_SIZE}" "${DEBIAN_OUTER_FREE_SIZE}" "$composed_img"
+    build_lock_acquire publish_fd "${DEBIAN_ROOTFS_IMG}.lock"
+    mv -T -- "$composed_img" "$DEBIAN_ROOTFS_IMG"
+    build_lock_release "$publish_fd"
+    publish_fd=
+    rm -rf -- "$staging_dir"
 
     trap - EXIT
     cleanup_volume

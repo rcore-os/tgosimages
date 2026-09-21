@@ -101,7 +101,8 @@ def board_graph(name, declaration, args):
                 deps=rootfs_task['deps'], env=base_env, resources=rootfs_task['resources'], cache={
                     'inputs': [str(ROOT / 'scripts/platform/orangepi-5-plus.sh'),
                                str(SHELL_LIB / 'rootfs-compose.sh'), str(SHELL_LIB / 'rootfs.sh'),
-                               str(SHELL_LIB / 'utils.sh')],
+                               str(SHELL_LIB / 'utils.sh'), str(workspace / 'orangepi/output/debs'),
+                               str(workspace / 'orangepi/external/cache/rootfs')],
                     'outputs': [str(prepared_image)],
                     'environment': ['ORANGEPI_GUEST_FREE_SIZE', 'ORANGEPI_ROOTFS_TYPE',
                                     'ROOTFS_GUEST_COUNT'],

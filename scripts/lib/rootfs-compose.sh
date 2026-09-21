@@ -19,6 +19,61 @@ _rootfs_compose_error() {
     return 1
 }
 
+_rootfs_process_start_time() {
+    local pid=$1 process_stat process_tail
+    [[ $pid =~ ^[1-9][0-9]*$ && -r /proc/$pid/stat ]] || return 1
+    process_stat=$(<"/proc/$pid/stat") || return 1
+    process_tail=${process_stat##*) }
+    set -- $process_tail
+    (($# >= 20)) || return 1
+    printf '%s\n' "${20}"
+}
+
+rootfs_cleanup_stale_staging() (
+    local staging_root=$1 max_age=${ROOTFS_STAGING_MAX_AGE_MINUTES:-1440}
+    local cleanup_fd directory owner pid recorded_start current_start
+    [[ $max_age =~ ^[1-9][0-9]*$ ]] || {
+        _rootfs_compose_error "invalid ROOTFS_STAGING_MAX_AGE_MINUTES: $max_age"
+        return 1
+    }
+    build_lock_acquire cleanup_fd "${staging_root}.cleanup.lock" || return 1
+    trap 'build_lock_release "$cleanup_fd" 2>/dev/null || true' EXIT
+    while IFS= read -r -d '' directory; do
+        owner="$directory/.owner"
+        [[ -f $owner && ! -L $owner ]] || continue
+        read -r pid recorded_start <"$owner" || continue
+        [[ $pid =~ ^[1-9][0-9]*$ && $recorded_start =~ ^[0-9]+$ ]] || continue
+        current_start=$(_rootfs_process_start_time "$pid" 2>/dev/null) || current_start=
+        [[ -n $current_start && $current_start == "$recorded_start" ]] && continue
+        rm -rf -- "$directory"
+    done < <(find "$staging_root" -mindepth 1 -maxdepth 1 -type d \
+        -mmin "+$max_age" -print0)
+)
+
+# Allocate one operation-private staging directory outside the formal image
+# tree. Publication still uses rename(2), so both directories must reside on
+# the same filesystem.
+rootfs_create_staging_dir() {
+    (($# == 3)) || return 1
+    local output=$1 prefix=$2 result_var=$3 output_dir staging_root staging
+    [[ $prefix =~ ^[a-zA-Z0-9._-]+$ ]] || return 1
+    output_dir=$(dirname -- "$output") || return 1
+    staging_root="${ROOTFS_STAGING_DIR:-${BUILD_WORK_DIR:-${BUILD_DIR:-${TMPDIR:-/tmp}/tgosimages-build}}/rootfs-staging}"
+    mkdir -p -- "$output_dir" "$staging_root" || return 1
+    [[ $(stat -c %d -- "$staging_root") == "$(stat -c %d -- "$output_dir")" ]] || {
+        _rootfs_compose_error \
+            "rootfs staging and image directories must share a filesystem: $staging_root -> $output_dir"
+        return 1
+    }
+    rootfs_cleanup_stale_staging "$staging_root" || return 1
+    staging=$(mktemp -d "${staging_root}/${prefix}.XXXXXX") || return 1
+    printf '%s %s\n' "$BASHPID" "$(_rootfs_process_start_time "$BASHPID")" >"$staging/.owner" || {
+        rm -rf -- "$staging"
+        return 1
+    }
+    printf -v "$result_var" '%s' "$staging"
+}
+
 rootfs_builder_load_test_options() {
     (($# == 5)) || {
         _rootfs_compose_error 'rootfs_builder_load_test_options requires rootfs and four variable names'

@@ -1,0 +1,69 @@
+diff --git a/board/phytium/common/debian-package-installer b/board/phytium/common/debian-package-installer
+index 495ff84..46bca22 100755
+--- a/board/phytium/common/debian-package-installer
++++ b/board/phytium/common/debian-package-installer
+@@ -28,18 +28,17 @@ do_distrorfs_second_stage() {
+     asl=/etc/apt/sources.list
+     rm -f $asl
+     cat <<-EOF > $asl
+-	deb http://mirrors.tuna.tsinghua.edu.cn/debian/ bullseye main contrib non-free
+-	deb http://mirrors.tuna.tsinghua.edu.cn/debian/ bullseye-updates main contrib non-free
+-	#deb http://mirrors.tuna.tsinghua.edu.cn/debian/ bullseye-backports main contrib non-free
+-	deb http://mirrors.tuna.tsinghua.edu.cn/debian-security bullseye-security main contrib non-free
++	deb https://deb.debian.org/debian bullseye main contrib non-free
++	deb https://deb.debian.org/debian bullseye-updates main contrib non-free
++	deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260903T220410Z/ bullseye-security main contrib non-free
+ 	EOF
+     chmod +777 /tmp
+-    apt update
++    rm -rf /var/lib/apt/lists/*
+     DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true LC_ALL=C LANGUAGE=C LANG=C \
+-    apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" update || exit 1
++    apt-get -o Acquire::Retries=5 update || exit 1
+ 
+     DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true LC_ALL=C LANGUAGE=C LANG=C \
+-    apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade || exit 1
++    apt-get -y -o Acquire::Retries=5 -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade || exit 1
+     echo upgraded
+ 
+     export LC_ALL=C LANGUAGE=C LANG=C
+@@ -47,7 +46,7 @@ do_distrorfs_second_stage() {
+     echo installing base packages
+     for pkg in $additional_base_packages_list; do
+ 	echo Installing $pkg ...
+-	DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install $pkg || exit 1
++	DEBIAN_FRONTEND=noninteractive apt-get -y -o Acquire::Retries=5 -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install $pkg || exit 1
+     done
+ 
+     dpkg -l | grep linux-headers | cut -d ' ' -f3 | xargs dpkg --purge
+@@ -64,7 +63,7 @@ do_distrorfs_second_stage() {
+ 	echo installing desktop packages list packages
+ 	for pkg in $additional_desktop_packages_list; do
+         	echo Installing $pkg ...
+-        	DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install $pkg || exit 1
++        	DEBIAN_FRONTEND=noninteractive apt-get -y -o Acquire::Retries=5 -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install $pkg || exit 1
+     	done
+ 	# remove plymouth
+         DEBIAN_FRONTEND=noninteractive apt -y remove plymouth || true
+@@ -95,7 +94,7 @@ do_distrorfs_second_stage() {
+ 	echo installing weston packages list packages
+         for pkg in $additonal_weston_qlauncher_packages_list; do
+                 echo Installing $pkg ...
+-                DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install $pkg || exit 1
++                DEBIAN_FRONTEND=noninteractive apt-get -y -o Acquire::Retries=5 -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install $pkg || exit 1
+         done
+     fi
+     
+diff --git a/board/phytium/common/post-custom-skeleton-debian-11.sh b/board/phytium/common/post-custom-skeleton-debian-11.sh
+index a7ff703..6780ce3 100755
+--- a/board/phytium/common/post-custom-skeleton-debian-11.sh
++++ b/board/phytium/common/post-custom-skeleton-debian-11.sh
+@@ -73,7 +73,7 @@ do_distrorfs_first_stage() {
+     if [ ! -d $RFSDIR/debootstrap ]; then
+         echo "testdeboot"
+ 	export LANG=en_US.UTF-8
+-	sudo debootstrap --keyring=board/phytium/common/debian-archive-bullseye-stable.gpg --arch=$1 --foreign bullseye $RFSDIR  https://mirrors.tuna.tsinghua.edu.cn/debian/
++	sudo debootstrap --keyring=board/phytium/common/debian-archive-bullseye-stable.gpg --arch=$1 --foreign bullseye $RFSDIR https://deb.debian.org/debian
+ 
+ 	[ $1 != amd64 -a ! -f $RFSDIR/usr/bin/qemu-${tgtarch}-static ] && sudo cp $(which qemu-${tgtarch}-static) $RFSDIR/usr/bin
+ 	echo "installing for second-stage ..."

@@ -103,12 +103,24 @@ run_ok 'rootfs builder receives literal safely quoted argv' test_builder_argv_is
 
 test_staged_rootfs_publication() (
     local fake_root="$work/staged-root" stage="$work/staged-rootfs" public before
+    local wrapper_dir="$work/staged-wrapper" mktemp_log="$work/staged-mktemp.log" real_mktemp
     ROOT_DIR=$fake_root BUILD_DIR="$fake_root/build" ARCH=x86_64 ROOTFS_BUILDERS=(alpine)
     QEMU_ROOTFS_STAGE_DIR=$stage
     QEMU_REQUIRED_GUEST_FILES=linux/linux-qemu
     PLATFORM_IMAGES_DIR="$fake_root/IMAGES/qemu-x86_64"
     public="$fake_root/IMAGES/rootfs/rootfs-x86_64-alpine.img"
-    mkdir -p "$BUILD_DIR" "$fake_root/IMAGES/rootfs" "$PLATFORM_IMAGES_DIR/linux" "$stage"
+    mkdir -p "$BUILD_DIR" "$fake_root/IMAGES/rootfs" "$PLATFORM_IMAGES_DIR/linux" "$stage" "$wrapper_dir"
+    real_mktemp=$(command -v mktemp)
+    cat >"$wrapper_dir/mktemp" <<'MKTEMP'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$MKTEMP_LOG"
+exec "$REAL_MKTEMP" "$@"
+MKTEMP
+    chmod +x "$wrapper_dir/mktemp"
+    PATH="$wrapper_dir:$PATH"
+    MKTEMP_LOG=$mktemp_log
+    REAL_MKTEMP=$real_mktemp
+    export PATH MKTEMP_LOG REAL_MKTEMP
     printf kernel >"$PLATFORM_IMAGES_DIR/linux/linux-qemu"
     printf prepared >"$stage/rootfs-x86_64-alpine.img"
     printf old >"$public"
@@ -120,6 +132,7 @@ test_staged_rootfs_publication() (
     qemu_rootfs_inject_platform_dir
     [[ $(<"$stage/rootfs-x86_64-alpine.img") == prepared ]]
     [[ $(<"$public") == preparedinjected ]]
+    ! grep -F -- "$fake_root/IMAGES/" "$mktemp_log" || return 1
 
     printf old >"$public"
     before=$(sha256sum "$public" | awk '{print $1}')
@@ -128,6 +141,39 @@ test_staged_rootfs_publication() (
     [[ $before == $(sha256sum "$public" | awk '{print $1}') ]]
 )
 run_ok 'QEMU compose injects and validates private copies before publishing' test_staged_rootfs_publication
+
+test_qemu_publication_rolls_back_as_one_set() (
+    local fake_root="$work/transaction-root" compose_dir="$work/transaction-compose"
+    local fault_bin="$work/transaction-bin" marker="$work/transaction-failed" real_mv
+    ROOT_DIR=$fake_root BUILD_DIR="$fake_root/build" ARCH=x86_64 ROOTFS_BUILDERS=(alpine debian)
+    mkdir -p "$BUILD_DIR" "$fake_root/IMAGES/rootfs" "$compose_dir" "$fault_bin"
+    printf new-alpine >"$compose_dir/rootfs-x86_64-alpine.img"
+    printf new-debian >"$compose_dir/rootfs-x86_64-debian.img"
+    printf old-alpine >"$fake_root/IMAGES/rootfs/rootfs-x86_64-alpine.img"
+    printf old-debian >"$fake_root/IMAGES/rootfs/rootfs-x86_64-debian.img"
+    real_mv=$(command -v mv)
+    cat >"$fault_bin/mv" <<'MV'
+#!/usr/bin/env bash
+destination=${@: -1}
+if [[ $destination == "$FAIL_TARGET" && ! -e $FAIL_MARKER ]]; then
+    : >"$FAIL_MARKER"
+    exit 70
+fi
+exec "$REAL_MV" "$@"
+MV
+    chmod +x "$fault_bin/mv"
+    PATH="$fault_bin:$PATH"
+    REAL_MV=$real_mv
+    FAIL_TARGET="$fake_root/IMAGES/rootfs/rootfs-x86_64-debian.img"
+    FAIL_MARKER=$marker
+    export PATH REAL_MV FAIL_TARGET FAIL_MARKER
+    qemu_publish_composed_rootfs "$compose_dir" && return 1
+    [[ -e $marker ]] || return 1
+    [[ $(<"$fake_root/IMAGES/rootfs/rootfs-x86_64-alpine.img") == old-alpine ]] || return 1
+    [[ $(<"$fake_root/IMAGES/rootfs/rootfs-x86_64-debian.img") == old-debian ]] || return 1
+)
+run_ok 'QEMU publishes the selected rootfs files as one rollback-safe set' \
+    test_qemu_publication_rolls_back_as_one_set
 
 test_parallel_routing_and_order() (
     local call_log="$work/order.calls"
@@ -192,9 +238,9 @@ test_injection_routing_and_order() (
     [[ $(grep -c '^initramfs:' "$call_log") -eq 1 ]]
     [[ $(grep -c '^atomic:' "$call_log") -eq 3 ]]
     [[ $(sed -n '1p' "$call_log") == initramfs:* ]]
-    grep -q "atomic:$fake_root/IMAGES/rootfs/rootfs-aarch64-busybox.img:.*:.*:rootfs-aarch64-busybox.img:19M" "$call_log"
-    grep -q "atomic:$fake_root/IMAGES/rootfs/rootfs-aarch64-alpine.img:.*:$BUILD_DIR/qemu-aarch64-ivc-rootfs-overlay:rootfs-aarch64-alpine.img:19M" "$call_log"
-    grep -q "atomic:$fake_root/IMAGES/rootfs/rootfs-aarch64-debian.img:.*:.*:rootfs-aarch64-debian.img:19M" "$call_log"
+    grep -q "atomic:$BUILD_DIR/qemu-rootfs-final-aarch64\..*/rootfs-aarch64-busybox.img:.*:.*:rootfs-aarch64-busybox.img:19M" "$call_log" || return 1
+    grep -q "atomic:$BUILD_DIR/qemu-rootfs-final-aarch64\..*/rootfs-aarch64-alpine.img:.*:$BUILD_DIR/qemu-aarch64-ivc-rootfs-overlay:rootfs-aarch64-alpine.img:19M" "$call_log" || return 1
+    grep -q "atomic:$BUILD_DIR/qemu-rootfs-final-aarch64\..*/rootfs-aarch64-debian.img:.*:.*:rootfs-aarch64-debian.img:19M" "$call_log" || return 1
     grep -q 'rootfs-aarch64-busybox.img:19M:ivc-guest=no$' "$call_log"
     grep -q 'rootfs-aarch64-alpine.img:19M:ivc-guest=yes$' "$call_log"
     grep -q 'rootfs-aarch64-debian.img:19M:ivc-guest=no$' "$call_log"

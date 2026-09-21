@@ -93,6 +93,20 @@ test_help_options() {
 }
 run_ok 'all builder help documents composition options' test_help_options
 
+test_builder_staging_contract() (
+    source_builder busybox
+    source_builder alpine
+    source_builder debian
+    local function_name definition
+    for function_name in mkfs_pack_fs alpine_create_rootfs debian_build_rootfs; do
+        definition=$(declare -f "$function_name")
+        [[ $definition == *rootfs_create_staging_dir* ]] || return 1
+        [[ $definition != *'.base.tmp.$$'* && $definition != *'.publish.$$'* ]] || return 1
+    done
+)
+run_ok 'rootfs builders allocate image candidates through the shared staging contract' \
+    test_builder_staging_contract
+
 test_parse_options() (
     source_builder busybox
     mkfs_parse_args --outer-tests none --guest-tests cyclictest --guest-free-size 12M --outer-free-size 34M --guest /payload

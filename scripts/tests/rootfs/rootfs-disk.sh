@@ -372,10 +372,29 @@ run_ok 'the Orange Pi content validator accepts the composed fixture' \
     env ROOTFS_GUEST_COUNT=3 bash "$repo_root/scripts/tests/platform/orangepi-nested-content.sh" \
         --image "$composed" --guest-free-size 8M --outer-free-size 8M --skip-elf-check
 
-prebuilt_composed="$work/prebuilt-composed.img"
+formal_image_dir="$work/formal-images"
+disk_work_dir="$work/disk-work"
+disk_wrapper_dir="$work/disk-wrapper"
+disk_mktemp_log="$work/disk-mktemp.log"
+prebuilt_composed="$formal_image_dir/prebuilt-composed.img"
+mkdir "$formal_image_dir" "$disk_work_dir" "$disk_wrapper_dir"
+real_mktemp=$(command -v mktemp)
+cat >"$disk_wrapper_dir/mktemp" <<'MKTEMP'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$MKTEMP_LOG"
+exec "$REAL_MKTEMP" "$@"
+MKTEMP
+chmod +x "$disk_wrapper_dir/mktemp"
 run_ok 'a disk image embeds an independently published guest rootfs' \
-    rootfs_compose_disk_guest "$compose_base" "$platform_stage" "$work/nested.img" \
-        aarch64 orangepi-jammy 8M 8M "$prebuilt_composed" prebuilt
+    env BUILD_WORK_DIR="$disk_work_dir" PATH="$disk_wrapper_dir:$PATH" \
+        MKTEMP_LOG="$disk_mktemp_log" REAL_MKTEMP="$real_mktemp" bash -c '
+            source "$1/scripts/lib/rootfs.sh"
+            source "$1/scripts/lib/rootfs-compose.sh"
+            source "$1/scripts/lib/rootfs-disk.sh"
+            rootfs_compose_disk_guest "$2" "$3" "$4" aarch64 orangepi-jammy 8M 8M "$5" prebuilt
+        ' _ "$repo_root" "$compose_base" "$platform_stage" "$work/nested.img" "$prebuilt_composed"
+run_ok 'partitioned image composition keeps temporaries out of the image directory' \
+    bash -c '! grep -F -- "$1/" "$2"' _ "$formal_image_dir" "$disk_mktemp_log"
 run_ok 'an additional configured guest grows the partitioned disk image' \
     test "$(stat -c %s "$composed")" -gt "$(stat -c %s "$prebuilt_composed")"
 read -r _ prebuilt_start prebuilt_size _ < <(rootfs_disk_find_root_partition "$prebuilt_composed")
