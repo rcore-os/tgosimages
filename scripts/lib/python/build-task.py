@@ -63,6 +63,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('name')
     parser.add_argument('--input', action='append', default=[])
+    parser.add_argument('--mutable-input', action='append', default=[])
     parser.add_argument('--output', action='append', required=True)
     parser.add_argument('--value', action='append', default=[])
     parser.add_argument('--env', action='append', default=[])
@@ -74,11 +75,12 @@ def main():
     split = sys.argv.index('--')
     args = parser.parse_args(sys.argv[1:split])
     command = sys.argv[split + 1:]
-    if not command or not (args.input or args.value or args.source_ref):
+    if not command or not (args.input or args.mutable_input or args.value or args.source_ref):
         parser.error('declare inputs/values and a command')
     inputs = [Path(p).absolute() for p in args.input]
+    mutable_inputs = [Path(p).absolute() for p in args.mutable_input]
     outputs = [Path(p).absolute() for p in args.output]
-    for source in inputs:
+    for source in [*inputs, *mutable_inputs]:
         for output in outputs:
             if source.resolve() == output.resolve() or source.resolve() in output.resolve().parents or output.resolve() in source.resolve().parents:
                 parser.error('inputs and outputs must not overlap')
@@ -98,7 +100,10 @@ def main():
                     values=args.value, command=command,
                     tools=tool_identities(), outputs=list(map(str, outputs)),
                     environment={key: os.environ.get(key) for key in args.env})
-        return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+        stable = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+        if mutable_inputs:
+            data['mutable_inputs'] = manifests(mutable_inputs)
+        return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest(), stable
 
     root = Path(os.environ['BUILD_CACHE_DIR']) / 'tasks'
     root.mkdir(parents=True, exist_ok=True)
@@ -108,7 +113,7 @@ def main():
     # Keep the lock inode: unlinking it can let concurrent waiters diverge.
     with (root / f'{key}.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        before = fingerprint()
+        before, stable_before = fingerprint()
         reason = 'no successful cache record'
         record = {}
         try:
@@ -139,14 +144,15 @@ def main():
             log('ERROR', f'BUILD {args.name}: status={result.returncode}; cache not published')
             return result.returncode if result.returncode > 0 else 128 - result.returncode
         output_record = manifests(outputs)
-        if fingerprint() != before:
-            log('WARN', f'BUILD {args.name}: inputs changed during build; cache not published')
-            return 0
+        after, stable_after = fingerprint()
+        if stable_after != stable_before:
+            log('ERROR', f'BUILD {args.name}: inputs changed during build; refusing success')
+            return 1
         if enabled:
             fd, temp = tempfile.mkstemp(dir=root, prefix=f'.{key}.', suffix='.tmp')
             try:
                 with os.fdopen(fd, 'w') as stream:
-                    json.dump(dict(name=args.name, fingerprint=before, outputs=output_record), stream)
+                    json.dump(dict(name=args.name, fingerprint=after, outputs=output_record), stream)
                 os.replace(temp, stamp)
             finally:
                 Path(temp).unlink(missing_ok=True)

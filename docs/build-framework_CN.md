@@ -217,6 +217,7 @@ build_task "kernel-$arch" \
 | --- | --- |
 | `BUILD_PARALLEL_TASKS` | 显式设置时固定图调度器并发任务上限、关闭自适应槽位；旧入口为每个并行边界上限 |
 | `BUILD_HEARTBEAT_SECONDS` | 任务图心跳间隔，默认 `60` 秒；显示活动节点耗时、线程数、日志路径和最新进度 |
+| `BUILD_TERMINATE_GRACE_SECONDS` | 任务失败后等待进程组处理 SIGTERM 的秒数，默认 `5`，超时后发送 SIGKILL |
 | `BUILD_MEMORY_MB` | 图调度器声明内存的总预算，默认 0 不限制 |
 | `BUILD_CACHE=0` | 关闭框架编译缓存及整项任务缓存 |
 | `BUILD_CACHE_DIR` | 缓存根目录，默认 `build/.cache` |
@@ -225,6 +226,11 @@ build_task "kernel-$arch" \
 | `BUILD_SOURCE_CACHE_DIR` | Git 下载缓存，默认 `${BUILD_CACHE_DIR}/git` |
 | `ROOTFS_GUEST_COUNT` | 零编号嵌套客户机 rootfs 数量，默认 `2`，最小 `1`，无固定上限 |
 | `LOG_COLOR` | `auto` 自动终端着色、`always` 强制着色、`never` 关闭 |
+
+板卡 SDK 地址无需修改脚本即可覆盖：EVM3588 使用
+`EVM3588_REMOTE_HOST`/`EVM3588_SDK_DIR`，RDK-S100P 使用
+`RDK_S100P_REMOTE_HOST`/`RDK_S100P_SDK_DIR`，ROC-RK3568 使用
+`ROC_RK3568_REMOTE_HOST`/`ROC_RK3568_SDK_DIR`。
 
 保留现有 `CCACHE_DIR`、CMake launcher 和 `RUSTC_WRAPPER` 等显式覆盖。图调度器按自动预算分配 CPU 配额并设置 `CARGO_BUILD_JOBS`，防止节点继承更大的外层预算。缺少 ccache/sccache 时回退到普通编译。
 

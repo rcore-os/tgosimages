@@ -142,6 +142,7 @@ def execute(graph, log_dir):
     observations = AdmissionWindow() if metrics else None
     memory = int(os.environ.get('BUILD_MEMORY_MB', '0'))
     heartbeat_seconds = positive_seconds(os.environ.get('BUILD_HEARTBEAT_SECONDS', '60'))
+    terminate_grace_seconds = positive_seconds(os.environ.get('BUILD_TERMINATE_GRACE_SECONDS', '5'))
     if memory < 0:
         raise ValueError('BUILD_MEMORY_MB must be nonnegative')
     validate(graph, jobs, memory)
@@ -179,6 +180,52 @@ def execute(graph, log_dir):
 
     def interrupted(signum, _frame):
         raise InterruptedError(f'scheduler interrupted by signal {signum}')
+
+    def process_group_exists(pgid):
+        try:
+            os.killpg(pgid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            # A privileged descendant can outlive its unprivileged leader.
+            return True
+
+    def terminate_process_groups(processes):
+        processes = list(processes)
+        for name, process in processes:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except PermissionError as exc:
+                log('WARN', f'{name}: cannot signal complete process group with SIGTERM: {exc}')
+        deadline = time.monotonic() + terminate_grace_seconds
+        while processes and time.monotonic() < deadline:
+            for _, process in processes:
+                process.poll()
+            processes = [(name, process) for name, process in processes
+                         if process_group_exists(process.pid)]
+            if processes:
+                time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+        for name, process in processes:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except PermissionError as exc:
+                log('ERROR', f'{name}: privileged process survived cancellation: {exc}')
+        if processes:
+            deadline = time.monotonic() + 1
+            while processes and time.monotonic() < deadline:
+                for _, process in processes:
+                    process.poll()
+                processes = [(name, process) for name, process in processes
+                             if process_group_exists(process.pid)]
+                if processes:
+                    time.sleep(0.05)
+        for name, process in processes:
+            log('ERROR', f'{name}: process group {process.pid} survived SIGKILL; workspace may still be busy')
 
     def acquire_task_locks(task):
         newly_acquired = []
@@ -239,12 +286,7 @@ def execute(graph, log_dir):
                 if code != 0:
                     # The leader can exit while background compiler children
                     # still own this resource. Stop them before releasing tokens.
-                    try:
-                        os.killpg(process.pid, signal.SIGTERM)
-                        time.sleep(0.2)
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+                    terminate_process_groups([(name, process)])
                 stream.close()
                 state = states[name]
                 state.update(state='success' if code == 0 else 'failed', status=code,
@@ -437,18 +479,8 @@ def execute(graph, log_dir):
         for sig in previous:
             signal.signal(sig, signal.SIG_IGN)
         # Terminate complete process groups before releasing mutable workspaces.
-        for process, _, _ in running.values():
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        if running:
-            time.sleep(0.2)
+        terminate_process_groups((name, process) for name, (process, _, _) in running.items())
         for name, (process, stream, _) in running.items():
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
             process.wait()
             stream.close()
             states[name]['state'] = 'cancelled'

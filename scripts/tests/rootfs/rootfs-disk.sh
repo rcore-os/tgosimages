@@ -327,7 +327,7 @@ fractional_arceos_timestamp=$(stat -c '%x|%y' "$platform_stage/arceos/orangepi-5
 
 composed="$work/composed.img"
 run_ok 'a disk image composes a same-origin nested guest transactionally' \
-    env ROOTFS_GUEST_COUNT=3 bash -c 'source "$1/scripts/lib/utils.sh"; source "$1/scripts/lib/rootfs.sh"; source "$1/scripts/lib/rootfs-compose.sh"; source "$1/scripts/lib/rootfs-disk.sh"; rootfs_compose_disk_guest "$2" "$3" "$4" aarch64 orangepi-jammy 8M 8M "$5"' \
+    env ROOTFS_GUEST_COUNT=3 BUILD_WORK_DIR="$work/build" bash -c 'source "$1/scripts/lib/utils.sh"; source "$1/scripts/lib/rootfs.sh"; source "$1/scripts/lib/rootfs-compose.sh"; source "$1/scripts/lib/rootfs-disk.sh"; rootfs_compose_disk_guest "$2" "$3" "$4" aarch64 orangepi-jammy 8M 8M "$5"' \
         _ "$repo_root" "$compose_base" "$platform_stage" "$guest_overlay" "$composed"
 assert_eq "$compose_base_sha" "$(sha256sum "$compose_base" | awk '{print $1}')" \
     'composition leaves the base disk content unchanged'

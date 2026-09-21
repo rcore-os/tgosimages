@@ -244,25 +244,35 @@ mkfs_publish_pair() (
 )
 
 mkfs_add_ext4_devices() {
-    local image=$1 commands spec device major minor expected output
+    local image=$1 commands verify_dir spec device major minor expected output
+    local -a device_queries=()
+    local -A device_stats=()
     commands=$(mktemp)
-    trap 'rm -f -- "$commands"' RETURN
+    verify_dir=$(mktemp -d)
+    trap 'rm -f -- "$commands"; rm -rf -- "$verify_dir"' RETURN
     printf '%s\n' 'cd /dev' \
         'mknod console c 5 1' 'mknod null c 1 3' 'mknod zero c 1 5' \
         'mknod tty c 5 0' 'mknod ttyS0 c 4 64' >"$commands"
-    LC_ALL=C debugfs -w -f "$commands" "$image" >/dev/null 2>&1 || return 1
     for spec in 'console 5 1' 'null 1 3' 'zero 1 5' 'tty 5 0' 'ttyS0 4 64'; do
         read -r device major minor <<<"$spec"
-        LC_ALL=C debugfs -w -R "set_inode_field /dev/$device mode 020600" "$image" >/dev/null 2>&1 || return 1
-        LC_ALL=C debugfs -w -R "set_inode_field /dev/$device uid 0" "$image" >/dev/null 2>&1 || return 1
-        LC_ALL=C debugfs -w -R "set_inode_field /dev/$device gid 0" "$image" >/dev/null 2>&1 || return 1
-        output=$(LC_ALL=C debugfs -R "stat /dev/$device" "$image" 2>&1) || return 1
+        printf '%s\n' \
+            "set_inode_field /dev/$device mode 020600" \
+            "set_inode_field /dev/$device uid 0" \
+            "set_inode_field /dev/$device gid 0" >>"$commands" || return 1
+        device_queries+=("/dev/$device")
+    done
+    LC_ALL=C debugfs -w -f "$commands" "$image" >/dev/null 2>&1 || return 1
+    _rootfs_debugfs_stat_many "$image" "$verify_dir" device_queries device_stats required || return 1
+    for spec in 'console 5 1' 'null 1 3' 'zero 1 5' 'tty 5 0' 'ttyS0 4 64'; do
+        read -r device major minor <<<"$spec"
+        output=${device_stats["/dev/$device"]}
         expected=$(printf '%02x:%02x' "$major" "$minor")
         grep -q '^Inode: .*Type: character special .*Mode:  *0600' <<<"$output" || return 1
         grep -Eq '^User: +0 +Group: +0 ' <<<"$output" || return 1
         grep -Fqi "(hex $expected)" <<<"$output" || return 1
     done
     rm -f -- "$commands"
+    rm -rf -- "$verify_dir"
     trap - RETURN
 }
 

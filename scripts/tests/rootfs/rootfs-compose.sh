@@ -14,14 +14,24 @@ fault_bin="$work/fault-bin"
 mkdir "$fault_bin"
 cat >"$fault_bin/debugfs" <<EOF
 #!/usr/bin/env bash
+if [[ -n \${DEBUGFS_COUNT_FILE:-} ]]; then
+    count=0
+    [[ ! -f \$DEBUGFS_COUNT_FILE ]] || read -r count <"\$DEBUGFS_COUNT_FILE"
+    printf '%s\n' "\$((count + 1))" >"\$DEBUGFS_COUNT_FILE"
+fi
 if [[ \${FAIL_DEBUGFS_WRITES:-} == 1 && \${1:-} == -w ]]; then
     exit 70
 fi
 if [[ \${FAIL_DEBUGFS_WRITES:-} == zero && \${1:-} == -w ]]; then
     exit 0
 fi
-if [[ \${SKIP_DEBUGFS_METADATA:-} == 1 && \${1:-} == -w && \${2:-} == -f && \${3##*/} == metadata.commands ]]; then
-    exit 0
+if [[ \${SKIP_DEBUGFS_METADATA:-} == 1 && \${1:-} == -w && \${2:-} == -f && \${3##*/} == mutation.commands ]]; then
+    filtered="\${3}.without-metadata.\$\$"
+    grep -v '^set_inode_field ' "\$3" >"\$filtered" || exit
+    "$real_debugfs" "\$1" "\$2" "\$filtered" "\${@:4}"
+    status=\$?
+    rm -f -- "\$filtered"
+    exit "\$status"
 fi
 exec "$real_debugfs" "\$@"
 EOF
@@ -583,6 +593,15 @@ touch -d @1700000000 "$metadata_source/private dir" "$metadata_source/private di
 normalize_tree_seconds "$metadata_source"
 run_ok 'debugfs injection handles quoted names and preserves supported metadata' \
     _rootfs_inject_tree_via_debugfs "$metadata_image" "$metadata_source"
+batch_image="$work/debugfs-batch.img"
+batch_count="$work/debugfs-batch.count"
+make_ext4 "$batch_image"
+normalize_tree_seconds "$metadata_source"
+run_ok 'debugfs injection uses one mutation session plus three verification sessions' \
+    env PATH="$fault_bin:$PATH" DEBUGFS_COUNT_FILE="$batch_count" bash -c \
+        'warn() { printf "warning: %s\\n" "$*" >&2; }; source "$1/scripts/lib/rootfs.sh"; _rootfs_inject_tree_via_debugfs "$2" "$3"' \
+        _ "$repo_root" "$batch_image" "$metadata_source"
+assert_eq 4 "$(<"$batch_count")" 'debugfs injection process count'
 run_ok 'space-containing file is complete' test "$(debugfs_cat "$metadata_image" '/private dir/file with space')" = spaced
 run_ok 'glob name is literal' test "$(debugfs_cat "$metadata_image" '/[*]-glob')" = glob
 run_ok 'leading dash name is literal' test "$(debugfs_cat "$metadata_image" '/-leading')" = dash

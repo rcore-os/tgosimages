@@ -235,8 +235,13 @@ printf '{name}-%s\\n' "$scope" >"$output/{name}-$scope"
             self.assertEqual(base['env']['ORANGEPI_GUEST_ROOTFS'], str(prepared))
             self.assertEqual(uboot_deb['deps'], [linux['id']])
             self.assertEqual(base['deps'], [uboot_deb['id']])
-            self.assertIn(str(work / 'workspaces/orangepi-5-plus/orangepi/output/debs'),
-                          base['cache_args'])
+            mutable_inputs = [base['cache_args'][index + 1]
+                              for index, value in enumerate(base['cache_args'])
+                              if value == '--mutable-input']
+            self.assertEqual(mutable_inputs, [
+                str(work / 'workspaces/orangepi-5-plus/orangepi/output/debs'),
+                str(work / 'workspaces/orangepi-5-plus/orangepi/external/cache/rootfs'),
+            ])
             self.assertEqual(image['phase'], 'compose')
             self.assertEqual(image['command'][-1], str(work / 'images/rootfs-aarch64-orangepi-jammy.img'))
             self.assertIn('--output', image['cache_args'])

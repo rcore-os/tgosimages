@@ -147,6 +147,19 @@ run_task
 [[ $(wc -l <"$work/count") == 11 ]]
 printf 'PASS: input/ref/patch/environment/output invalidation and failed retries\n'
 
+printf 'before\n' >"$work/changing-input"
+cat >"$work/changing-build.sh" <<'BUILD'
+#!/bin/bash
+set -eu
+printf 'after\n' >"$1/changing-input"
+printf 'candidate\n' >"$1/changing-output"
+BUILD
+status=0
+build_task changing-input --input "$work/changing-input" --input "$work/changing-build.sh" \
+    --output "$work/changing-output" -- bash "$work/changing-build.sh" "$work" || status=$?
+[[ $status == 1 ]]
+printf 'PASS: input changes during a task are a hard failure\n'
+
 mkdir "$work/patched" "$work/ordered"
 git -C "$work/patched" init -q
 printf 'one\n' >"$work/patched/value"

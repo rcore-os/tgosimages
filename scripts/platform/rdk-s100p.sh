@@ -156,8 +156,8 @@ linux() {
     fi
 
     # RDK S100P SDK is located at /share/guest-images/rdk_s100p
-    REMOTE_HOST="10.3.10.194"
-    REMOTE_DIR="/share/guest-images/rdk_s100p"
+    REMOTE_HOST="${RDK_S100P_REMOTE_HOST:-10.3.10.194}"
+    REMOTE_DIR="${RDK_S100P_SDK_DIR:-/share/guest-images/rdk_s100p}"
     BOOTLOADER_DIR="${REMOTE_DIR}/source/bootloader"
     KERNEL_DTB_REL="out/build/kernel/arch/arm64/boot/dts/hobot/rdk-s100p-v1p0.dtb"
 

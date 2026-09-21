@@ -4,6 +4,7 @@
 
 _CACHE_OPTIONS = {
     'inputs': '--input',
+    'mutable_inputs': '--mutable-input',
     'outputs': '--output',
     'values': '--value',
     'environment': '--env',

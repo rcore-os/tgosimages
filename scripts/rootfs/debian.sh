@@ -209,16 +209,20 @@ debian_init_config() {
 }
 
 debian_output_mount_arg() {
-    printf 'type=bind,src=%s,dst=/output\n' "$(dirname -- "$DEBIAN_ROOTFS_IMG")"
+    local output=${1:-$DEBIAN_ROOTFS_IMG} parent
+    parent=$(dirname -- "$output") || return 1
+    [[ $parent != *,* ]] || die "Debian staging parent cannot contain a comma: $parent"
+    printf 'type=bind,src=%s,dst=/output\n' "$parent"
 }
 
 debian_pack_rootfs_volume() {
-    local volume_name=$1 debian_rootfs_tmp=$2 image_name
+    local volume_name=$1 debian_rootfs_tmp=$2 image_name output_mount
     image_name=$(basename -- "$debian_rootfs_tmp")
+    output_mount=$(debian_output_mount_arg "$debian_rootfs_tmp") || return 1
     docker run --rm --privileged \
         --platform "${DEBIAN_DOCKER_PLATFORM}" \
         -v "${volume_name}:/rootfs:ro" \
-        --mount "$(debian_output_mount_arg)" \
+        --mount "$output_mount" \
         "${DEBIAN_DOCKER_IMAGE}" \
         bash -lc '
             set -Eeuo pipefail

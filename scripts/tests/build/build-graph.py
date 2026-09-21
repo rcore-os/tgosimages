@@ -238,6 +238,12 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(states['after-missing']['state'], 'cancelled')
 
     def test_cpu_overlap_and_reallocation(self):
+        bin_dir = self.root / 'bin'
+        bin_dir.mkdir()
+        nproc = bin_dir / 'nproc'
+        nproc.write_text('#!/bin/sh\nprintf "8\\n"\n')
+        nproc.chmod(0o755)
+        self.env['PATH'] = f'{bin_dir}:{self.env["PATH"]}'
         code = '''import os,time
 from pathlib import Path
 name=os.environ['NAME']
@@ -385,6 +391,26 @@ os.unlink('exclusive')
         self.finish(self.launch([self.node('bad', code)]), 1)
         time.sleep(.7)
         self.assertFalse((self.root / 'late-output').exists())
+
+    def test_failed_leader_gives_background_child_a_cleanup_grace_period(self):
+        child = '''import signal,time
+from pathlib import Path
+def stop(_signum, _frame):
+    Path("child-cleaned").write_text("yes")
+    raise SystemExit(0)
+signal.signal(signal.SIGTERM, stop)
+Path("child-ready").write_text("yes")
+time.sleep(30)
+'''
+        code = f'''import subprocess,sys,time
+from pathlib import Path
+subprocess.Popen([sys.executable,"-c",{child!r}])
+deadline=time.monotonic()+3
+while not Path("child-ready").exists() and time.monotonic()<deadline: time.sleep(.01)
+sys.exit(7)
+'''
+        self.finish(self.launch([self.node('bad', code)]), 1)
+        self.assertEqual((self.root / 'child-cleaned').read_text(), 'yes')
 
     def test_heartbeat_reports_active_progress_and_wait_reasons(self):
         self.env.update(TGOS_BUILD_JOB_BUDGET='2', BUILD_PARALLEL_TASKS='1', BUILD_HEARTBEAT_SECONDS='0.1')

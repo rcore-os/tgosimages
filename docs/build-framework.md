@@ -18,6 +18,7 @@ elapsed time and propagate tool failures. They do not evaluate command strings.
 | --- | --- | --- |
 | `BUILD_PARALLEL_TASKS` | Automatic | Explicit value fixes the graph task cap and disables adaptive admission; per-boundary cap for legacy runners |
 | `BUILD_HEARTBEAT_SECONDS` | `60` | Graph heartbeat interval; active nodes include elapsed time, jobs, log path, and latest progress |
+| `BUILD_TERMINATE_GRACE_SECONDS` | `5` | Seconds to allow task process groups to handle SIGTERM before SIGKILL |
 | `BUILD_MEMORY_MB` | `0` | Admission budget for declared graph memory; 0 disables it |
 | `BUILD_CACHE` | `1` | `0` disables compiler/task caching; `1`/`auto` use available backends |
 | `BUILD_CACHE_DIR` | `build/.cache` | Compiler caches and task manifests |
@@ -26,6 +27,11 @@ elapsed time and propagate tool failures. They do not evaluate command strings.
 | `BUILD_SOURCE_CACHE_DIR` | `<BUILD_CACHE_DIR>/git` | Shared Git download cache |
 | `ROOTFS_GUEST_COUNT` | `2` | Positive number of zero-based nested guest rootfs files; resource-limited, no fixed maximum |
 | `LOG_COLOR` | `auto` | Terminal color policy: `auto`, `always`, `never` |
+
+Board SDK locations can be overridden without editing scripts:
+`EVM3588_REMOTE_HOST`/`EVM3588_SDK_DIR`,
+`RDK_S100P_REMOTE_HOST`/`RDK_S100P_SDK_DIR`, and
+`ROC_RK3568_REMOTE_HOST`/`ROC_RK3568_SDK_DIR`.
 
 Existing `CCACHE_DIR`, `CMAKE_C_COMPILER_LAUNCHER`, `CMAKE_CXX_COMPILER_LAUNCHER`,
 `RUSTC_WRAPPER` overrides remain supported. The framework derives its total CPU

@@ -61,6 +61,22 @@ run_evm3588_sdk() (
     ./build.sh "$@"
 )
 
+run_evm3588_remote_sdk() {
+    local host=$1 sdk_dir=$2 remote_command='bash -s --' argument quoted
+    shift 2
+    for argument in "$sdk_dir" "$@"; do
+        printf -v quoted '%q' "$argument"
+        remote_command+=" $quoted"
+    done
+    ssh "$host" "$remote_command" <<'REMOTE_SCRIPT'
+set -euo pipefail
+sdk_dir=$1
+shift
+cd "$sdk_dir"
+exec ./build.sh "$@"
+REMOTE_SCRIPT
+}
+
 linux() {
     local linux_images_dir="${PLATFORM_IMAGES_DIR}/linux"
 
@@ -71,8 +87,8 @@ linux() {
     fi
 
     # Since the Linux SDK from Rockchip is managed by a large repository using repo, and manufacturers usually do not provide online repositories (typically only compressed packages), we log in to a prepared SDK server via SSH for building.
-    REMOTE_HOST="10.3.10.194"
-    REMOTE_DIR="/share/guest-images/evm3588_linux_sdk_v1.0.3"
+    REMOTE_HOST="${EVM3588_REMOTE_HOST:-10.3.10.194}"
+    REMOTE_DIR="${EVM3588_SDK_DIR:-/share/guest-images/evm3588_linux_sdk_v1.0.3}"
 
     # Determine local IP addresses (IPv4) to detect if we are on REMOTE_HOST.
     # We collect all non-loopback IPv4 addresses assigned to the host.
@@ -88,8 +104,8 @@ linux() {
 
     if [[ "$@" != *"clean"* ]]; then
         if $is_remote; then
-            info "Building remotely via SSH：ssh ${REMOTE_HOST} cd '${REMOTE_DIR}' && ./build.sh $@"
-            ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && ./build.sh $@"
+            info "Building EVM3588 SDK remotely via SSH: ${REMOTE_HOST}:${REMOTE_DIR}"
+            run_evm3588_remote_sdk "$REMOTE_HOST" "$REMOTE_DIR" "$@"
 
             info "Copying build artifacts: -> $linux_images_dir"
             mkdir -p "${linux_images_dir}"

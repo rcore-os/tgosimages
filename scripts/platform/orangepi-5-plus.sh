@@ -154,15 +154,38 @@ orangepi_prepare_source() {
     fi
 }
 
+orangepi_restore_generated_ownership() {
+    local uid path offender
+    local -a generated=(kernel output .tmp external/cache toolchains userpatches)
+
+    uid=$(id -u) || return 1
+    for path in "${generated[@]}"; do
+        path="$LINUX_SRC_DIR/$path"
+        [[ -e $path || -L $path ]] || continue
+        offender=$(find "$path" -xdev ! -uid "$uid" -print -quit) || return 1
+        [[ -n $offender ]] || continue
+        info "Restoring Orange Pi generated-tree ownership: $path"
+        sudo find "$path" -xdev ! -uid "$uid" -exec chown -h -- "$uid" {} + || return 1
+    done
+}
+
 orangepi_run_upstream() (
     local build_opt=$1
     local clean_level=${2:-}
+    local build_status=0 ownership_status=0
     local args=(BOARD=orangepi5plus BRANCH=current BUILD_OPT="$build_opt" RELEASE=jammy
                 BUILD_MINIMAL=yes BUILD_DESKTOP=no KERNEL_CONFIGURE=no)
+    # The vendor build enters sudo for selected stages and can leave generated
+    # directories owned by root. Repair only known generated trees before an
+    # incremental build, and again afterwards for the next graph node.
+    orangepi_restore_generated_ownership
     cd "$LINUX_SRC_DIR"
     info "Starting Orange Pi ${build_opt} build"
     [[ -z $clean_level ]] || args+=(CLEAN_LEVEL="$clean_level")
-    ./build.sh "${args[@]}"
+    ./build.sh "${args[@]}" || build_status=$?
+    orangepi_restore_generated_ownership || ownership_status=$?
+    ((build_status == 0)) || return "$build_status"
+    return "$ownership_status"
 )
 
 orangepi_configure_gpt() {

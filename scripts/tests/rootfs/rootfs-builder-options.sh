@@ -270,6 +270,8 @@ run_ok 'common preparation feeds a real tiny ext4 composition' test_real_tiny_co
 test_busybox_real_pack_boundary() (
     source_builder busybox
     local output="$work/busybox-pack" guest="$work/busybox-guest" before
+    BUILD_WORK_DIR="$work/build"
+    export BUILD_WORK_DIR
     mkdir -p "$output" "$guest"
     printf legacy >"$guest/payload"
     MKFS_ARCH=x86_64
@@ -283,7 +285,7 @@ test_busybox_real_pack_boundary() (
     mkdir -p "$MKFS_OUTER_TEST_OVERLAY" "$MKFS_GUEST_TEST_OVERLAY"
     rootfs_compose_test_images() {
         [[ $# -eq 9 ]] || return 1
-        [[ $1 == "$output/rootfs-x86_64-busybox.img.base.tmp."* ]]
+        [[ $1 == "$BUILD_WORK_DIR/rootfs-staging/"*"/rootfs-x86_64-busybox.base.img" ]]
         [[ $2 == "$MKFS_OUTER_TEST_OVERLAY" && $3 == "$MKFS_GUEST_TEST_OVERLAY" ]]
         [[ $4 == "$guest" && $5 == x86_64 && $6 == busybox && $7 == 256M && $8 == 256M ]]
         ! debugfs -R 'stat /guest/payload' "$1" 2>&1 | grep -q '^Inode:'
@@ -336,7 +338,7 @@ run_ok 'full guest validation is read-only and precedes plugin/base work' test_f
 
 test_debian_canonical_output_mount() (
     source_builder debian
-    local relative="relative output/with apostrophe's spaces" expected
+    local relative="relative output/with apostrophe's spaces" expected staging candidate
     mkdir -p "$work/$relative"
     cd "$work"
     DEBIAN_ARCH=x86_64
@@ -348,12 +350,15 @@ test_debian_canonical_output_mount() (
     DEBIAN_DOCKER_IMAGE=debian:test
     DEBIAN_IMG_SIZE=1M
     docker() { printf '%s\n' "$@" >"$work/debian-docker-args"; }
-    debian_pack_rootfs_volume volume-name "$DEBIAN_ROOTFS_IMG.base.tmp.1"
+    staging="$work/debian staging/with apostrophe's space"
+    mkdir -p "$staging"
+    candidate="$staging/rootfs-x86_64-debian.base.img"
+    debian_pack_rootfs_volume volume-name "$candidate"
     grep -Fxq -- '--mount' "$work/debian-docker-args"
-    grep -Fxq -- "type=bind,src=$work/$relative,dst=/output" "$work/debian-docker-args"
+    grep -Fxq -- "type=bind,src=$staging,dst=/output" "$work/debian-docker-args"
     grep -Fxq -- 'volume-name:/rootfs:ro' "$work/debian-docker-args"
-    grep -Fxq -- "$(basename "$DEBIAN_ROOTFS_IMG.base.tmp.1")" "$work/debian-docker-args"
-    ! grep -F "$(basename "$DEBIAN_ROOTFS_IMG.base.tmp.1")" "$work/debian-docker-args" |
+    grep -Fxq -- "$(basename "$candidate")" "$work/debian-docker-args"
+    ! grep -F "$(basename "$candidate")" "$work/debian-docker-args" |
         grep -Fq 'dd if='
 )
 run_ok 'Debian canonicalizes relative space-containing output for --mount' test_debian_canonical_output_mount
@@ -436,6 +441,8 @@ run_ok 'BusyBox pair publication defers INT/TERM at every critical checkpoint' t
 test_busybox_compose_failure_preserves_pair() (
     source_builder busybox
     local output="$work/compose-failure" guest="$work/compose-failure-guest"
+    BUILD_WORK_DIR="$work/build-compose-failure"
+    export BUILD_WORK_DIR
     mkdir "$output" "$guest" "$work/compose-failure-outer" "$work/compose-failure-tests"
     printf old-init >"$output/initramfs-x86_64-busybox.cpio.gz"
     printf old-image >"$output/rootfs-x86_64-busybox.img"
@@ -514,6 +521,22 @@ test_ext4_device_semantic_noop() (
     ! mkfs_add_ext4_devices "$image"
 )
 run_ok 'BusyBox device creation rejects a debugfs semantic no-op that exits zero' test_ext4_device_semantic_noop
+
+test_ext4_devices_use_two_debugfs_batches() (
+    source_builder busybox
+    local image="$work/device-batches.img" calls="$work/device-debugfs.calls" real_debugfs
+    real_debugfs=$(command -v debugfs)
+    truncate -s 8M "$image"
+    mkfs.ext4 -q -F "$image"
+    debugfs() {
+        printf 'call\n' >>"$calls"
+        "$real_debugfs" "$@"
+    }
+    mkfs_add_ext4_devices "$image"
+    [[ $(wc -l <"$calls") -eq 2 ]]
+)
+run_ok 'BusyBox creates and verifies all ext4 devices in two debugfs batches' \
+    test_ext4_devices_use_two_debugfs_batches
 
 test_busybox_source_preparation_serializes() (
     source_builder busybox

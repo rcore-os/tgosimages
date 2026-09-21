@@ -141,8 +141,30 @@ all
         result = self.shell('build_task changing-tool --input "$2/driver.sh" '
                             '--tool "$2/tool" --output "$2/output" -- '
                             'bash "$2/driver.sh" "$2/tool" "$2/output"')
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('inputs changed during build; refusing success', result.stderr)
         self.assertFalse(list((self.work / 'cache/tasks').glob('*.json')))
+
+    def test_mutable_sdk_input_records_post_build_state_and_detects_external_edits(self):
+        generated = self.work / 'generated'
+        generated.mkdir()
+        (generated / 'value').write_text('before')
+        driver = self.work / 'driver.sh'
+        driver.write_text('printf built >> "$1/value"\nprintf image > "$2"\nprintf x >> "$3"\n')
+        command = ('build_task sdk --input "$2/driver.sh" --mutable-input "$2/generated" '
+                   '--output "$2/image" -- bash "$2/driver.sh" "$2/generated" "$2/image" "$2/runs"')
+        first = self.shell(command)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual((self.work / 'runs').read_text(), 'x')
+        second = self.shell(command)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn('CACHE HIT sdk', second.stderr)
+        self.assertEqual((self.work / 'runs').read_text(), 'x')
+        (generated / 'value').write_text('external')
+        third = self.shell(command)
+        self.assertEqual(third.returncode, 0, third.stderr)
+        self.assertIn('CACHE MISS sdk', third.stderr)
+        self.assertEqual((self.work / 'runs').read_text(), 'xx')
 
     def test_forced_console_color_keeps_framework_logs_plain(self):
         fixture = self.work / 'repo'

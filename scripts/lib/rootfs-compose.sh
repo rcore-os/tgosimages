@@ -632,14 +632,19 @@ _rootfs_plan_guest_staging() {
 }
 
 _rootfs_validate_guest_image_set() {
-    local image=$1 base=$2 count index member listing name
+    local image=$1 base=$2 count index member listing name verify_dir
+    local -a guest_queries=()
+    local -A guest_stats=()
     local -A expected=()
     count=$(_rootfs_guest_count) || return 1
     for ((index = 0; index < count; index++)); do
         member=$(_rootfs_guest_image_name "$base" "$index") || return 1
         expected[$member]=1
-        _rootfs_debugfs_stat "$image" "/guest/$member" required >/dev/null || return 1
+        guest_queries+=("/guest/$member")
     done
+    verify_dir=$(mktemp -d "$(dirname -- "$image")/.guest-set-verify.XXXXXX") || return 1
+    trap 'rm -rf -- "$verify_dir"' RETURN
+    _rootfs_debugfs_stat_many "$image" "$verify_dir" guest_queries guest_stats required || return 1
     listing=$(_rootfs_run_tool 0 debugfs -R 'ls -p "/guest"' "$image") || return 1
     while IFS= read -r name; do
         case $name in
@@ -651,6 +656,8 @@ _rootfs_validate_guest_image_set() {
                 ;;
         esac
     done < <(awk -F/ 'NF >= 6 && $6 != "" {print $6}' <<<"$listing")
+    rm -rf -- "$verify_dir"
+    trap - RETURN
 }
 
 _rootfs_stage_guest_images() {
