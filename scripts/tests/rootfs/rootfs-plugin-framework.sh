@@ -712,10 +712,24 @@ for fixture in "$fixtures"/*; do
 done
 
 ltp_overlay="$work/ltp-overlay"
+ltp_make_bin="$work/ltp-make-bin"
+ltp_make_log="$work/ltp-make.args"
+real_make=$(command -v make)
+mkdir "$ltp_make_bin"
+cat >"$ltp_make_bin/make" <<'MAKE'
+#!/usr/bin/env bash
+printf '%s\0' "$@" >>"$LTP_MAKE_ARGS_LOG"
+exec "$REAL_MAKE" "$@"
+MAKE
+chmod +x "$ltp_make_bin/make"
 run_ok 'ltp plugin builds and installs a checked offline fixture' \
-    env ROOTFS_TEST_OFFLINE_FIXTURE_DIR="$fixtures" ROOTFS_TEST_BUILD_ROOT="$work/ltp-build" \
+    env PATH="$ltp_make_bin:$PATH" REAL_MAKE="$real_make" LTP_MAKE_ARGS_LOG="$ltp_make_log" \
+        ROOTFS_TEST_BUILD_JOBS=7 ROOTFS_TEST_OFFLINE_FIXTURE_DIR="$fixtures" \
+        ROOTFS_TEST_BUILD_ROOT="$work/ltp-build" \
         bash "$build_script" build --arch x86_64 --rootfs alpine --scope outer \
         --tests ltp --output "$ltp_overlay"
+run_ok 'ltp compile and install consume the assigned node parallelism' \
+    bash -c '[[ $(tr "\0" "\n" <"$1" | grep -Fxc -- -j7) -eq 2 ]]' _ "$ltp_make_log"
 assert_eq 20260529 "$(tr -d '\r\n' <"$ltp_overlay/opt/ltp/Version")" 'ltp Version is retained'
 assert_exists "$ltp_overlay/opt/ltp/runtest/syscalls" 'ltp syscall runtest is retained'
 assert_exists "$ltp_overlay/opt/ltp/runtest/sched" 'ltp scheduler runtest is retained'

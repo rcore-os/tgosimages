@@ -76,7 +76,7 @@ prepare_source() (
     build_lock_release "$lock_fd"; printf '%s\n' "$source_dir"; trap - EXIT INT TERM
 )
 build_plugin() {
-    local arch= rootfs= scope= output= build_root source_dir platform uid gid file script script_source builder_image smoke_config found=0
+    local arch= rootfs= scope= output= build_root source_dir platform uid gid jobs file script script_source builder_image smoke_config found=0
     while (($#)); do case $1 in
         --arch) (($# >= 2)) || die 'missing --arch value'; arch=$2; shift 2;;
         --rootfs) (($# >= 2)) || die 'missing --rootfs value'; rootfs=$2; shift 2;;
@@ -90,14 +90,17 @@ build_plugin() {
     mkdir -p "$build_root/work/$name/$version/$arch/$rootfs"; plugin_work_dir=$(mktemp -d "$build_root/work/$name/$version/$arch/$rootfs/run.XXXXXX")
     trap cleanup_work EXIT; trap 'exit 130' INT; trap 'exit 143' TERM; cp -a "$source_dir/." "$plugin_work_dir/"
     sanitize_runtime_launcher "$plugin_work_dir/scripts/lmbench"
+    jobs=$(TGOS_BUILD_JOB_BUDGET="${ROOTFS_TEST_BUILD_JOBS:-${TGOS_BUILD_JOB_BUDGET:-}}" build_jobs) ||
+        die 'cannot determine lmbench build parallelism'
     if [[ -n ${ROOTFS_TEST_OFFLINE_FIXTURE_DIR:-} ]]; then
-        make -C "$plugin_work_dir/src" OS=Linux CC="${CC:-cc}" CFLAGS='-O2 -static' LDFLAGS='-static'
+        make -j"$jobs" -C "$plugin_work_dir/src" OS=Linux CC="${CC:-cc}" CFLAGS='-O2 -static' LDFLAGS='-static'
     else
         command -v docker >/dev/null 2>&1 || die 'docker is required for real source builds'; uid=$(id -u); gid=$(id -g)
         patch -d "$plugin_work_dir" -p1 <"$repo_root/patches/rootfs-tests/lmbench/5a386c1c32a84898151dade7754031813e33994e-no-portmapper.patch"
         builder_image=$(ROOTFS_TEST_BUILD_ROOT="$build_root" "$plugin_dir/../alpine-builder.sh" prepare --arch "$arch")
-        docker run --rm --platform "$platform" -v "$plugin_work_dir:/work" -w /work "$builder_image" sh -ec \
-            "trap 'chown -R $uid:$gid /work' EXIT; make -C src OS=Linux CC=gcc CFLAGS='-O2 -static' LDFLAGS='-static'"
+        docker run --rm --platform "$platform" -e TGOS_BUILD_JOB_BUDGET="$jobs" \
+            -v "$plugin_work_dir:/work" -w /work "$builder_image" sh -ec \
+            "trap 'chown -R $uid:$gid /work' EXIT; make -j\"\$TGOS_BUILD_JOB_BUDGET\" -C src OS=Linux CC=gcc CFLAGS='-O2 -static' LDFLAGS='-static'"
     fi
     mkdir -p "$output/guest-tests/lmbench/bin/Linux" "$output/guest-tests/lmbench/scripts"
     while IFS= read -r -d '' file; do

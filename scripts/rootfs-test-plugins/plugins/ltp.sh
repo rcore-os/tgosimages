@@ -195,21 +195,22 @@ validate_install() {
 }
 
 build_fixture() {
-    local source_dir=$1 stage_dir=$2
-    make -C "$source_dir" CC="${CC:-cc}" CFLAGS="${ALPINE_LTP_CFLAGS:-}" \
+    local source_dir=$1 stage_dir=$2 jobs=$3
+    make -j"$jobs" -C "$source_dir" CC="${CC:-cc}" CFLAGS="${ALPINE_LTP_CFLAGS:-}" \
         LDFLAGS="${ALPINE_LTP_LDFLAGS:-}"
-    make -C "$source_dir" CC="${CC:-cc}" CFLAGS="${ALPINE_LTP_CFLAGS:-}" \
+    make -j"$jobs" -C "$source_dir" CC="${CC:-cc}" CFLAGS="${ALPINE_LTP_CFLAGS:-}" \
         LDFLAGS="${ALPINE_LTP_LDFLAGS:-}" DESTDIR="$stage_dir" PREFIX="$prefix" install
 }
 
 build_real() {
-    local arch=$1 build_root=$2 source_dir=$3 stage_dir=$4 platform=$5 image uid gid builder
+    local arch=$1 build_root=$2 source_dir=$3 stage_dir=$4 platform=$5 jobs=$6 image uid gid builder
     command -v docker >/dev/null 2>&1 || die 'docker is required for real source builds'
     [[ -x $source_dir/configure ]] || die 'LTP release archive lacks executable configure'
     builder=${ROOTFS_TEST_ALPINE_BUILDER:-"$plugin_dir/../alpine-builder.sh"}
     image=$(ROOTFS_TEST_BUILD_ROOT="$build_root" "$builder" prepare --arch "$arch")
     uid=$(id -u); gid=$(id -g)
     docker run --rm --platform "$platform" \
+        --env TGOS_BUILD_JOB_BUDGET="$jobs" \
         --env ALPINE_LTP_CFLAGS --env ALPINE_LTP_LDFLAGS \
         --env ALPINE_LTP_FILTER_OUT_DIRS --env ALPINE_LTP_FILTER_OUT_TESTS \
         -v "$source_dir:/ltp" -v "$stage_dir:/stage" -w /ltp \
@@ -231,19 +232,19 @@ build_real() {
                 sed -i -e 's@^#define HAVE_STRUCT_AF_ALG_IV .*@/* #undef HAVE_STRUCT_AF_ALG_IV */@' \\
                     -e 's@^#define HAVE_STRUCT_SOCKADDR_ALG .*@/* #undef HAVE_STRUCT_SOCKADDR_ALG */@' include/config.h
             fi
-            make -C testcases/kernel/syscalls top_srcdir=/ltp top_builddir=/ltp \\
+            make -j"\$TGOS_BUILD_JOB_BUDGET" -C testcases/kernel/syscalls top_srcdir=/ltp top_builddir=/ltp \\
                 FILTER_OUT_DIRS=\"\$ALPINE_LTP_FILTER_OUT_DIRS\"
-            make -C testcases/kernel/syscalls top_srcdir=/ltp top_builddir=/ltp \\
+            make -j"\$TGOS_BUILD_JOB_BUDGET" -C testcases/kernel/syscalls top_srcdir=/ltp top_builddir=/ltp \\
                 FILTER_OUT_DIRS=\"\$ALPINE_LTP_FILTER_OUT_DIRS\" DESTDIR=/stage install
-            make -C testcases/kernel/ipc/pipeio top_srcdir=/ltp top_builddir=/ltp
-            make -C testcases/kernel/ipc/pipeio top_srcdir=/ltp top_builddir=/ltp DESTDIR=/stage install
-            make -C testcases/kernel/sched top_srcdir=/ltp top_builddir=/ltp
-            make -C testcases/kernel/sched top_srcdir=/ltp top_builddir=/ltp DESTDIR=/stage install
+            make -j"\$TGOS_BUILD_JOB_BUDGET" -C testcases/kernel/ipc/pipeio top_srcdir=/ltp top_builddir=/ltp
+            make -j"\$TGOS_BUILD_JOB_BUDGET" -C testcases/kernel/ipc/pipeio top_srcdir=/ltp top_builddir=/ltp DESTDIR=/stage install
+            make -j"\$TGOS_BUILD_JOB_BUDGET" -C testcases/kernel/sched top_srcdir=/ltp top_builddir=/ltp
+            make -j"\$TGOS_BUILD_JOB_BUDGET" -C testcases/kernel/sched top_srcdir=/ltp top_builddir=/ltp DESTDIR=/stage install
         "
 }
 
 build_plugin() {
-    local arch= rootfs= scope= output= build_root source_dir platform stage_prefix
+    local arch= rootfs= scope= output= build_root source_dir platform stage_prefix jobs
     while (($#)); do
         case $1 in
         --arch) (($# >= 2)) || die 'missing --arch value'; arch=$2; shift 2 ;;
@@ -262,6 +263,8 @@ build_plugin() {
         die 'output must be an empty directory'
 
     configure_build_environment
+    jobs=$(TGOS_BUILD_JOB_BUDGET="${ROOTFS_TEST_BUILD_JOBS:-${TGOS_BUILD_JOB_BUDGET:-}}" \
+        build_jobs) || die 'cannot determine LTP build parallelism'
     select_source
     build_root=${ROOTFS_TEST_BUILD_ROOT:-"$repo_root/build/rootfs-tests"}
     source_dir=$(prepare_source "$build_root")
@@ -273,9 +276,9 @@ build_plugin() {
     trap 'exit 143' TERM
     cp -a "$source_dir/." "$plugin_work_dir/"
     if [[ -n ${ROOTFS_TEST_OFFLINE_FIXTURE_DIR:-} ]]; then
-        build_fixture "$plugin_work_dir" "$plugin_stage_dir"
+        build_fixture "$plugin_work_dir" "$plugin_stage_dir" "$jobs"
     else
-        build_real "$arch" "$build_root" "$plugin_work_dir" "$plugin_stage_dir" "$platform"
+        build_real "$arch" "$build_root" "$plugin_work_dir" "$plugin_stage_dir" "$platform" "$jobs"
     fi
     stage_prefix="$plugin_stage_dir$prefix"
     [[ -d $stage_prefix ]] || die "LTP install did not create $prefix"

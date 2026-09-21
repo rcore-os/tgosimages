@@ -184,8 +184,10 @@ build_plugin() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
     cp -a "$source_dir/." "$plugin_work_dir/"
+    jobs=$(TGOS_BUILD_JOB_BUDGET="${ROOTFS_TEST_BUILD_JOBS:-${TGOS_BUILD_JOB_BUDGET:-}}" build_jobs) ||
+        die 'cannot determine cyclictest build parallelism'
     if [[ -n ${ROOTFS_TEST_OFFLINE_FIXTURE_DIR:-} ]]; then
-        make -C "$plugin_work_dir" cyclictest no_libcpupower=1 CC="${CC:-cc}" \
+        make -j"$jobs" -C "$plugin_work_dir" cyclictest no_libcpupower=1 CC="${CC:-cc}" \
             CFLAGS='-O2 -static' LDFLAGS='-static'
     else
         command -v docker >/dev/null 2>&1 || die 'docker is required for real source builds'
@@ -195,7 +197,6 @@ build_plugin() {
         builder_script=${ROOTFS_TEST_GLIBC_STATIC_BUILDER:-"$plugin_dir/../glibc-static-builder.sh"}
         builder_image=$(ROOTFS_TEST_BUILD_ROOT="$build_root" "$builder_script" prepare --arch "$arch")
         uid=$(id -u); gid=$(id -g)
-        jobs=$(TGOS_BUILD_JOB_BUDGET="${ROOTFS_TEST_BUILD_JOBS:-${TGOS_BUILD_JOB_BUDGET:-}}" build_jobs) || return
         docker run --rm --platform linux/amd64 \
             -e TARGET_TRIPLET="$target_triplet" -e TARGET_CC="$target_cc" -e TARGET_AR="$target_ar" \
             -e TGOS_BUILD_JOB_BUDGET="$jobs" -e HOST_UID="$uid" -e HOST_GID="$gid" \
