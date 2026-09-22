@@ -4,7 +4,11 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    source "${ROOT_DIR}/scripts/lib/platform-graph-entry.sh"
+fi
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 # Repository and directory configuration
 LINUX_REPO_URL=""
@@ -35,6 +39,44 @@ usage() {
     printf '  scripts/evm3588.sh linux          # Build only Linux\n'
 }
 
+run_evm3588_sdk() (
+    local sdk_dir="$1"
+    local python_shim_dir=""
+    local python3_path
+    shift
+
+    if ! command -v python >/dev/null 2>&1; then
+        python3_path=$(command -v python3) || {
+            error "EVM3588 SDK requires Python, but python3 is not available"
+            exit 127
+        }
+        python_shim_dir=$(mktemp -d "${TMPDIR:-/tmp}/tgosimages-python.XXXXXX")
+        trap 'rm -f -- "$python_shim_dir/python"; rmdir -- "$python_shim_dir"' EXIT
+        ln -s -- "$python3_path" "$python_shim_dir/python"
+        export PATH="$python_shim_dir:$PATH"
+        info "Using python3 compatibility shim for the EVM3588 SDK"
+    fi
+
+    cd "$sdk_dir"
+    ./build.sh "$@"
+)
+
+run_evm3588_remote_sdk() {
+    local host=$1 sdk_dir=$2 remote_command='bash -s --' argument quoted
+    shift 2
+    for argument in "$sdk_dir" "$@"; do
+        printf -v quoted '%q' "$argument"
+        remote_command+=" $quoted"
+    done
+    ssh "$host" "$remote_command" <<'REMOTE_SCRIPT'
+set -euo pipefail
+sdk_dir=$1
+shift
+cd "$sdk_dir"
+exec ./build.sh "$@"
+REMOTE_SCRIPT
+}
+
 linux() {
     local linux_images_dir="${PLATFORM_IMAGES_DIR}/linux"
 
@@ -45,8 +87,8 @@ linux() {
     fi
 
     # Since the Linux SDK from Rockchip is managed by a large repository using repo, and manufacturers usually do not provide online repositories (typically only compressed packages), we log in to a prepared SDK server via SSH for building.
-    REMOTE_HOST="10.3.10.194"
-    REMOTE_DIR="/share/guest-images/evm3588_linux_sdk_v1.0.3"
+    REMOTE_HOST="${EVM3588_REMOTE_HOST:-10.3.10.194}"
+    REMOTE_DIR="${EVM3588_SDK_DIR:-/share/guest-images/evm3588_linux_sdk_v1.0.3}"
 
     # Determine local IP addresses (IPv4) to detect if we are on REMOTE_HOST.
     # We collect all non-loopback IPv4 addresses assigned to the host.
@@ -62,8 +104,8 @@ linux() {
 
     if [[ "$@" != *"clean"* ]]; then
         if $is_remote; then
-            info "Building remotely via SSH：ssh ${REMOTE_HOST} cd '${REMOTE_DIR}' && ./build.sh $@"
-            ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && ./build.sh $@"
+            info "Building EVM3588 SDK remotely via SSH: ${REMOTE_HOST}:${REMOTE_DIR}"
+            run_evm3588_remote_sdk "$REMOTE_HOST" "$REMOTE_DIR" "$@"
 
             info "Copying build artifacts: -> $linux_images_dir"
             mkdir -p "${linux_images_dir}"
@@ -77,10 +119,10 @@ linux() {
         else
             info "Detected REMOTE_HOST ($REMOTE_HOST) is the current machine; building locally in ${REMOTE_DIR}"
             if [[ -d "$REMOTE_DIR" ]]; then
-                (cd "$REMOTE_DIR" && ./build.sh $@)
+                run_evm3588_sdk "$REMOTE_DIR" "$@"
             else
                 info "Local REMOTE_DIR ${REMOTE_DIR} not found; running ./build.sh here as fallback"
-                ./build.sh $@
+                run_evm3588_sdk . "$@"
             fi
 
             info "Copying build artifacts: -> $linux_images_dir"
@@ -123,6 +165,8 @@ arceos() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    source "${SCRIPT_DIR}/../lib/platform-log.sh"
+    platform_log_init "$@"
     cmd="${1:-}"
     if [[ "${cmd}" =~ ^(all|clean)$ ]]; then
         LOG_CREATE_DEFAULT_FILE="${LOG_CREATE_DEFAULT_FILE:-0}"

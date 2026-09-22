@@ -4,7 +4,11 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    source "${ROOT_DIR}/scripts/lib/platform-graph-entry.sh"
+fi
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 # Repository and directory configuration
 LINUX_REPO_URL=""
@@ -66,6 +70,60 @@ apply_patches_remote() {
     done
 }
 
+apply_patches_local_sdk() (
+    local patch_dir="$1"
+    local sdk_dir="$2"
+    local trusted_sdk="/share/guest-images/rdk_s100p"
+    local resolved_sdk patch_file base applied plevel
+
+    resolved_sdk=$(realpath -e -- "$sdk_dir") || {
+        error "RDK S100P SDK path does not exist: $sdk_dir"
+        exit 1
+    }
+    if [[ "$resolved_sdk" != "$trusted_sdk" ]]; then
+        error "Refusing to patch untrusted RDK S100P SDK path: $resolved_sdk"
+        exit 1
+    fi
+
+    shopt -s nullglob
+    local patch_files=("$patch_dir"/*.patch "$patch_dir"/*.diff)
+    info "Found ${#patch_files[@]} RDK S100P SDK patch file(s)"
+    mkdir -p "$resolved_sdk/.patch_stamps"
+    pushd "$resolved_sdk" >/dev/null
+    for patch_file in "${patch_files[@]}"; do
+        base=$(basename -- "$patch_file")
+        applied=0
+        if git apply --reverse --check "$patch_file" >/dev/null 2>&1; then
+            info "[SKIP] $base (already applied)"
+            applied=1
+        elif git apply --check "$patch_file" >/dev/null 2>&1; then
+            git apply "$patch_file"
+            info "[APPLY] $base (git apply)"
+            applied=1
+        else
+            for plevel in 1 0; do
+                if patch --batch -R -p"$plevel" --dry-run <"$patch_file" >/dev/null 2>&1; then
+                    info "[SKIP] $base (already applied, -p$plevel)"
+                    applied=1
+                    break
+                fi
+                if patch --batch -p"$plevel" --dry-run <"$patch_file" >/dev/null 2>&1; then
+                    patch --batch -p"$plevel" <"$patch_file"
+                    info "[APPLY] $base (patch -p$plevel)"
+                    applied=1
+                    break
+                fi
+            done
+        fi
+        if ((applied == 0)); then
+            error "Cannot verify or apply RDK S100P SDK patch: $base"
+            exit 1
+        fi
+        : >"$resolved_sdk/.patch_stamps/${base}.applied"
+    done
+    popd >/dev/null
+)
+
 # Output help information
 usage() {
     printf 'Build supported OS for RDK S100P development board with rootfs support\n'
@@ -98,8 +156,8 @@ linux() {
     fi
 
     # RDK S100P SDK is located at /share/guest-images/rdk_s100p
-    REMOTE_HOST="10.3.10.194"
-    REMOTE_DIR="/share/guest-images/rdk_s100p"
+    REMOTE_HOST="${RDK_S100P_REMOTE_HOST:-10.3.10.194}"
+    REMOTE_DIR="${RDK_S100P_SDK_DIR:-/share/guest-images/rdk_s100p}"
     BOOTLOADER_DIR="${REMOTE_DIR}/source/bootloader"
     KERNEL_DTB_REL="out/build/kernel/arch/arm64/boot/dts/hobot/rdk-s100p-v1p0.dtb"
 
@@ -143,7 +201,7 @@ linux() {
             info "Detected REMOTE_HOST ($REMOTE_HOST) is the current machine; building locally in ${REMOTE_DIR}"
             if [[ -d "$REMOTE_DIR" ]]; then
                 # Apply patches before build (locally)
-                apply_patches "${LINUX_PATCH_DIR}" "${REMOTE_DIR}"
+                apply_patches_local_sdk "${LINUX_PATCH_DIR}" "${REMOTE_DIR}"
                 
                 # Build kernel
                 info "Building kernel locally"
@@ -201,6 +259,8 @@ arceos() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    source "${SCRIPT_DIR}/../lib/platform-log.sh"
+    platform_log_init "$@"
     cmd="${1:-}"
     if [[ "${cmd}" =~ ^(all|clean)$ ]]; then
         LOG_CREATE_DEFAULT_FILE="${LOG_CREATE_DEFAULT_FILE:-0}"

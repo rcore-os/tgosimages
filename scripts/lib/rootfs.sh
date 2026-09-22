@@ -44,6 +44,26 @@ _rootfs_run_tool() {
     return "$status"
 }
 
+rootfs_normalize_tree_seconds() {
+    local tree="$1" path atime mtime inventory
+    inventory=$(mktemp) || return 1
+    if ! find -P "$tree" -depth -print0 >"$inventory"; then
+        rm -f -- "$inventory"
+        return 1
+    fi
+    while IFS= read -r -d '' path; do
+        read -r atime mtime < <(stat -c '%X %Y' -- "$path") || { rm -f -- "$inventory"; return 1; }
+        if [[ -L $path ]]; then
+            touch -h -a -d "@$atime" "$path" || { rm -f -- "$inventory"; return 1; }
+            touch -h -m -d "@$mtime" "$path" || { rm -f -- "$inventory"; return 1; }
+        else
+            touch -a -d "@$atime" "$path" || { rm -f -- "$inventory"; return 1; }
+            touch -m -d "@$mtime" "$path" || { rm -f -- "$inventory"; return 1; }
+        fi
+    done <"$inventory"
+    rm -f -- "$inventory"
+}
+
 rootfs_stage_guest_tree() {
     local stage_dir="$1"
     local source_dir="$2"
@@ -61,6 +81,9 @@ rootfs_stage_guest_tree() {
     else
         cp -a "${source_dir}/." "${guest_dir}/"
     fi
+    # debugfs stores whole-second inode timestamps. This tree is a private
+    # staging copy, so normalize it without changing caller-owned artifacts.
+    rootfs_normalize_tree_seconds "$stage_dir"
 }
 
 rootfs_prepare_target() {
@@ -240,7 +263,7 @@ _rootfs_inject_tree_via_debugfs() (
     local -A captured_mode=() captured_uid=() captured_gid=() captured_atime=() captured_mtime=()
     local -A captured_identity=() checked_identity=() snapshot_keys=() snapshot_sizes=() snapshot_links=()
     local timestamp_text fraction atime_raw mtime_raw snapshot_path identity meta_index before_fields
-    local _rootfs_tool_transcript= injection_status content_commands metadata_commands export_commands links_count
+    local _rootfs_tool_transcript= injection_status content_commands metadata_commands mutation_commands export_commands links_count
 
     for tool in awk basename cat chmod cp debugfs dirname find getfacl getfattr grep head mkdir mktemp mv readlink rm sed sha256sum sort stat touch; do
         command -v "$tool" >/dev/null 2>&1 || {
@@ -445,16 +468,9 @@ _rootfs_inject_tree_via_debugfs() (
             fi
         fi
     done >>"$content_commands" || return 1
-    if [[ -s "$content_commands" ]]; then
-        # Retain the planned operations even if debugfs fails before reading
-        # its command file; the private command file is removed during cleanup.
-        printf 'rootfs: content batch commands\n' >>"$_rootfs_tool_transcript" || return 1
-        cat "$content_commands" >>"$_rootfs_tool_transcript" || return 1
-        _rootfs_run_tool 0 debugfs -w -f "$content_commands" "$image_path" >/dev/null || return 1
-    fi
-
     # Apply inode metadata only after all children and links have been created.
-    # Batch updates so all entries share one debugfs process and image open.
+    # Content and metadata are appended to one ordered command stream so the
+    # complete mutation shares one debugfs process and one image open.
     metadata_commands="$verify_dir/metadata.commands"
     for path in "${paths[@]}"; do
         rel=${path#"$snapshot/"}; target="/${rel}"
@@ -481,8 +497,14 @@ _rootfs_inject_tree_via_debugfs() (
             printf '%s\n' "set_inode_field ${quoted_target} links_count ${links_count}" || return 1
         fi
     done >"$metadata_commands" || return 1
-    if [[ -s "$metadata_commands" ]]; then
-        _rootfs_run_tool 0 debugfs -w -f "$metadata_commands" "$image_path" >/dev/null || return 1
+    mutation_commands="$verify_dir/mutation.commands"
+    cat "$content_commands" "$metadata_commands" >"$mutation_commands" || return 1
+    if [[ -s "$mutation_commands" ]]; then
+        # Retain the complete plan even if debugfs fails before reading all of
+        # it; semantic verification below remains authoritative.
+        printf 'rootfs: mutation batch commands\n' >>"$_rootfs_tool_transcript" || return 1
+        cat "$mutation_commands" >>"$_rootfs_tool_transcript" || return 1
+        _rootfs_run_tool 0 debugfs -w -f "$mutation_commands" "$image_path" >/dev/null || return 1
     fi
 
     # Verify a complete post-write manifest. This catches debugfs commands that

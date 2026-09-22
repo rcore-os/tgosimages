@@ -8,7 +8,8 @@ fi
 UTILS_CALLER_SOURCE="${BASH_SOURCE[1]:-${0:-script}}"
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 script_log_info() {
     local caller_dir
@@ -42,7 +43,9 @@ new_log_dir() {
     local action="$3"
     local log_root
 
-    if [[ -n "${LOG_DIR:-}" ]]; then
+    if [[ -n "${PLATFORM_LOG_RUN_DIR:-}" ]]; then
+        log_root="${PLATFORM_LOG_RUN_DIR}/steps"
+    elif [[ -n "${LOG_DIR:-}" ]]; then
         log_root="${LOG_DIR}"
     elif [[ -n "${category}" ]]; then
         log_root="${ROOT_DIR}/logs/${category}"
@@ -56,59 +59,36 @@ new_log_dir() {
     fi
 }
 
+# Help output should not create empty default logs.
+if [[ $UTILS_CALLER_SOURCE == "$0" ]]; then
+    for _log_arg in "$@"; do
+        case $_log_arg in help|-h|--help) LOG_CREATE_DEFAULT_FILE=0 ;; esac
+    done
+    unset _log_arg
+fi
+
 # Log file
 if [[ -z "${LOG_FILE:-}" && "${LOG_CREATE_DEFAULT_FILE:-1}" == "1" ]]; then
     IFS='|' read -r _ LOG_NAME LOG_ROOT < <(script_log_info)
     mkdir -p "${LOG_ROOT}"
     LOG_FILE="${LOG_ROOT}/${LOG_NAME}-$(date '+%Y%m%d-%H%M%S')-$$.log"
+    _log_created=1
 fi
 export LOG_FILE
 
+source "${SCRIPT_DIR}/log.sh"
 if [[ -n "${LOG_FILE:-}" && "${LOG_CAPTURE_STDIO:-1}" == "1" && -z "${LOG_STDIO_CAPTURED:-}" && "${LOG_TO_STDERR:-1}" == "1" ]]; then
     mkdir -p "$(dirname "${LOG_FILE}")"
     export LOG_STDIO_CAPTURED=1
-    exec > >(tee -a "${LOG_FILE}") 2>&1
+    exec > >(tee -a "${LOG_FILE}" | (unset LOG_STDIO_CAPTURED; log_render)) 2>&1
 fi
 
-# Logging function
-log() {
-    local timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-    if [[ "${LOG_TO_STDERR:-1}" == "1" ]]; then
-        printf "[%s] %s\n" "$timestamp" "$*" >&2
-    fi
-    if [[ -n "${LOG_FILE:-}" && (-z "${LOG_STDIO_CAPTURED:-}" || "${LOG_TO_STDERR:-1}" != "1") ]]; then
-        mkdir -p "$(dirname "${LOG_FILE}")"
-        echo "[$timestamp] $*" >> "${LOG_FILE}"
-    fi
-}
-
-# Verbose logging (only outputs when VERBOSE=1)
-vlog() {
-    if [[ ${VERBOSE:-0} -eq 1 ]]; then
-        log "$@"
-    fi
-}
-
-# Error handling
-die() {
-    log "❌ [ERROR]: $1"
-    exit "${2:-1}"
-}
-
-# Success message
-success() {
-    log "✅ $1"
-}
-
-# Info message
-info() {
-    log "ℹ️  $1"
-}
-
-# Warning message
-warn() {
-    log "⚠️  $1"
-}
+source "${SCRIPT_DIR}/build-performance.sh"
+source "${SCRIPT_DIR}/build-workspace.sh"
+if [[ ${_log_created:-0} == 1 ]]; then
+    info "Log file: ${LOG_FILE}"
+    unset _log_created
+fi
 
 # Prepend the musl cross toolchain bin dir to PATH when <arch>-linux-musl-gcc is absent
 ensure_musl_toolchain() {
@@ -161,6 +141,69 @@ copy_optional() {
     fi
 }
 
+# Sequential platform, OS, and rootfs batches share one progress protocol.
+run_script_target() { bash "$0" "$@"; }
+run_sequential_targets() {
+    local category=$1 action=$2 callback=$3
+    shift 3
+    local targets=() target
+    while [[ $# -gt 0 && $1 != -- ]]; do
+        targets+=("$1")
+        shift
+    done
+    [[ ${1:-} == -- ]] || die "Missing run_sequential_targets separator"
+    shift
+    local log_dir summary_log target_log pid status started now next_heartbeat
+    local interval=${PARALLEL_HEARTBEAT_INTERVAL:-60}
+    [[ $interval =~ ^[1-9][0-9]*$ ]] || interval=60
+    log_dir=$(new_log_dir "$category" "${action// /-}" "")
+    mkdir -p "$log_dir"
+    summary_log=$log_dir/summary.log
+    batch_log "$summary_log" "START $action"
+    batch_log "$summary_log" "Log directory: $log_dir"
+    batch_log "$summary_log" "Targets: ${targets[*]}"
+    for target in "${targets[@]}"; do
+        target_log=$log_dir/$target.log
+        batch_log "$summary_log" "STARTED $target: log=$target_log"
+        started=$(date '+%s')
+        next_heartbeat=$((started + interval))
+        (
+            export PLATFORM_LOG_RUN_DIR="$log_dir"
+            export LOG_FILE="$target_log" LOG_STDIO_CAPTURED=1 LOG_TO_STDERR=1
+            "$callback" "$target" "$@"
+        ) >>"$target_log" 2>&1 &
+        pid=$!
+        while kill -0 "$pid" 2>/dev/null; do
+            now=$(date '+%s')
+            if ((now >= next_heartbeat)); then
+                batch_log "$summary_log" "RUNNING $target: $((now - started))s log=$target_log"
+                next_heartbeat=$((now + interval))
+            fi
+            sleep 1
+        done
+        status=0
+        wait "$pid" || status=$?
+        if ((status != 0)); then
+            batch_log "$summary_log" "FAILED $target: status=$status log=$target_log"
+            log_failure_tail "$summary_log" "$target" "$target_log"
+            batch_log "$summary_log" "COMPLETE $action: failed target=$target"
+            batch_log "$summary_log" "Summary log: $summary_log"
+            return 1
+        fi
+        batch_log "$summary_log" "DONE $target: log=$target_log"
+    done
+    batch_log "$summary_log" "COMPLETE $action: all targets finished successfully"
+    batch_log "$summary_log" "Summary log: $summary_log"
+}
+
+batch_log() {
+    local summary_log=$1
+    shift
+    local level=INFO
+    case "$*" in FAILED*|*'failed target='*) level=ERROR ;; DONE*|*'all targets finished successfully'*) level=SUCCESS ;; esac
+    log_summary "$summary_log" "$level" '%s' "$*"
+}
+
 run_parallel_functions() {
     local action="$1"
     shift
@@ -172,10 +215,13 @@ run_parallel_functions() {
     local status
     local failed=0
     local failed_steps=()
+    local unit=steps
+    local callback=${PARALLEL_STEP_CALLBACK:-}
+    [[ -z $callback ]] || unit=targets
     local category
     local script_name
     IFS='|' read -r category script_name _ < <(script_log_info)
-    local log_dir="${PARALLEL_LOG_DIR:-$(new_log_dir "${category}" "${script_name}" "${action}")}"
+    local log_dir="${PARALLEL_LOG_DIR:-$(new_log_dir "${category}" "${script_name}" "${action// /-}")}"
     local summary_log="${log_dir}/summary.log"
 
     while [[ "$#" -gt 0 && "$1" != "--" ]]; do
@@ -194,17 +240,18 @@ run_parallel_functions() {
     mkdir -p "$log_dir"
     : >"$summary_log"
 
-    printf '[%s] START %s\n' "$(date '+%F %T')" "$action" | tee -a "$summary_log"
-    printf '[%s] Log directory: %s\n' "$(date '+%F %T')" "$log_dir" | tee -a "$summary_log"
-    printf '[%s] Steps: %s\n' "$(date '+%F %T')" "${step_names[*]}" | tee -a "$summary_log"
-    printf '[%s] Arguments: %s\n' "$(date '+%F %T')" "${args[*]:-(none)}" | tee -a "$summary_log"
+    log_summary "$summary_log" INFO 'START %s' "$action"
+    log_summary "$summary_log" INFO 'Log directory: %s' "$log_dir"
+    log_summary "$summary_log" INFO 'Steps: %s' "${step_names[*]}"
+    log_summary "$summary_log" INFO 'Arguments: %s' "${args[*]:-(none)}"
 
     local pids=()
     local pid_steps=()
     local pid_logs=()
     local pid_status_files=()
     local pid_start_times=()
-    local now
+    local now child_index=0 child_jobs parallel_limit
+    parallel_limit=$(build_parallel_limit "${#steps[@]}") || return
     for step in "${steps[@]}"; do
         local step_name="$step"
         local step_command=()
@@ -217,32 +264,44 @@ run_parallel_functions() {
         local step_log="${log_dir}/${step_name}.log"
         local status_file="${log_dir}/${step_name}.status"
         rm -f "${status_file}"
-        printf '[%s] QUEUE %s: %s\n' "$(date '+%F %T')" "$step_name" "$step_log" | tee -a "$summary_log"
+        log_summary "$summary_log" INFO 'QUEUE %s: %s' "$step_name" "$step_log"
+        build_wait_slot "$parallel_limit" "${pids[@]}"
+        child_jobs=$(build_child_jobs "$parallel_limit" "$child_index") || return
+        child_index=$((child_index + 1))
         (
+            export TGOS_BUILD_JOB_BUDGET="$child_jobs"
             set +e
             {
-                printf '[%s] START %s\n' "$(date '+%F %T')" "$step_name"
+                log_format INFO 'START %s' "$step_name"
                 printf 'cwd=%s\n' "$(pwd)"
                 printf 'function='
-                if [[ "${use_common_args}" -eq 1 ]]; then
+                if [[ -n $callback ]]; then
+                    printf '%q ' "$callback" "$step" "${args[@]}"
+                elif [[ "${use_common_args}" -eq 1 ]]; then
                     printf '%q ' "$step" "${args[@]}"
                 else
                     printf '%q ' "${step_command[@]}"
                 fi
                 printf '\n\n'
                 LOG_FILE="$step_log"
-                LOG_TO_STDERR=0
-                export LOG_FILE LOG_TO_STDERR
-                if [[ "${use_common_args}" -eq 1 ]]; then
+                # stdout/stderr already point at the step file. Use that one
+                # append-only stream, including in nested scripts.
+                LOG_TO_STDERR=1
+                LOG_STDIO_CAPTURED=1
+                export LOG_FILE LOG_TO_STDERR LOG_STDIO_CAPTURED
+                unset PARALLEL_STEP_CALLBACK
+                if [[ -n $callback ]]; then
+                    ( set -e; "$callback" "$step" "${args[@]}" )
+                elif [[ "${use_common_args}" -eq 1 ]]; then
                     ( set -e; "$step" "${args[@]}" )
                 else
                     ( set -e; "${step_command[@]}" )
                 fi
                 status=$?
-                printf '\n[%s] END %s status=%s\n' "$(date '+%F %T')" "$step_name" "$status"
+                log_format INFO 'END %s status=%s' "$step_name" "$status"
                 printf '%s\n' "$status" >"${status_file}"
                 exit "$status"
-            } >"$step_log" 2>&1
+            } >>"$step_log" 2>&1
         ) &
         pid=$!
         pids+=("$pid")
@@ -250,7 +309,7 @@ run_parallel_functions() {
         pid_logs+=("$step_log")
         pid_status_files+=("$status_file")
         pid_start_times+=("$(date '+%s')")
-        printf '[%s] STARTED %s: pid=%s\n' "$(date '+%F %T')" "$step_name" "$pid" | tee -a "$summary_log"
+        log_summary "$summary_log" INFO 'STARTED %s: pid=%s' "$step_name" "$pid"
     done
 
     local remaining="${#pids[@]}"
@@ -260,21 +319,23 @@ run_parallel_functions() {
         local progressed=0
         for i in "${!pids[@]}"; do
             [[ -n "${pids[$i]:-}" ]] || continue
-            [[ -f "${pid_status_files[$i]}" ]] || continue
             pid="${pids[$i]}"
+            if [[ ! -f ${pid_status_files[$i]} ]] && kill -0 "$pid" 2>/dev/null; then
+                continue
+            fi
             step="${pid_steps[$i]}"
             step_log="${pid_logs[$i]}"
-            status="$(<"${pid_status_files[$i]}")"
-            wait "$pid" 2>/dev/null || true
+            build_reap_task "$pid" "${pid_status_files[$i]}" status
             rm -f "${pid_status_files[$i]}"
             unset 'pids[i]'
             progressed=1
             if [[ "${status}" -eq 0 ]]; then
-                printf '[%s] DONE %s: log=%s\n' "$(date '+%F %T')" "$step" "$step_log" | tee -a "$summary_log"
+                log_summary "$summary_log" SUCCESS 'DONE %s: log=%s' "$step" "$step_log"
             else
                 failed=1
                 failed_steps+=("$step")
-                printf '[%s] FAILED %s: status=%s log=%s\n' "$(date '+%F %T')" "$step" "$status" "$step_log" | tee -a "$summary_log"
+                log_summary "$summary_log" ERROR 'FAILED %s: status=%s log=%s' "$step" "$status" "$step_log"
+                log_failure_tail "$summary_log" "$step" "$step_log"
             fi
             remaining=$((remaining - 1))
         done
@@ -286,7 +347,7 @@ run_parallel_functions() {
                 [[ -n "${pids[$i]:-}" ]] || continue
                 running+=("${pid_steps[$i]}:$((now - pid_start_times[$i]))s")
             done
-            printf '[%s] RUNNING %s: %s\n' "$(date '+%F %T')" "$action" "${running[*]}" | tee -a "$summary_log"
+            log_summary "$summary_log" INFO 'RUNNING %s: %s' "$action" "${running[*]}"
             next_heartbeat=$((now + heartbeat_interval))
         fi
 
@@ -295,22 +356,24 @@ run_parallel_functions() {
 
     if [[ "${PARALLEL_DEFER_COMPLETION:-0}" != "1" ]]; then
         if [[ "$failed" -eq 0 ]]; then
-            printf '[%s] COMPLETE %s: all steps finished successfully\n' "$(date '+%F %T')" "$action" | tee -a "$summary_log"
+            log_summary "$summary_log" SUCCESS 'COMPLETE %s: all %s finished successfully' "$action" "$unit"
         else
-            printf '[%s] COMPLETE %s: failed steps=%s\n' "$(date '+%F %T')" "$action" "${failed_steps[*]}" | tee -a "$summary_log"
+            log_summary "$summary_log" ERROR 'COMPLETE %s: failed %s=%s' "$action" "$unit" "${failed_steps[*]}"
         fi
-        printf '[%s] Summary log: %s\n' "$(date '+%F %T')" "$summary_log" | tee -a "$summary_log"
+        log_summary "$summary_log" INFO 'Summary log: %s' "$summary_log"
     fi
 
     return "$failed"
 }
 
 apply_patches() {
+    local LC_ALL=C
     local patch_dir="$1"
     local src_dir="$2"
+    build_assert_workspace_path "$src_dir" || return
 
     if [[ -z "$patch_dir" || -z "$src_dir" ]]; then
-        echo "[ERROR] apply_patches: patch_dir and src_dir cannot be empty!" >&2
+        error "apply_patches: patch_dir and src_dir cannot be empty!"
         return 1
     fi
 
@@ -319,6 +382,33 @@ apply_patches() {
         return 1
     fi
     
+    local patch_identity patch_manifest="${src_dir}/.patch_stamps/patch-set.sha256"
+    patch_identity=$(python3 "${TGOS_BUILD_LIB_DIR}/python/build_inputs.py" "$patch_dir") || return
+    if [[ -f $patch_manifest && $(<"$patch_manifest") != "$patch_identity" ]]; then
+        error "Patch set changed: prepare the source with checkout_ref before applying $patch_dir"
+        return 1
+    fi
+    local source_identity
+    if [[ -f $patch_manifest ]]; then
+        source_identity=$(python3 "${TGOS_BUILD_LIB_DIR}/python/build_inputs.py" --source "$src_dir") || return
+        if [[ -f ${src_dir}/.patch_stamps/source.sha256 &&
+              $(<"${src_dir}/.patch_stamps/source.sha256") == "$source_identity" ]]; then
+            info "PATCH CACHE HIT: verified ordered patch set and source state"
+            return 0
+        fi
+        error "Patched source changed: prepare it with checkout_ref before reapplying patches"
+        return 1
+    fi
+    # Old markers cannot silently survive removal of their patch files.
+    local old_stamp old_name
+    if [[ -d ${src_dir}/.patch_stamps ]]; then
+        while IFS= read -r -d '' old_stamp; do
+            old_name=${old_stamp##*/}
+            old_name=${old_name%.applied}
+            error "Unverified legacy patch marker $old_name: prepare the source with checkout_ref first"
+            return 1
+        done < <(find "${src_dir}/.patch_stamps" -maxdepth 1 -name '*.applied' -print0)
+    fi
     # Search patch directory
     if [[ ! -d "${patch_dir}" ]]; then
         log "[PATCH] Directory not found: ${patch_dir} (skip)"; return 0
@@ -341,9 +431,6 @@ apply_patches() {
         local base stamp type applied cid
         base=$(basename "$p")
         stamp=.patch_stamps/${base}.applied
-        if [[ -f "$stamp" ]]; then
-            log "[SKIP] $base (stamp exists)"; continue
-        fi
         type="diff"
         if grep -q '^From [0-9a-f]\{7,40\} ' "$p" 2>/dev/null && grep -q '^Subject:' "$p" 2>/dev/null; then
             type="mbox"
@@ -352,13 +439,13 @@ apply_patches() {
         applied=0
         if [[ $type == mbox ]]; then
             cid=$(grep -m1 '^From [0-9a-f]\{7,40\} ' "$p" | awk '{print $2}') || true
-            if [[ -n "$cid" ]] && git rev-list --all | grep -q "^$cid"; then
+            if [[ -n "$cid" ]] && git merge-base --is-ancestor "$cid" HEAD 2>/dev/null && git apply --reverse --check "$p" >/dev/null 2>&1; then
                 log "[SKIP] $base commit $cid already in history"; echo > "$stamp"; applied=1
             else
                 if git am --keep-cr < "$p" >>"${LOG_FILE:-/dev/null}" 2>&1; then
                     applied=1; echo > "$stamp"
                 else
-                    log "[WARN] git am failed; fallback to git apply path"; git am --abort || true
+                    warn "git am failed; fallback to git apply path"; git am --abort || true
                 fi
             fi
         fi
@@ -369,7 +456,7 @@ apply_patches() {
                 fi
             else
                 if git apply --reverse --check "$p" >/dev/null 2>&1; then
-                    log "[INFO] $base appears already applied (reverse check)"; echo > "$stamp"; applied=1
+                    info "$base appears already applied (reverse check)"; echo > "$stamp"; applied=1
                 fi
             fi
         fi
@@ -384,9 +471,12 @@ apply_patches() {
             done
         fi
         if [[ $applied -eq 0 ]]; then
-            log "[ERROR] Cannot apply $base"; popd >/dev/null; return 1
+            error "Cannot apply $base"; popd >/dev/null; return 1
         fi
     done
+    source_identity=$(python3 "${TGOS_BUILD_LIB_DIR}/python/build_inputs.py" --source "$src_dir") || { popd >/dev/null; return 1; }
+    printf '%s\n' "$source_identity" >.patch_stamps/source.sha256
+    printf '%s\n' "$patch_identity" >.patch_stamps/patch-set.sha256
     popd >/dev/null
     return 0
 }
@@ -394,29 +484,65 @@ apply_patches() {
 clone_repository() {
     local repo_url="$1"
     local src_dir="$2"
+    build_assert_workspace_path "$src_dir" || return
 
     if [[ -z "$repo_url" || -z "$src_dir" ]]; then
-        echo "[ERROR] clone_repository: repo_url and src_dir cannot be empty!" >&2
+        error "clone_repository: repo_url and src_dir cannot be empty!"
         return 1
     fi
 
     if [[ -d "${src_dir}/.git" ]]; then
-        echo "[SKIP] repo exists: ${src_dir}" >&2
+        info "SKIP: repo exists: ${src_dir}"
     else
-        echo "[CLONE] ${repo_url} -> ${src_dir}" >&2
-        git clone --depth=1 "${repo_url}" "${src_dir}"
+        info "CLONE: ${repo_url} -> ${src_dir}"
+        if [[ -n ${BUILD_SOURCE_CACHE_DIR:-} ]]; then
+            bash "$TGOS_BUILD_LIB_DIR/git-source-cache.sh" clone "$src_dir" "$repo_url"
+        else
+            git clone --depth=1 "${repo_url}" "${src_dir}"
+        fi
     fi
+}
+
+git_remove_stale_index_lock() {
+    local repo_path=$1 lock_path modified now
+    lock_path="$repo_path/.git/index.lock"
+    [[ -e $lock_path ]] || return 0
+    [[ -f $lock_path && ! -L $lock_path ]] || {
+        error "Refusing to remove unexpected Git index lock: $lock_path"
+        return 1
+    }
+    if command -v fuser >/dev/null 2>&1; then
+        if fuser -s "$lock_path" 2>/dev/null; then
+            error "Git index lock is still owned by a running process: $lock_path"
+            return 1
+        fi
+    else
+        modified=$(stat -c %Y -- "$lock_path") || return 1
+        now=$(date +%s) || return 1
+        ((now - modified >= 300)) || {
+            error "Git index lock may still be active: $lock_path"
+            return 1
+        }
+    fi
+    warn "Removing stale Git index lock: $lock_path"
+    rm -f -- "$lock_path"
 }
 
 checkout_ref() {
     # Usage: checkout_git_ref <repo_path> <ref>
     local repo_path="$1"
     local ref="$2"
+    build_assert_workspace_path "$repo_path" || return
     local fetch_attempt
     local target="$ref"
     if [ ! -d "$repo_path/.git" ]; then
-        echo "Error: $repo_path is not a git repository" >&2
+        error "$repo_path is not a git repository"
         return 1
+    fi
+    git_remove_stale_index_lock "$repo_path" || return
+    if [[ -n ${BUILD_SOURCE_CACHE_DIR:-} ]] && ! git -C "$repo_path" cat-file -e "${ref}^{tree}" 2>/dev/null; then
+        target=$(bash "$TGOS_BUILD_LIB_DIR/git-source-cache.sh" ref "$repo_path" "$ref") || return
+        ref=$target
     fi
     pushd "$repo_path" >/dev/null || return 1
     # Most repositories are cloned with --depth=1. Fetch only the requested ref
@@ -424,7 +550,7 @@ checkout_ref() {
     # rev-parse can succeed with only a commit object, so check the tree too.
     if ! git cat-file -e "${ref}^{tree}" >/dev/null 2>&1; then
         for fetch_attempt in 1 2 3; do
-            echo "[FETCH] Fetching ref ${ref} (attempt ${fetch_attempt}/3)"
+            info "FETCH: Fetching ref ${ref} (attempt ${fetch_attempt}/3)"
             git fetch --quiet --no-tags --depth=1 origin "$ref" || true
             if git cat-file -e "${ref}^{tree}" >/dev/null 2>&1; then
                 break
@@ -437,7 +563,7 @@ checkout_ref() {
         done
     fi
     if ! git cat-file -e "${target}^{tree}" >/dev/null 2>&1; then
-        echo "[FETCH] Ref not found in shallow clone, deepening history..."
+        info "FETCH: Ref not found in shallow clone, deepening history..."
         for fetch_attempt in 1 2 3; do
             git fetch --quiet --no-tags --deepen=50000 origin || true
             if git cat-file -e "${ref}^{tree}" >/dev/null 2>&1; then
@@ -452,13 +578,13 @@ checkout_ref() {
         done
     fi
     if ! git cat-file -e "${target}^{tree}" >/dev/null 2>&1; then
-        echo "Error: Branch, tag, or commit not found: $ref" >&2
+        error "Branch, tag, or commit not found: $ref"
         popd >/dev/null
         return 2
     fi
     # Try checkout; if it fails (e.g. "unable to read tree"), unshallow and retry
     if ! git checkout --quiet --force "$target" 2>&1; then
-        echo "[FETCH] Checkout failed in shallow clone, fetching requested ref again..."
+        info "FETCH: Checkout failed in shallow clone, fetching requested ref again..."
         git fetch --quiet --no-tags --depth=1 origin "$ref" || true
         git checkout --quiet --force "$target"
     fi

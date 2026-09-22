@@ -33,7 +33,7 @@ jobs:
           ./build.sh platform orangepi-5-plus starry
 
       - name: Verify Alpine LTP images
-        run: scripts/tests/alpine-ltp-content.sh
+        run: scripts/tests/rootfs/alpine-ltp-content.sh
         
       - name: Prepare release files
         id: release

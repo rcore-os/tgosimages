@@ -396,7 +396,8 @@ rootfs_compose_disk_guest() (
     local base=$1 platform_source=$2 guest_input=$3 arch=$4 rootfs_type=$5
     local guest_free_value=$6 outer_free_value=$7 output=$8
     local guest_mode=${9:-overlay}
-    local output_dir output_base guest_free outer_free nested_name root_info
+    local output_dir output_base work_dir= guest_free outer_free nested_name root_info guest_count
+    local capacity_stats nested_bytes nested_inodes guest_image_bytes
     local partno start size label guest_bytes guest_inodes base_lock output_lock actual_guest_free
     local lock_fd1 lock_fd2 stage=validate-inputs status
     local base_snapshot= platform_snapshot= guest_overlay= guest_image= outer_partition=
@@ -418,6 +419,7 @@ rootfs_compose_disk_guest() (
         [[ -z $empty_overlay ]] || rm -rf -- "$empty_overlay"
         [[ -z $outer_disk ]] || rm -f -- "$outer_disk"
         [[ -z $validation_partition ]] || rm -f -- "$validation_partition"
+        [[ -z $work_dir ]] || rm -rf -- "$work_dir"
         if [[ -n ${lock_fd2:-} ]]; then build_lock_release "$lock_fd2" 2>/dev/null || true; fi
         if [[ -n ${lock_fd1:-} ]]; then build_lock_release "$lock_fd1" 2>/dev/null || true; fi
         exit "$status"
@@ -425,7 +427,7 @@ rootfs_compose_disk_guest() (
     trap cleanup_disk_compose EXIT
     trap 'exit 130' INT TERM
 
-    _rootfs_disk_require_tools basename cp dd debugfs dirname dumpe2fs e2fsck find \
+    _rootfs_disk_require_tools basename cp dd debugfs df dirname dumpe2fs e2fsck find \
         flock mkdir mktemp mv python3 realpath resize2fs rm sfdisk stat touch truncate || return 1
     [[ -f $base && ! -L $base ]] || { _rootfs_disk_error "base disk not found: $base"; return 1; }
     [[ -d $platform_source ]] || {
@@ -443,6 +445,7 @@ rootfs_compose_disk_guest() (
     output_dir=$(dirname -- "$output")
     output_base=$(basename -- "$output")
     mkdir -p -- "$output_dir" || return 1
+    rootfs_create_staging_dir "$output" "disk-${arch}-${rootfs_type}" work_dir || return 1
     if _rootfs_paths_alias "$base" "$output"; then
         _rootfs_disk_error "base and output resolve to the same file: $base"
         return 1
@@ -463,8 +466,8 @@ rootfs_compose_disk_guest() (
     fi
 
     stage=snapshot-inputs
-    base_snapshot=$(mktemp "${output_dir}/.${output_base}.base.XXXXXX") || return 1
-    platform_snapshot=$(mktemp -d "${output_dir}/.${output_base}.platform.XXXXXX") || return 1
+    base_snapshot=$(mktemp "${work_dir}/${output_base}.base.XXXXXX") || return 1
+    platform_snapshot=$(mktemp -d "${work_dir}/${output_base}.platform.XXXXXX") || return 1
     cp --preserve=all --reflink=auto --sparse=always -- "$base" "$base_snapshot" || return 1
     cp -a --reflink=auto -- "$platform_source/." "$platform_snapshot/" || return 1
     touch -a -r "$base_snapshot" "$base" || return 1
@@ -472,12 +475,12 @@ rootfs_compose_disk_guest() (
     _rootfs_builder_normalize_overlay_seconds "$platform_snapshot" || return 1
     _rootfs_validate_payload_tree "$platform_snapshot" || return 1
     if [[ $guest_mode == overlay ]]; then
-        guest_overlay=$(mktemp -d "${output_dir}/.${output_base}.guest-overlay.XXXXXX") || return 1
+        guest_overlay=$(mktemp -d "${work_dir}/${output_base}.guest-overlay.XXXXXX") || return 1
         cp -a --reflink=auto -- "$guest_input/." "$guest_overlay/" || return 1
         _rootfs_disk_restore_tree_atimes "$guest_input" "$guest_overlay" || return 1
         _rootfs_validate_payload_tree "$guest_overlay" || return 1
     else
-        guest_image=$(mktemp "${output_dir}/.${output_base}.guest.XXXXXX") || return 1
+        guest_image=$(mktemp "${work_dir}/${output_base}.guest.XXXXXX") || return 1
         cp --preserve=all --reflink=auto --sparse=always -- "$guest_input" "$guest_image" || return 1
         touch -a -r "$guest_image" "$guest_input" || return 1
         _rootfs_check_clean "$guest_image" || return 1
@@ -492,12 +495,12 @@ rootfs_compose_disk_guest() (
     root_info=$(rootfs_disk_find_root_partition "$base_snapshot") || return 1
     read -r partno start size label <<<"$root_info"
     nested_name="rootfs-${arch}-${rootfs_type}.img"
-    empty_overlay=$(mktemp -d "${output_dir}/.${output_base}.empty.XXXXXX") || return 1
+    empty_overlay=$(mktemp -d "${work_dir}/${output_base}.empty.XXXXXX") || return 1
     _rootfs_validate_protected_outer_path "$platform_snapshot" "$empty_overlay" "$nested_name" || return 1
 
     if [[ $guest_mode == overlay ]]; then
         stage=extract-clean-guest
-        guest_image=$(mktemp "${output_dir}/.${output_base}.guest.XXXXXX") || return 1
+        guest_image=$(mktemp "${work_dir}/${output_base}.guest.XXXXXX") || return 1
         rm -f -- "$guest_image"
         rootfs_disk_extract_partition "$base_snapshot" "$start" "$size" "$guest_image" || return 1
         _rootfs_check_clean "$guest_image" || return 1
@@ -514,14 +517,18 @@ rootfs_compose_disk_guest() (
     fi
 
     stage=stage-nested-and-platform-payload
-    nested_stage=$(mktemp -d "${output_dir}/.${output_base}.nested.XXXXXX") || return 1
+    nested_stage=$(mktemp -d "${work_dir}/${output_base}.nested.XXXXXX") || return 1
     touch -d "@$(stat -c %Y -- "$base_snapshot")" "$guest_image" || return 1
-    cp --preserve=mode,ownership,timestamps --reflink=auto --sparse=always -- \
-        "$guest_image" "$nested_stage/$nested_name" || return 1
+    _rootfs_stage_guest_images "$guest_image" "$nested_stage" "$nested_name" || return 1
     _rootfs_validate_payload_tree "$nested_stage" || return 1
+    capacity_stats=$(rootfs_overlay_capacity_stats "$nested_stage") || return 1
+    read -r nested_bytes nested_inodes <<<"$capacity_stats"
+    guest_count=$(_rootfs_guest_count) || return 1
+    guest_image_bytes=$(stat -c %s -- "$guest_image") || return 1
+    info "Composing ${guest_count} guest images: each=${guest_image_bytes}B staged=${nested_bytes}B outer-reserve=${outer_free}B"
 
     stage=extract-outer-root
-    outer_partition=$(mktemp "${output_dir}/.${output_base}.outer-root.XXXXXX") || return 1
+    outer_partition=$(mktemp "${work_dir}/${output_base}.outer-root.XXXXXX") || return 1
     rm -f -- "$outer_partition"
     rootfs_disk_extract_partition "$base_snapshot" "$start" "$size" "$outer_partition" || return 1
     _rootfs_check_clean "$outer_partition" || return 1
@@ -533,18 +540,18 @@ rootfs_compose_disk_guest() (
     _rootfs_check_clean "$outer_partition" || return 1
 
     stage=replace-outer-partition
-    outer_disk=$(mktemp "${output_dir}/.${output_base}.disk.XXXXXX") || return 1
+    outer_disk=$(mktemp "${work_dir}/${output_base}.disk.XXXXXX") || return 1
     cp --preserve=all --reflink=auto --sparse=always -- "$base_snapshot" "$outer_disk" || return 1
     rootfs_disk_replace_partition "$outer_disk" "$partno" "$start" "$size" "$outer_partition" || return 1
 
     stage=validate-output
     root_info=$(rootfs_disk_find_root_partition "$outer_disk") || return 1
     read -r _ start size _ <<<"$root_info"
-    validation_partition=$(mktemp "${output_dir}/.${output_base}.validation.XXXXXX") || return 1
+    validation_partition=$(mktemp "${work_dir}/${output_base}.validation.XXXXXX") || return 1
     rm -f -- "$validation_partition"
     rootfs_disk_extract_partition "$outer_disk" "$start" "$size" "$validation_partition" || return 1
     _rootfs_check_clean "$validation_partition" || return 1
-    _rootfs_debugfs_stat "$validation_partition" "/guest/$nested_name" required >/dev/null || return 1
+    _rootfs_validate_guest_image_set "$validation_partition" "$nested_name" || return 1
 
     stage=publish-output
     touch -r "$base_snapshot" "$outer_disk" || return 1
@@ -561,6 +568,8 @@ rootfs_compose_disk_guest() (
     nested_stage=
     empty_overlay=
     validation_partition=
+    rm -rf -- "$work_dir"
+    work_dir=
     build_lock_release "$lock_fd2"
     build_lock_release "$lock_fd1"
     trap - EXIT INT TERM

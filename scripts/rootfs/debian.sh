@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 source "${SCRIPT_DIR}/../lib/utils.sh"
 source "${SCRIPT_DIR}/../lib/rootfs-compose.sh"
@@ -58,8 +59,8 @@ debian_usage() {
     printf '  --output <path>               Output image path for single-arch build\n'
     printf '  --guest <dir>                 Guest directory to copy into rootfs /guest\n'
     printf '  --outer-tests <list>          Tests installed in the outer image (default: none)\n'
-    printf '  --guest-tests <list>          Tests installed in the nested guest image (default from rootfs-tests)\n'
-    printf '  --guest-free-size <size>      Free space reserved in nested guest image (default: 256M)\n'
+    printf '  --guest-tests <list>          Tests installed identically in all guest images (default from rootfs-test-plugins)\n'
+    printf '  --guest-free-size <size>      Free space reserved in each guest image (default: 256M)\n'
     printf '  --outer-free-size <size>      Free space reserved in outer image (default: 256M)\n'
     printf '  --img-size <size>             Output image size (default: 1G)\n'
     printf '  --debian <suite>              Debian suite (default: trixie)\n'
@@ -208,16 +209,20 @@ debian_init_config() {
 }
 
 debian_output_mount_arg() {
-    printf 'type=bind,src=%s,dst=/output\n' "$(dirname -- "$DEBIAN_ROOTFS_IMG")"
+    local output=${1:-$DEBIAN_ROOTFS_IMG} parent
+    parent=$(dirname -- "$output") || return 1
+    [[ $parent != *,* ]] || die "Debian staging parent cannot contain a comma: $parent"
+    printf 'type=bind,src=%s,dst=/output\n' "$parent"
 }
 
 debian_pack_rootfs_volume() {
-    local volume_name=$1 debian_rootfs_tmp=$2 image_name
+    local volume_name=$1 debian_rootfs_tmp=$2 image_name output_mount
     image_name=$(basename -- "$debian_rootfs_tmp")
+    output_mount=$(debian_output_mount_arg "$debian_rootfs_tmp") || return 1
     docker run --rm --privileged \
         --platform "${DEBIAN_DOCKER_PLATFORM}" \
         -v "${volume_name}:/rootfs:ro" \
-        --mount "$(debian_output_mount_arg)" \
+        --mount "$output_mount" \
         "${DEBIAN_DOCKER_IMAGE}" \
         bash -lc '
             set -Eeuo pipefail
@@ -378,9 +383,13 @@ EOF_RESOLV
         "
 
     info "Packing ext4 image ${DEBIAN_ROOTFS_IMG} (${DEBIAN_IMG_SIZE})..."
-    local debian_rootfs_tmp="${DEBIAN_ROOTFS_IMG}.base.tmp.$$"
+    local staging_dir debian_rootfs_tmp composed_img publish_fd=
+    rootfs_create_staging_dir "$DEBIAN_ROOTFS_IMG" "debian-${DEBIAN_ARCH}" staging_dir
+    debian_rootfs_tmp="${staging_dir}/rootfs-${DEBIAN_ARCH}-debian.base.img"
+    composed_img="${staging_dir}/rootfs-${DEBIAN_ARCH}-debian.composed.img"
     cleanup_rootfs_tmp() {
-        rm -f "${debian_rootfs_tmp}" "${debian_rootfs_tmp}.lock"
+        rm -rf -- "$staging_dir"
+        [[ -z ${publish_fd:-} ]] || build_lock_release "$publish_fd" 2>/dev/null || true
         cleanup_volume
     }
     trap cleanup_rootfs_tmp EXIT
@@ -388,8 +397,12 @@ EOF_RESOLV
     debian_pack_rootfs_volume "$volume_name" "$debian_rootfs_tmp"
     rootfs_compose_test_images "${debian_rootfs_tmp}" "${DEBIAN_OUTER_TEST_OVERLAY}" \
         "${DEBIAN_GUEST_TEST_OVERLAY}" "${DEBIAN_OUTER_GUEST_DIR}" "${DEBIAN_ARCH}" debian \
-        "${DEBIAN_GUEST_FREE_SIZE}" "${DEBIAN_OUTER_FREE_SIZE}" "${DEBIAN_ROOTFS_IMG}"
-    rm -f -- "${debian_rootfs_tmp}" "${debian_rootfs_tmp}.lock"
+        "${DEBIAN_GUEST_FREE_SIZE}" "${DEBIAN_OUTER_FREE_SIZE}" "$composed_img"
+    build_lock_acquire publish_fd "${DEBIAN_ROOTFS_IMG}.lock"
+    mv -T -- "$composed_img" "$DEBIAN_ROOTFS_IMG"
+    build_lock_release "$publish_fd"
+    publish_fd=
+    rm -rf -- "$staging_dir"
 
     trap - EXIT
     cleanup_volume
@@ -464,10 +477,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                 die "--output can only be used for a single architecture build"
             fi
 
-            for arch in "${DEBIAN_ARCHES[@]}"; do
-                DEBIAN_ARCH="${arch}"
+            debian_arch_target() {
+                DEBIAN_ARCH=$1
                 debian
-            done
+            }
+            run_sequential_targets rootfs "debian all" debian_arch_target "${DEBIAN_ARCHES[@]}" --
             ;;
         clean)
             debian_parse_args "$@"

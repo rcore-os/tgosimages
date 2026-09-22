@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 source "${SCRIPT_DIR}/../lib/utils.sh"
 source "${SCRIPT_DIR}/../lib/rootfs-compose.sh"
@@ -45,8 +46,8 @@ mkfs_usage() {
     printf '  --out_dir <dir>               Output directory (default images: IMAGES/rootfs/{initramfs-<arch>-busybox.cpio.gz,rootfs-<arch>-busybox.img})\n'
     printf '  --guest <dir>                 Guest directory to copy into rootfs /guest\n'
     printf '  --outer-tests <list>          Tests installed in the outer image (default: none)\n'
-    printf '  --guest-tests <list>          Tests installed in the nested guest image (default from rootfs-tests)\n'
-    printf '  --guest-free-size <size>      Free space reserved in nested guest image (default: 256M)\n'
+    printf '  --guest-tests <list>          Tests installed identically in all guest images (default from rootfs-test-plugins)\n'
+    printf '  --guest-free-size <size>      Free space reserved in each guest image (default: 256M)\n'
     printf '  --outer-free-size <size>      Free space reserved in outer image (default: 256M)\n'
     printf '\n'
     printf 'Environment Variables:\n'
@@ -141,18 +142,18 @@ mkfs_build_busybox() {
     fi
     pushd "${BUSYBOX_BUILD_SRC_DIR:-$BUSYBOX_SRC_DIR}" >/dev/null
     info "Cleaning: make distclean"
-    make distclean
+    build_make distclean
 
     info "Configuring: make defconfig"
-    make defconfig
+    build_make defconfig
 
-    info "Building: make -j$(nproc) CROSS_COMPILE=$cross"
+    info "Building: make -j$(build_jobs) CROSS_COMPILE=$cross"
     sed -i 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
     sed -i 's/^CONFIG_TC=y$/# CONFIG_TC is not set/' .config
     # BusyBox defconfig may enable x86 SHA-NI acceleration, which breaks
     # non-x86 cross builds because the matching assembly implementation is not used.
     sed -i 's/^CONFIG_SHA1_HWACCEL=y$/# CONFIG_SHA1_HWACCEL is not set/' .config
-    make -j$(nproc) CROSS_COMPILE="$cross"
+    build_make CROSS_COMPILE="$cross"
     popd >/dev/null
 }
 
@@ -160,8 +161,12 @@ mkfs_pair_checkpoint() { :; }
 
 mkfs_publish_pair() (
     local init_candidate=$1 init_final=$2 image_candidate=$3 image_final=$4
-    local lock_path="${init_final}.pair.lock" init_backup="${init_final}.old.$$" image_backup="${image_final}.old.$$"
+    local backup_dir=${5:-$(dirname -- "$init_final")}
+    local lock_path="${init_final}.pair.lock"
+    local init_backup="${backup_dir}/.${init_final##*/}.old.$$"
+    local image_backup="${backup_dir}/.${image_final##*/}.old.$$"
     local init_old=0 image_old=0 init_new=0 image_new=0 committed=0 lock_fd status=0 pending_signal=0
+    mkdir -p -- "$backup_dir" || return 1
     trap 'build_lock_release_all' EXIT
     build_lock_acquire lock_fd "$lock_path" || return 1
     # Signal handlers only record intent throughout the critical section. This
@@ -239,25 +244,35 @@ mkfs_publish_pair() (
 )
 
 mkfs_add_ext4_devices() {
-    local image=$1 commands spec device major minor expected output
+    local image=$1 commands verify_dir spec device major minor expected output
+    local -a device_queries=()
+    local -A device_stats=()
     commands=$(mktemp)
-    trap 'rm -f -- "$commands"' RETURN
+    verify_dir=$(mktemp -d)
+    trap 'rm -f -- "$commands"; rm -rf -- "$verify_dir"' RETURN
     printf '%s\n' 'cd /dev' \
         'mknod console c 5 1' 'mknod null c 1 3' 'mknod zero c 1 5' \
         'mknod tty c 5 0' 'mknod ttyS0 c 4 64' >"$commands"
-    LC_ALL=C debugfs -w -f "$commands" "$image" >/dev/null 2>&1 || return 1
     for spec in 'console 5 1' 'null 1 3' 'zero 1 5' 'tty 5 0' 'ttyS0 4 64'; do
         read -r device major minor <<<"$spec"
-        LC_ALL=C debugfs -w -R "set_inode_field /dev/$device mode 020600" "$image" >/dev/null 2>&1 || return 1
-        LC_ALL=C debugfs -w -R "set_inode_field /dev/$device uid 0" "$image" >/dev/null 2>&1 || return 1
-        LC_ALL=C debugfs -w -R "set_inode_field /dev/$device gid 0" "$image" >/dev/null 2>&1 || return 1
-        output=$(LC_ALL=C debugfs -R "stat /dev/$device" "$image" 2>&1) || return 1
+        printf '%s\n' \
+            "set_inode_field /dev/$device mode 020600" \
+            "set_inode_field /dev/$device uid 0" \
+            "set_inode_field /dev/$device gid 0" >>"$commands" || return 1
+        device_queries+=("/dev/$device")
+    done
+    LC_ALL=C debugfs -w -f "$commands" "$image" >/dev/null 2>&1 || return 1
+    _rootfs_debugfs_stat_many "$image" "$verify_dir" device_queries device_stats required || return 1
+    for spec in 'console 5 1' 'null 1 3' 'zero 1 5' 'tty 5 0' 'ttyS0 4 64'; do
+        read -r device major minor <<<"$spec"
+        output=${device_stats["/dev/$device"]}
         expected=$(printf '%02x:%02x' "$major" "$minor")
         grep -q '^Inode: .*Type: character special .*Mode:  *0600' <<<"$output" || return 1
         grep -Eq '^User: +0 +Group: +0 ' <<<"$output" || return 1
         grep -Fqi "(hex $expected)" <<<"$output" || return 1
     done
     rm -f -- "$commands"
+    rm -rf -- "$verify_dir"
     trap - RETURN
 }
 
@@ -326,11 +341,12 @@ mkfs_pack_fs() {
     OUTPUT_DIR="${MKFS_OUT_DIR:-${ROOT_DIR}/IMAGES/rootfs}"
     mkdir -p "$OUTPUT_DIR"
     local abs_out="$OUTPUT_DIR/initramfs-${MKFS_ARCH}-busybox.cpio.gz"
-    local abs_tmp="${abs_out}.publish.$$"
     local img_out="$OUTPUT_DIR/rootfs-${MKFS_ARCH}-busybox.img"
-    local img_tmp="${img_out}.base.tmp.$$"
-    local img_publish="${img_out}.publish.$$"
-    local old_pwd
+    local staging_dir abs_tmp img_tmp img_publish old_pwd
+    rootfs_create_staging_dir "$img_out" "busybox-${MKFS_ARCH}" staging_dir
+    abs_tmp="${staging_dir}/initramfs-${MKFS_ARCH}-busybox.cpio.gz"
+    img_tmp="${staging_dir}/rootfs-${MKFS_ARCH}-busybox.base.img"
+    img_publish="${staging_dir}/rootfs-${MKFS_ARCH}-busybox.composed.img"
     
     # Convert guest directory to absolute path before changing directory
     if [[ -n "$MKFS_GUEST_DIR" ]]; then
@@ -350,7 +366,8 @@ mkfs_pack_fs() {
                "${MKFS_CLEANUP_INITRAMFS_TMP:-}" \
                "${MKFS_CLEANUP_ROOTFS_TMP:-}" \
                "${img_publish:-}" \
-               "${composition_dir:-}"
+               "${composition_dir:-}" \
+               "${staging_dir:-}"
         [[ -z ${MKFS_CLEANUP_ROOTFS_TMP:-} ]] || rm -f -- "${MKFS_CLEANUP_ROOTFS_TMP}.lock"
         [[ -z ${img_publish:-} ]] || rm -f -- "${img_publish}.lock"
     }
@@ -429,7 +446,7 @@ mkfs_pack_fs() {
     dd if=/dev/zero of="$img_tmp" bs=1M count=$size_mb status=none
     mkfs.ext4 -q -F "$img_tmp"
     if ! command -v debugfs >/dev/null 2>&1; then
-        echo "Error: debugfs not found. Please install: sudo apt install e2fsprogs" >&2
+        error "debugfs not found. Please install: sudo apt install e2fsprogs"
         cd "$old_pwd"
         return 1
     fi
@@ -451,7 +468,7 @@ mkfs_pack_fs() {
         "$MKFS_GUEST_FREE_SIZE" "$MKFS_OUTER_FREE_SIZE" "$img_publish" || return 1
     # Pair publication is failure-safe for cooperating readers holding this
     # persistent lock; two path renames cannot be atomic to lock-free readers.
-    mkfs_publish_pair "$abs_tmp" "$abs_out" "$img_publish" "$img_out" || return 1
+    mkfs_publish_pair "$abs_tmp" "$abs_out" "$img_publish" "$img_out" "$staging_dir" || return 1
     rm -f -- "$img_tmp" "${img_tmp}.lock"
     echo "Minimal ramfs created: $abs_out"
     du -h "$abs_out" | awk '{print "Size: "$1}'
@@ -510,10 +527,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             ;;
         all)
             mkfs_parse_args "$@"
-            for arch in "${MKFS_ARCHES[@]}"; do
-                MKFS_ARCH="${arch}"
+            busybox_arch_target() {
+                MKFS_ARCH=$1
                 mkfs
-            done
+            }
+            run_sequential_targets rootfs "busybox all" busybox_arch_target "${MKFS_ARCHES[@]}" --
             ;;
         clean)
             mkfs_parse_args "$@"

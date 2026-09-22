@@ -1,5 +1,7 @@
 **/IMAGES/
 **/build/
+!scripts/tests/build/
+!scripts/tests/build/**
 **/release/
 **/logs/
 **/tmp/
@@ -10,6 +12,7 @@
 # Zephyr Twister host-test reports and build trees.
 /twister-out*/
 /.worktrees/
+/.claude/
 
 /target
 .axconfig.toml

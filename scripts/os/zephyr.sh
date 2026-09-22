@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 source "${SCRIPT_DIR}/../lib/utils.sh"
 
@@ -161,19 +162,7 @@ prepare_zephyr_source() {
         info "Using existing Zephyr source tree at ${ZEPHYR_SRC_DIR}"
     fi
 
-    if [[ -d "${ZEPHYR_SRC_DIR}/.patch_stamps" ]] && find "${ZEPHYR_SRC_DIR}/.patch_stamps" -type f | read -r; then
-        info "Detected previously applied Zephyr patches, reusing current source state"
-    else
-        if [[ -n "${ZEPHYR_REF}" ]]; then
-            info "Checking out Zephyr ref ${ZEPHYR_REF}"
-            checkout_ref "${ZEPHYR_SRC_DIR}" "${ZEPHYR_REF}"
-        fi
-
-        if [[ -n "${ZEPHYR_PATCH_DIR}" && -d "${ZEPHYR_PATCH_DIR}" ]]; then
-            info "Applying Zephyr patches from ${ZEPHYR_PATCH_DIR}"
-            apply_patches "${ZEPHYR_PATCH_DIR}" "${ZEPHYR_SRC_DIR}"
-        fi
-    fi
+    prepare_patched_source "${ZEPHYR_SRC_DIR}" "${ZEPHYR_REF:-HEAD}" "${ZEPHYR_PATCH_DIR}"
 }
 
 copy_if_exists() {
@@ -237,7 +226,6 @@ zephyr_build() {
     info "Building Zephyr app ${ZEPHYR_APP} for board ${ZEPHYR_BOARD}"
     export ZEPHYR_BASE="${ZEPHYR_SRC_DIR}"
     export CROSS_COMPILE="${ZEPHYR_CROSS_COMPILE}"
-    export CCACHE_DISABLE=1
 
     local cmake_args=(
         -GNinja
@@ -263,10 +251,10 @@ zephyr_build() {
     fi
 
     info "Configuring Zephyr build in ${build_dir}"
-    cmake "${cmake_args[@]}"
+    build_cmake "${cmake_args[@]}"
 
     info "Compiling Zephyr image"
-    cmake --build "${build_dir}" -j"$(nproc)"
+    build_cmake --build "${build_dir}"
 
     copy_if_exists "${build_dir}/zephyr/zephyr.bin" "${ZEPHYR_IMAGES_DIR}/${ZEPHYR_BIN_NAME}"
     if [[ -n "${ZEPHYR_ELF_NAME}" ]]; then
@@ -292,25 +280,25 @@ configure_platform() {
         qemu-aarch64)
             ZEPHYR_APP="tests/benchmarks/latency_measure"
             ZEPHYR_BOARD="qemu_cortex_a53"
-            ZEPHYR_BUILD_SUBDIR="zephyr/qemu-aarch64"
+            ZEPHYR_BUILD_SUBDIR="objects/zephyr/qemu-aarch64"
             : "${ZEPHYR_IMAGES_DIR:=${ROOT_DIR}/IMAGES/qemu-aarch64/zephyr}"
             ;;
         phytiumpi)
             ZEPHYR_APP="tests/benchmarks/latency_measure"
             ZEPHYR_BOARD="phytiumpi_axvisor_guest"
-            ZEPHYR_BUILD_SUBDIR="zephyr/phytiumpi"
+            ZEPHYR_BUILD_SUBDIR="objects/zephyr/phytiumpi"
             : "${ZEPHYR_IMAGES_DIR:=${ROOT_DIR}/IMAGES/phytiumpi/zephyr}"
             ;;
         tac-e400-plc)
             ZEPHYR_APP="tests/benchmarks/latency_measure"
             ZEPHYR_BOARD="phytiumpi_axvisor_guest"
-            ZEPHYR_BUILD_SUBDIR="zephyr/tac-e400-plc"
+            ZEPHYR_BUILD_SUBDIR="objects/zephyr/tac-e400-plc"
             : "${ZEPHYR_IMAGES_DIR:=${ROOT_DIR}/IMAGES/tac-e400-plc/zephyr}"
             ;;
         orangepi-5-plus)
             ZEPHYR_APP="tests/benchmarks/latency_measure"
             ZEPHYR_BOARD="orangepi_5_plus_rk3588"
-            ZEPHYR_BUILD_SUBDIR="zephyr/orangepi-5-plus"
+            ZEPHYR_BUILD_SUBDIR="objects/zephyr/orangepi-5-plus"
             : "${ZEPHYR_IMAGES_DIR:=${ROOT_DIR}/IMAGES/orangepi/zephyr}"
             ;;
         *)
@@ -344,15 +332,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             ZEPHYR_PLATFORM="${cmd}"
             ;;
         all)
-            for platform in qemu-aarch64 phytiumpi tac-e400-plc orangepi-5-plus; do
-                "$0" "${platform}" "$@" || { echo "[ERROR] ${platform} build failed" >&2; exit 1; }
-            done
+            run_sequential_targets os "zephyr all" run_script_target qemu-aarch64 phytiumpi tac-e400-plc orangepi-5-plus -- "$@"
             exit 0
             ;;
         clean)
-            for platform in qemu-aarch64 phytiumpi tac-e400-plc orangepi-5-plus; do
-                "$0" "${platform}" clean || { echo "[ERROR] ${platform} clean failed" >&2; exit 1; }
-            done
+            run_sequential_targets os "zephyr clean" run_script_target qemu-aarch64 phytiumpi tac-e400-plc orangepi-5-plus -- clean
             exit 0
             ;;
         *)

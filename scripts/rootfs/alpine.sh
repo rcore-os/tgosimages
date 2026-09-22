@@ -5,7 +5,8 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)
 ALPINE_SCRIPT_DIR="${SCRIPT_DIR}"
 ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd -P)
-BUILD_DIR="$(cd "${ROOT_DIR}" && mkdir -p "build" && cd "build" && pwd -P)"
+source "${ROOT_DIR}/scripts/lib/build-paths.sh"
+build_paths_init "$ROOT_DIR"
 
 source "${SCRIPT_DIR}/../lib/utils.sh"
 source "${SCRIPT_DIR}/../lib/rootfs-compose.sh"
@@ -138,8 +139,8 @@ alpine_usage() {
     printf '  --out_dir <dir>               Output directory (default image: IMAGES/rootfs/rootfs-<arch>-alpine.img)\n'
     printf '  --guest <dir>                 Guest directory to copy into rootfs /guest\n'
     printf '  --outer-tests <list>          Tests installed in the outer image (default: ltp)\n'
-    printf '  --guest-tests <list>          Tests installed in the nested guest image (default from rootfs-tests)\n'
-    printf '  --guest-free-size <size>      Free space reserved in nested guest image (default: 256M)\n'
+    printf '  --guest-tests <list>          Tests installed identically in all guest images (default from rootfs-test-plugins)\n'
+    printf '  --guest-free-size <size>      Free space reserved in each guest image (default: 256M)\n'
     printf '  --outer-free-size <size>      Free space reserved in outer image (default: 256M)\n'
     printf '  --img-size <size>             Output image size (default: 2G)\n'
     printf '\n'
@@ -605,18 +606,20 @@ alpine_validate_legacy_ltp_environment() {
     [[ ${ALPINE_LTP_PREFIX:-/opt/ltp} == /opt/ltp ]] ||
         die "ALPINE_LTP_PREFIX is no longer configurable; use /opt/ltp with --outer-tests ltp"
     [[ -z ${ALPINE_LTP_DOCKER_IMAGE:-} ]] ||
-        die "ALPINE_LTP_DOCKER_IMAGE is unsupported by rootfs-tests; unset it"
+        die "ALPINE_LTP_DOCKER_IMAGE is unsupported by rootfs-test-plugins; unset it"
     case ${ALPINE_LTP_DOCKER_INSTALL_PACKAGES:-0} in
     0|'') ;;
-    *) die "ALPINE_LTP_DOCKER_INSTALL_PACKAGES is unsupported by rootfs-tests; use 0" ;;
+    *) die "ALPINE_LTP_DOCKER_INSTALL_PACKAGES is unsupported by rootfs-test-plugins; use 0" ;;
     esac
 }
 
 alpine_create_rootfs() {
-    local rootfs_dir
-    local rootfs_img_tmp="${ALPINE_ROOTFS_IMG}.base.tmp.$$"
+    local rootfs_dir staging_dir rootfs_img_tmp composed_img publish_fd=
+    rootfs_create_staging_dir "$ALPINE_ROOTFS_IMG" "alpine-${ALPINE_ARCH}" staging_dir
+    rootfs_img_tmp="${staging_dir}/rootfs-${ALPINE_ARCH}-alpine.base.img"
+    composed_img="${staging_dir}/rootfs-${ALPINE_ARCH}-alpine.composed.img"
     rootfs_dir="$(mktemp -d "${ALPINE_WORK_DIR}/rootfs.XXXXXX")"
-    trap 'alpine_cleanup_rootfs_dir "'"${rootfs_dir}"'"; rm -f "'"${rootfs_img_tmp}"'" "'"${rootfs_img_tmp}.lock"'"; rm -rf -- "${composition_dir:-}"' EXIT
+    trap 'alpine_cleanup_rootfs_dir "'"${rootfs_dir}"'"; rm -rf -- "'"${staging_dir}"'" "${composition_dir:-}"; [[ -z ${publish_fd:-} ]] || build_lock_release "$publish_fd" 2>/dev/null || true' EXIT
 
     info "Creating Alpine rootfs image ${ALPINE_ROOTFS_IMG} (${ALPINE_IMG_SIZE})"
     rm -f "${rootfs_img_tmp}"
@@ -656,8 +659,12 @@ alpine_create_rootfs() {
 
     rootfs_compose_test_images "${rootfs_img_tmp}" "${ALPINE_OUTER_TEST_OVERLAY}" \
         "${ALPINE_GUEST_TEST_OVERLAY}" "${ALPINE_OUTER_GUEST_DIR}" "${ALPINE_ARCH}" alpine \
-        "${ALPINE_GUEST_FREE_SIZE}" "${ALPINE_OUTER_FREE_SIZE}" "${ALPINE_ROOTFS_IMG}"
-    rm -f -- "${rootfs_img_tmp}" "${rootfs_img_tmp}.lock"
+        "${ALPINE_GUEST_FREE_SIZE}" "${ALPINE_OUTER_FREE_SIZE}" "$composed_img"
+    build_lock_acquire publish_fd "${ALPINE_ROOTFS_IMG}.lock"
+    mv -T -- "$composed_img" "$ALPINE_ROOTFS_IMG"
+    build_lock_release "$publish_fd"
+    publish_fd=
+    rm -rf -- "$staging_dir"
     trap - EXIT
     alpine_cleanup_rootfs_dir "${rootfs_dir}"
 
@@ -726,10 +733,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                 die "--out_dir can only be used for a single architecture build"
             fi
 
-            for arch in "${ALPINE_ARCHES[@]}"; do
-                ALPINE_ARCH="${arch}"
+            alpine_arch_target() {
+                ALPINE_ARCH=$1
                 alpine
-            done
+            }
+            run_sequential_targets rootfs "alpine all" alpine_arch_target "${ALPINE_ARCHES[@]}" --
             ;;
         clean)
             alpine_parse_args "$@"

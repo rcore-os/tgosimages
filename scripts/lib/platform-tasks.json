@@ -1,0 +1,19 @@
+{
+  "phytiumpi": {"components": ["linux", "arceos", "rtthread", "zephyr", "freertos"], "compose": true},
+  "roc-rk3568-pc": {"components": ["linux", "arceos", "rtthread"], "compose": true, "resources": {"linux": ["vendor-sdk"]}},
+  "evm3588": {"components": ["linux", "arceos"], "compose": true, "resources": {"linux": ["vendor-sdk"]}},
+  "tac-e400-plc": {"components": ["linux", "arceos", "zephyr", "freertos"]},
+  "orangepi-5-plus": {
+    "components": ["linux", "orangepi_uboot_deb", "rootfs", "uboot", "arceos", "starry", "zephyr", "freertos", "ivc", "orangepi_build_base_image", "finalize_linux_image"],
+    "deps": {
+      "orangepi_uboot_deb": ["linux"],
+      "rootfs": ["orangepi_uboot_deb"],
+      "ivc": ["starry", "zephyr"],
+      "orangepi_build_base_image": ["linux", "rootfs", "uboot", "arceos", "starry", "zephyr", "freertos", "ivc"],
+      "finalize_linux_image": ["orangepi_build_base_image"]
+    },
+    "private": ["orangepi_uboot_deb", "orangepi_build_base_image", "finalize_linux_image"]
+  },
+  "rdk-s100p": {"components": ["linux", "arceos"], "resources": {"linux": ["vendor-sdk"]}},
+  "bst-a1000": {"components": ["linux", "arceos"]}
+}
