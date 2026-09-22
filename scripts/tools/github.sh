@@ -394,6 +394,13 @@ registry_process_asset() {
         return 0
     fi
 
+    if [[ "${stem}" == "orangepi-5-plus.img" ]]; then
+        registry_emit_entry "${output_file}" "${stem}" "${version}" \
+            "Bootable disk image for Orange Pi development board" \
+            "$(registry_sha256 "${asset_file}")" "aarch64" "${url}" "${released_at}"
+        return 0
+    fi
+
     # qemu-<arch>-<os>: separator must be '-' (not '_'), otherwise arches like
     # "x86_64" would be split incorrectly. Fall through on failure so the
     # qemu-<arch> bundle branch below can handle bare arches.
@@ -411,10 +418,10 @@ registry_process_asset() {
         return 0
     fi
 
-    # Board guest bundles containing multiple OSes (e.g. phytiumpi.tar.xz).
+    # Board guest bundles containing multiple OSes.
     case "${stem}" in
-        phytiumpi)
-            registry_add_platform_bundle_entry "${output_file}" "${asset_file}" "${asset_name}" "${stem}" "${version}" "${url}" "${released_at}" "phytiumpi" "aarch64"
+        phytiumpi|orangepi)
+            registry_add_platform_bundle_entry "${output_file}" "${asset_file}" "${asset_name}" "${stem}" "${version}" "${url}" "${released_at}" "${stem}" "aarch64"
             return 0
             ;;
     esac

@@ -67,3 +67,10 @@ index a7ff703..6780ce3 100755
  
  	[ $1 != amd64 -a ! -f $RFSDIR/usr/bin/qemu-${tgtarch}-static ] && sudo cp $(which qemu-${tgtarch}-static) $RFSDIR/usr/bin
  	echo "installing for second-stage ..."
+@@ -97,3 +97,6 @@ do_distrorfs_first_stage() {
+     sudo rm -f $RFSDIR/usr/bin/qemu-${tgtarch}-static
+
++    if mountpoint -q "$RFSDIR/sys"; then
++        sudo umount -R -- "$RFSDIR/sys" || exit 1
++    fi
+     # sudo chroot $RFSDIR systemctl enable systemd-rootfs-resize

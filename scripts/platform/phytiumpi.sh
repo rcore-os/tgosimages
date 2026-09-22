@@ -43,8 +43,91 @@ usage() {
     printf '  scripts/phytiumpi.sh linux        # Build only Linux\n'
 }
 
-linux() {
+phytiumpi_unmount_rootfs_mounts() {
+    local rootfs="$LINUX_SRC_DIR/output/build/skeleton-custom" relative path staging_sys
+    local had_mount=0
+    local -a mount_paths=(dev/pts dev proc sys)
+
+    [[ -d $rootfs ]] || return 0
+    build_assert_workspace_path "$rootfs" || return 1
+    for relative in "${mount_paths[@]}"; do
+        path="$rootfs/$relative"
+        mountpoint -q "$path" || continue
+        had_mount=1
+        info "Unmounting stale Phytium rootfs mount: $path"
+        sudo umount -R -- "$path" || return 1
+    done
+    for relative in "${mount_paths[@]}"; do
+        path="$rootfs/$relative"
+        mountpoint -q "$path" || continue
+        error "Phytium rootfs mount is still active: $path"
+        return 1
+    done
+    if ((had_mount)) && [[ -d $LINUX_SRC_DIR/output/host ]]; then
+        while IFS= read -r -d '' staging_sys; do
+            case $staging_sys in
+                "$LINUX_SRC_DIR/output/host/"*/sysroot/sys) ;;
+                *) error "Refusing unexpected Phytium staging sys path: $staging_sys"; return 1 ;;
+            esac
+            mountpoint -q "$staging_sys" && {
+                error "Refusing to remove mounted Phytium staging sys path: $staging_sys"
+                return 1
+            }
+            info "Removing sysfs files copied into Phytium staging: $staging_sys"
+            rm -rf -- "$staging_sys" || return 1
+        done < <(find "$LINUX_SRC_DIR/output/host" -mindepth 3 -maxdepth 3 \
+            -type d -path '*/sysroot/sys' -print0)
+    fi
+}
+
+phytiumpi_publish_linux_artifacts() {
+    local source_images="${1:-$LINUX_SRC_DIR/output/images}"
+    local linux_images_dir="${2:-$PLATFORM_IMAGES_DIR/linux}"
+    local rootfs_dir="${3:-$PLATFORM_ROOTFS_DIR}"
+    local artifact kernel_tmp
+
+    for artifact in fip-all.bin fitImage kernel.its Image.gz phytiumpi_firefly.dtb sdcard.img rootfs.ext2; do
+        [[ -f $source_images/$artifact ]] || die "Required artifact not found: $source_images/$artifact"
+    done
+
+    info "Copying build artifacts: $source_images -> $linux_images_dir"
+    copy_required "$source_images/fip-all.bin" "$linux_images_dir/fip-all.bin"
+    copy_required "$source_images/fitImage" "$linux_images_dir/fitImage"
+    copy_required "$source_images/kernel.its" "$linux_images_dir/kernel.its"
+    copy_required "$source_images/phytiumpi_firefly.dtb" "$linux_images_dir/phytiumpi.dtb"
+    # The whole platform images directory becomes /guest during compose. Keep
+    # container/rootfs images out of it: besides being useless guest payloads,
+    # either one is large enough to exhaust the filesystem being composed.
+    rm -f -- "$linux_images_dir/sdcard.img" "$linux_images_dir/rootfs.ext2"
+
+    kernel_tmp=$(mktemp "$linux_images_dir/.Image.tmp.XXXXXX")
+    if ! gzip -dc -- "$source_images/Image.gz" >"$kernel_tmp"; then
+        rm -f -- "$kernel_tmp"
+        die "Failed to decompress required artifact: $source_images/Image.gz"
+    fi
+    mv -f -- "$kernel_tmp" "$linux_images_dir/Image"
+    copy_required "$linux_images_dir/Image" "$linux_images_dir/phytiumpi"
+
+    mkdir -p "$rootfs_dir"
+    copy_required "$source_images/sdcard.img" "$rootfs_dir/phytiumpi.img"
+    copy_required "$source_images/rootfs.ext2" "$rootfs_dir/phytiumpi.rootfs.ext2"
+}
+
+linux() (
     local linux_images_dir="${PLATFORM_IMAGES_DIR}/linux"
+    local cleanup_status status
+
+    cleanup_status=0
+    trap '
+        status=$?
+        trap - EXIT INT TERM
+        phytiumpi_unmount_rootfs_mounts || cleanup_status=$?
+        ((status != 0)) || status=$cleanup_status
+        exit "$status"
+    ' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    phytiumpi_unmount_rootfs_mounts
 
     if [[ "$@" != *"clean"* ]]; then
         info "Cloning Linux source repository $LINUX_REPO_URL -> $LINUX_SRC_DIR"
@@ -78,21 +161,7 @@ linux() {
                 return "$status"
             }
             
-            info "Copying build artifacts: $LINUX_SRC_DIR/output/images -> $linux_images_dir"
-            copy_required "$LINUX_SRC_DIR/output/images/fip-all.bin" "$linux_images_dir/fip-all.bin"
-            copy_required "$LINUX_SRC_DIR/output/images/fitImage" "$linux_images_dir/fitImage"
-            copy_required "$LINUX_SRC_DIR/output/images/kernel.its" "$linux_images_dir/kernel.its"
-            copy_required "$LINUX_SRC_DIR/output/images/Image" "$linux_images_dir/Image"
-            copy_required "$LINUX_SRC_DIR/output/images/phytiumpi_firefly.dtb" "$linux_images_dir/phytiumpi_firefly.dtb"
-            copy_required "$LINUX_SRC_DIR/output/images/sdcard.img" "$linux_images_dir/sdcard.img"
-            copy_required "$LINUX_SRC_DIR/output/images/rootfs.ext2" "$linux_images_dir/rootfs.ext2"
-            [[ -f "$linux_images_dir/phytiumpi_firefly.dtb" ]] && mv "$linux_images_dir/phytiumpi_firefly.dtb" "$linux_images_dir/phytiumpi.dtb"
-            if [[ -f "$LINUX_SRC_DIR/output/images/Image.gz" ]]; then
-                gzip -dc "$LINUX_SRC_DIR/output/images/Image.gz" > "$linux_images_dir/phytiumpi"
-            fi
-            mkdir -p "$PLATFORM_ROOTFS_DIR"
-            [[ -f "$linux_images_dir/sdcard.img" ]] && cp -f "$linux_images_dir/sdcard.img" "$PLATFORM_ROOTFS_DIR/phytiumpi.img"
-            [[ -f "$linux_images_dir/rootfs.ext2" ]] && cp -f "$linux_images_dir/rootfs.ext2" "$PLATFORM_ROOTFS_DIR/phytiumpi.rootfs.ext2"
+            phytiumpi_publish_linux_artifacts
         else
             info "Cleaning: make $@"
             build_make $@
@@ -102,7 +171,7 @@ linux() {
         fi
         popd >/dev/null
     fi
-}
+)
 
 arceos() {
     local arceos_images_dir="${PLATFORM_IMAGES_DIR}/arceos"
