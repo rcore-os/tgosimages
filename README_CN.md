@@ -433,8 +433,11 @@ bash scripts/tests/platform/orangepi-nested-content.sh \
 ```
 
 构建脚本固定使用 tgoskits 中的
-`os/StarryOS/configs/board/orangepi-5-plus.toml`，默认构建 tgoskits 最新的
-`dev` 分支。生成的 `manifest.toml` 会记录实际构建提交。需要复现或验证指定提交时可显式覆盖：
+`os/StarryOS/configs/board/orangepi-5-plus.toml`，默认以 `dev` 分支提交
+`3531e72e734ada002ee20520f7467e58e5ea69e9` 为固定基线，并应用 `patches/starry/`
+中的香橙派客户机配置和 VirtIO 块设备驱动补丁。
+驱动补丁来自 tgoskits 提交 `5003b6e0156c21a8b93b0f0897d4ba52a2a90beb`。
+生成的 `manifest.toml` 会记录实际构建的基础提交。需要复现或验证指定提交时可显式覆盖：
 
 ```bash
 ./build.sh platform orangepi-5-plus starry --ref <tgoskits-commit>

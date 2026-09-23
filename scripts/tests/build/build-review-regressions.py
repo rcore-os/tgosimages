@@ -132,6 +132,25 @@ all
         source.symlink_to('external-header')
         self.assertNotEqual(before, source_state(self.work))
 
+    def test_uninitialized_submodule_records_gitlink_without_recursing_into_parent(self):
+        subprocess.run(['git', 'init', '-q', str(self.work)], check=True)
+        subprocess.run(['git', '-C', str(self.work), '-c', 'user.name=test', '-c',
+                        'user.email=test@example.com', 'commit', '--allow-empty', '-qm', 'base'], check=True)
+        commit = subprocess.check_output(['git', '-C', str(self.work), 'rev-parse', 'HEAD'],
+                                         text=True).strip()
+        subprocess.run(['git', '-C', str(self.work), 'update-index', '--add', '--cacheinfo',
+                        f'160000,{commit},vendor'], check=True)
+        (self.work / 'vendor').mkdir()
+
+        original_limit = sys.getrecursionlimit()
+        try:
+            sys.setrecursionlimit(100)
+            state = source_state(self.work)
+        finally:
+            sys.setrecursionlimit(original_limit)
+        self.assertEqual(state['submodules']['vendor'],
+                         {'commit': commit, 'state': 'uninitialized'})
+
     def test_tool_changed_during_build_is_not_cached(self):
         tool = self.work / 'tool'
         tool.write_text('#!/bin/sh\nexit 0\n')
@@ -145,12 +164,11 @@ all
         self.assertIn('inputs changed during build; refusing success', result.stderr)
         self.assertFalse(list((self.work / 'cache/tasks').glob('*.json')))
 
-    def test_mutable_sdk_input_records_post_build_state_and_detects_external_edits(self):
+    def test_mutable_sdk_input_can_be_created_and_detects_external_edits(self):
         generated = self.work / 'generated'
-        generated.mkdir()
-        (generated / 'value').write_text('before')
         driver = self.work / 'driver.sh'
-        driver.write_text('printf built >> "$1/value"\nprintf image > "$2"\nprintf x >> "$3"\n')
+        driver.write_text('mkdir -p "$1"\nprintf built >> "$1/value"\n'
+                          'printf image > "$2"\nprintf x >> "$3"\n')
         command = ('build_task sdk --input "$2/driver.sh" --mutable-input "$2/generated" '
                    '--output "$2/image" -- bash "$2/driver.sh" "$2/generated" "$2/image" "$2/runs"')
         first = self.shell(command)

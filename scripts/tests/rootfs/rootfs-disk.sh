@@ -92,6 +92,11 @@ has_path() {
     [[ $output != *'File not found'* && $output == *'Inode:'* ]]
 }
 
+image_mode() {
+    debugfs -R "stat $2" "$1" 2>/dev/null |
+        sed -n 's/.*Mode:[[:space:]]*\([0-7][0-7]*\).*/\1/p'
+}
+
 make_gpt_fixture() {
     local disk=$1 efi wrong root
     truncate -s 80M "$disk"
@@ -339,6 +344,10 @@ assert_eq "$fractional_arceos_timestamp" \
 
 read -r composed_part composed_start composed_size _ < <(rootfs_disk_find_root_partition "$composed")
 rootfs_disk_extract_partition "$composed" "$composed_start" "$composed_size" "$work/composed-outer.img"
+assert_eq 0755 "$(image_mode "$work/composed-outer.img" /guest)" \
+    'outer guest directory must be traversable by ordinary users'
+assert_eq 0644 "$(image_mode "$work/composed-outer.img" /guest/rootfs-aarch64-orangepi-jammy-0.img)" \
+    'nested guest image must be readable by ordinary users'
 has_path "$work/composed-outer.img" /guest/linux/orangepi-5-plus || \
     fail 'outer image lacks staged platform kernel'
 has_path "$work/composed-outer.img" /guest/rootfs-aarch64-orangepi-jammy-0.img || \
@@ -400,6 +409,10 @@ run_ok 'an additional configured guest grows the partitioned disk image' \
 read -r _ prebuilt_start prebuilt_size _ < <(rootfs_disk_find_root_partition "$prebuilt_composed")
 rootfs_disk_extract_partition "$prebuilt_composed" "$prebuilt_start" "$prebuilt_size" \
     "$work/prebuilt-outer.img"
+assert_eq 0755 "$(image_mode "$work/prebuilt-outer.img" /guest)" \
+    'prebuilt outer guest directory must be traversable by ordinary users'
+assert_eq 0644 "$(image_mode "$work/prebuilt-outer.img" /guest/rootfs-aarch64-orangepi-jammy-0.img)" \
+    'prebuilt nested image must be readable by ordinary users'
 debugfs -R "dump /guest/rootfs-aarch64-orangepi-jammy-0.img $work/prebuilt-nested.img" \
     "$work/prebuilt-outer.img" >/dev/null 2>&1
 assert_eq gpt-root "$(debugfs -R 'cat /etc/rootfs-marker' "$work/prebuilt-nested.img" 2>/dev/null)" \

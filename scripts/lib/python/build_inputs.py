@@ -40,7 +40,15 @@ def source_state(repo, ref='HEAD'):
     for entry in git('ls-files', '--stage', '-z').split(b'\0'):
         if entry.startswith(b'160000 '):
             name = os.fsdecode(entry.split(b'\t', 1)[1])
-            submodules[name] = source_state(Path(repo) / name)
+            subrepo = Path(repo) / name
+            target = entry.split(b' ', 2)[1].decode('ascii')
+            if subrepo.is_dir() and Path(subprocess.check_output(
+                    ['git', '-C', str(subrepo), 'rev-parse', '--show-toplevel'],
+                    stderr=subprocess.DEVNULL).decode().strip()).resolve() == subrepo.resolve():
+                state = source_state(subrepo)
+            else:
+                state = 'uninitialized'
+            submodules[name] = dict(commit=target, state=state)
     return dict(repo=str(Path(repo).resolve()), commit=commit,
                 diff=hashlib.sha256(delta).hexdigest(), untracked=extra, submodules=submodules)
 

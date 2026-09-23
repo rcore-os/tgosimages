@@ -457,9 +457,12 @@ Use the unified platform entry point:
 ./build.sh platform orangepi-5-plus starry
 ```
 
-The builder uses `os/StarryOS/configs/board/orangepi-5-plus.toml` from the latest
-tgoskits `dev` branch by default. The generated `manifest.toml` records the exact
-commit used. Override it explicitly for reproducible or revision-specific builds:
+The builder uses `os/StarryOS/configs/board/orangepi-5-plus.toml` from tgoskits
+`dev` commit `3531e72e734ada002ee20520f7467e58e5ea69e9` by default, then applies
+the Orange Pi guest configuration and VirtIO block driver patches from
+`patches/starry/`. The driver patch comes from tgoskits commit
+`5003b6e0156c21a8b93b0f0897d4ba52a2a90beb`. The generated `manifest.toml`
+records the base commit used. Override it explicitly for revision-specific builds:
 
 ```bash
 ./build.sh platform orangepi-5-plus starry --ref <tgoskits-commit>

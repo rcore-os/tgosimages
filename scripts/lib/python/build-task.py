@@ -59,6 +59,16 @@ def manifests(paths):
     return {str(path): digest(path) for path in paths}
 
 
+def mutable_manifests(paths):
+    manifests_by_path = {}
+    for path in paths:
+        try:
+            manifests_by_path[str(path)] = digest(path)
+        except FileNotFoundError:
+            manifests_by_path[str(path)] = None
+    return manifests_by_path
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('name')
@@ -102,7 +112,7 @@ def main():
                     environment={key: os.environ.get(key) for key in args.env})
         stable = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
         if mutable_inputs:
-            data['mutable_inputs'] = manifests(mutable_inputs)
+            data['mutable_inputs'] = mutable_manifests(mutable_inputs)
         return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest(), stable
 
     root = Path(os.environ['BUILD_CACHE_DIR']) / 'tasks'

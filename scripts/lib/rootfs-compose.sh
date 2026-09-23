@@ -668,6 +668,7 @@ _rootfs_stage_guest_images() {
         member=$(_rootfs_guest_image_name "$name" "$index") || return 1
         cp --preserve=mode,ownership,timestamps --reflink=auto --sparse=always -- \
             "$image" "$directory/$member" || return 1
+        chmod 0644 -- "$directory/$member" || return 1
         # Reading the first copy can change the source atime to fractional
         # seconds. Both payload files must satisfy the debugfs timestamp policy.
         touch -d "@$timestamp" "$directory/$member" || return 1
@@ -717,6 +718,7 @@ _rootfs_finish_outer_in_place() (
     # The validated snapshot is private and shares the stage filesystem.
     mv -T -- "$guest_snapshot" "$stage/guest" || return 1
     guest_snapshot=
+    chmod 0755 -- "$stage/guest" || return 1
     touch -d @0 "$stage/guest" || return 1
     _rootfs_inject_tree_via_debugfs "$image" "$stage" || { rm -rf -- "$stage"; return 1; }
     rm -rf -- "$stage"

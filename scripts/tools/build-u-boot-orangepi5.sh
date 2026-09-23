@@ -79,7 +79,7 @@ sudo ln -snf "/usr/share/zoneinfo/${TZ}" /etc/localtime
 echo "${TZ}" | sudo tee /etc/timezone >/dev/null
 
 sudo apt-get update
-sudo apt-get install --no-install-recommends -y \
+sudo apt-get -o DPkg::Lock::Timeout=600 install --no-install-recommends -y \
     bc \
     bison \
     build-essential \
