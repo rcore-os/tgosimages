@@ -1,0 +1,3 @@
+diff --git a/kernel/arch/arm64/kernel/vdso/gen_vdso_offsets.sh b/kernel/arch/arm64/kernel/vdso/gen_vdso_offsets.sh
+old mode 100644
+new mode 100755

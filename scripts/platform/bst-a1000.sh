@@ -56,7 +56,6 @@ linux() {
         pushd "$LINUX_SRC_DIR/kernel" >/dev/null
         if [[ "$@" != *"clean"* ]]; then
             info "Configuring kernel: make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 O=build_bst bsta1000b_release_defconfig"
-            chmod -R 755 scripts/ arch/arm64/kernel/vdso/gen_vdso_offsets.sh
             build_make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 O=build_bst bsta1000b_release_defconfig
 
             info "Starting compilation: make CROSS_COMPILE=aarch64-linux-gnu-  ARCH=arm64 O=build_bst -j$(build_jobs) $@"

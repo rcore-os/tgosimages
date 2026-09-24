@@ -1,0 +1,333 @@
+diff --git a/kernel/scripts/Lindent b/kernel/scripts/Lindent
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/adjust_autoksyms.sh b/kernel/scripts/adjust_autoksyms.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/as-version.sh b/kernel/scripts/as-version.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/atomic/atomic-tbl.sh b/kernel/scripts/atomic/atomic-tbl.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/atomic/gen-atomic-fallback.sh b/kernel/scripts/atomic/gen-atomic-fallback.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/atomic/gen-atomic-instrumented.sh b/kernel/scripts/atomic/gen-atomic-instrumented.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/atomic/gen-atomic-long.sh b/kernel/scripts/atomic/gen-atomic-long.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/atomic/gen-atomics.sh b/kernel/scripts/atomic/gen-atomics.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/bloat-o-meter b/kernel/scripts/bloat-o-meter
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/bootgraph.pl b/kernel/scripts/bootgraph.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/bpf_doc.py b/kernel/scripts/bpf_doc.py
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/cc-can-link.sh b/kernel/scripts/cc-can-link.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/cc-version.sh b/kernel/scripts/cc-version.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/check-local-export b/kernel/scripts/check-local-export
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/check-sysctl-docs b/kernel/scripts/check-sysctl-docs
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/check_extable.sh b/kernel/scripts/check_extable.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/checkdeclares.pl b/kernel/scripts/checkdeclares.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/checkincludes.pl b/kernel/scripts/checkincludes.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/checkkconfigsymbols.py b/kernel/scripts/checkkconfigsymbols.py
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/checkpatch.pl b/kernel/scripts/checkpatch.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/checkstack.pl b/kernel/scripts/checkstack.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/checksyscalls.sh b/kernel/scripts/checksyscalls.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/checkversion.pl b/kernel/scripts/checkversion.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/clang-tools/gen_compile_commands.py b/kernel/scripts/clang-tools/gen_compile_commands.py
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/clang-tools/run-clang-tools.py b/kernel/scripts/clang-tools/run-clang-tools.py
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/cleanfile b/kernel/scripts/cleanfile
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/cleanpatch b/kernel/scripts/cleanpatch
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/coccicheck b/kernel/scripts/coccicheck
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/config b/kernel/scripts/config
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/decode_stacktrace.sh b/kernel/scripts/decode_stacktrace.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/decodecode b/kernel/scripts/decodecode
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/depmod.sh b/kernel/scripts/depmod.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/dev-needs.sh b/kernel/scripts/dev-needs.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/diffconfig b/kernel/scripts/diffconfig
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/documentation-file-ref-check b/kernel/scripts/documentation-file-ref-check
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/dtc/update-dtc-source.sh b/kernel/scripts/dtc/update-dtc-source.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/export_report.pl b/kernel/scripts/export_report.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/extract-ikconfig b/kernel/scripts/extract-ikconfig
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/extract-module-sig.pl b/kernel/scripts/extract-module-sig.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/extract-sys-certs.pl b/kernel/scripts/extract-sys-certs.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/extract-vmlinux b/kernel/scripts/extract-vmlinux
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/extract_xc3028.pl b/kernel/scripts/extract_xc3028.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/faddr2line b/kernel/scripts/faddr2line
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/file-size.sh b/kernel/scripts/file-size.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/find-unused-docs.sh b/kernel/scripts/find-unused-docs.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/gcc-x86_32-has-stack-protector.sh b/kernel/scripts/gcc-x86_32-has-stack-protector.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/gcc-x86_64-has-stack-protector.sh b/kernel/scripts/gcc-x86_64-has-stack-protector.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/gen-randstruct-seed.sh b/kernel/scripts/gen-randstruct-seed.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/gen_autoksyms.sh b/kernel/scripts/gen_autoksyms.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/gen_ksymdeps.sh b/kernel/scripts/gen_ksymdeps.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/generate_initcall_order.pl b/kernel/scripts/generate_initcall_order.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/generate_rust_analyzer.py b/kernel/scripts/generate_rust_analyzer.py
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/get_abi.pl b/kernel/scripts/get_abi.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/get_dvb_firmware b/kernel/scripts/get_dvb_firmware
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/get_feat.pl b/kernel/scripts/get_feat.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/get_maintainer.pl b/kernel/scripts/get_maintainer.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/gfp-translate b/kernel/scripts/gfp-translate
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/headerdep.pl b/kernel/scripts/headerdep.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/headers_install.sh b/kernel/scripts/headers_install.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/install.sh b/kernel/scripts/install.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/jobserver-exec b/kernel/scripts/jobserver-exec
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/kconfig/gconf-cfg.sh b/kernel/scripts/kconfig/gconf-cfg.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/kconfig/mconf-cfg.sh b/kernel/scripts/kconfig/mconf-cfg.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/kconfig/merge_config.sh b/kernel/scripts/kconfig/merge_config.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/kconfig/nconf-cfg.sh b/kernel/scripts/kconfig/nconf-cfg.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/kconfig/qconf-cfg.sh b/kernel/scripts/kconfig/qconf-cfg.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/kconfig/streamline_config.pl b/kernel/scripts/kconfig/streamline_config.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/kernel-doc b/kernel/scripts/kernel-doc
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/ld-version.sh b/kernel/scripts/ld-version.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/leaking_addresses.pl b/kernel/scripts/leaking_addresses.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/link-vmlinux.sh b/kernel/scripts/link-vmlinux.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/makelst b/kernel/scripts/makelst
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/markup_oops.pl b/kernel/scripts/markup_oops.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/min-tool-version.sh b/kernel/scripts/min-tool-version.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/mkcompile_h b/kernel/scripts/mkcompile_h
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/mksysmap b/kernel/scripts/mksysmap
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/mkuboot.sh b/kernel/scripts/mkuboot.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/modules-check.sh b/kernel/scripts/modules-check.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/nsdeps b/kernel/scripts/nsdeps
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/objdiff b/kernel/scripts/objdiff
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/objdump-func b/kernel/scripts/objdump-func
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/pahole-flags.sh b/kernel/scripts/pahole-flags.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/pahole-version.sh b/kernel/scripts/pahole-version.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/parse-maintainers.pl b/kernel/scripts/parse-maintainers.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/patch-kernel b/kernel/scripts/patch-kernel
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/profile2linkerlist.pl b/kernel/scripts/profile2linkerlist.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/prune-kernel b/kernel/scripts/prune-kernel
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/recordmcount.pl b/kernel/scripts/recordmcount.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/remove-stale-files b/kernel/scripts/remove-stale-files
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/rust_is_available.sh b/kernel/scripts/rust_is_available.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/rust_is_available_test.py b/kernel/scripts/rust_is_available_test.py
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/selinux/install_policy.sh b/kernel/scripts/selinux/install_policy.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/setlocalversion b/kernel/scripts/setlocalversion
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/show_delta b/kernel/scripts/show_delta
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/spdxcheck-test.sh b/kernel/scripts/spdxcheck-test.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/spdxcheck.py b/kernel/scripts/spdxcheck.py
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/sphinx-pre-install b/kernel/scripts/sphinx-pre-install
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/split-man.pl b/kernel/scripts/split-man.pl
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/stackdelta b/kernel/scripts/stackdelta
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/stackusage b/kernel/scripts/stackusage
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/syscallhdr.sh b/kernel/scripts/syscallhdr.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/syscallnr.sh b/kernel/scripts/syscallnr.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/syscalltbl.sh b/kernel/scripts/syscalltbl.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/tags.sh b/kernel/scripts/tags.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/test_fortify.sh b/kernel/scripts/test_fortify.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/tools-support-relr.sh b/kernel/scripts/tools-support-relr.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/tracing/draw_functrace.py b/kernel/scripts/tracing/draw_functrace.py
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/tracing/ftrace-bisect.sh b/kernel/scripts/tracing/ftrace-bisect.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/ver_linux b/kernel/scripts/ver_linux
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/xen-hypercalls.sh b/kernel/scripts/xen-hypercalls.sh
+old mode 100644
+new mode 100755
+diff --git a/kernel/scripts/xz_wrap.sh b/kernel/scripts/xz_wrap.sh
+old mode 100644
+new mode 100755
