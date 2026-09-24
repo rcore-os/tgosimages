@@ -111,13 +111,7 @@ rtthread() {
         info "Cloning RT-Thread source repository $RTTHREAD_REPO_URL -> $RTTHREAD_SRC_DIR"
         clone_repository "$RTTHREAD_REPO_URL" "$RTTHREAD_SRC_DIR"
 
-        info "Checking out RT-Thread ref ${RTTHREAD_REF}"
-        checkout_ref "$RTTHREAD_SRC_DIR" "$RTTHREAD_REF"
-
-        if [[ -d "$RTTHREAD_PATCH_DIR" ]]; then
-            info "Applying patches..."
-            apply_patches "$RTTHREAD_PATCH_DIR" "$RTTHREAD_SRC_DIR"
-        fi
+        prepare_patched_source "$RTTHREAD_SRC_DIR" "$RTTHREAD_REF" "$RTTHREAD_PATCH_DIR"
     fi
 
     rtthread_build

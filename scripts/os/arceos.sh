@@ -217,13 +217,7 @@ arceos() {
     if [[ "${ARCEOS_ARGS}" != *"clean"* ]]; then
         info "Cloning tgoskits source repository $ARCEOS_REPO_URL -> $ARCEOS_SRC_DIR"
         clone_repository "$ARCEOS_REPO_URL" "$ARCEOS_SRC_DIR"
-        info "Checking out tgoskits ref ${ARCEOS_REF}"
-        checkout_ref "$ARCEOS_SRC_DIR" "$ARCEOS_REF"
-
-        if [[ -d "$ARCEOS_PATCH_DIR" ]]; then
-            info "Applying patches..."
-            apply_patches "$ARCEOS_PATCH_DIR" "$ARCEOS_SRC_DIR"
-        fi
+        prepare_patched_source "$ARCEOS_SRC_DIR" "$ARCEOS_REF" "$ARCEOS_PATCH_DIR"
     fi
 
     arceos_build

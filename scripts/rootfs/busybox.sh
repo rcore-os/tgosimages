@@ -282,12 +282,7 @@ mkfs_prepare_busybox_source() {
     build_lock_acquire lock_fd "${BUSYBOX_SRC_DIR}.lock" || return 1
     info "Cloning busybox source repository $BUSYBOX_REPO_URL -> $BUSYBOX_SRC_DIR"
     clone_repository "$BUSYBOX_REPO_URL" "$BUSYBOX_SRC_DIR" || return 1
-    info "Checking out busybox ref ${BUSYBOX_REF}"
-    checkout_ref "$BUSYBOX_SRC_DIR" "$BUSYBOX_REF" || return 1
-    if [[ -d "$BUSYBOX_PATCH_DIR" ]]; then
-        info "Applying patches..."
-        apply_patches "$BUSYBOX_PATCH_DIR" "$BUSYBOX_SRC_DIR" || return 1
-    fi
+    prepare_patched_source "$BUSYBOX_SRC_DIR" "$BUSYBOX_REF" "$BUSYBOX_PATCH_DIR" || return 1
     rm -rf -- "$prepared"
     cp -a --reflink=auto -- "$BUSYBOX_SRC_DIR" "$prepared" || return 1
     build_lock_release "$lock_fd"

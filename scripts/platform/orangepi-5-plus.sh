@@ -64,94 +64,11 @@ orangepi_configure_source_excludes() {
     done
 }
 
-orangepi_assert_safe_source_tree() {
-    local repository=$1 status entry code path patch patch_base allowed head commit patch_id
-    local -A allowed_paths=()
-    local -A allowed_patch_ids=()
-
-    [[ -d $repository/.git ]] || return 0
-    if [[ -n ${LINUX_REF:-} ]]; then
-        git -C "$repository" cat-file -e "${LINUX_REF}^{tree}" 2>/dev/null || {
-            printf 'Orange Pi source cache cannot verify fixed ref %s; refusing destructive checkout\n' \
-                "$LINUX_REF" >&2
-            return 1
-        }
-        if [[ -d ${LINUX_PATCH_DIR:-} ]]; then
-            for patch in "$LINUX_PATCH_DIR"/*.patch "$LINUX_PATCH_DIR"/*.diff; do
-                [[ -f $patch ]] || continue
-                patch_id=$(git patch-id --stable <"$patch" | awk 'NR == 1 {print $1}')
-                [[ -z $patch_id ]] || allowed_patch_ids[$patch_id]=1
-            done
-        fi
-        head=$(git -C "$repository" rev-parse HEAD) || return 1
-        if [[ $head != "$LINUX_REF" ]]; then
-            git -C "$repository" merge-base --is-ancestor "$LINUX_REF" "$head" || {
-                printf 'Orange Pi source cache HEAD is unrelated to fixed ref %s\n' "$LINUX_REF" >&2
-                return 1
-            }
-            while IFS= read -r commit; do
-                patch_id=$(git -C "$repository" show --pretty=format: --binary "$commit" |
-                    git patch-id --stable | awk 'NR == 1 {print $1}')
-                [[ -n $patch_id && -n ${allowed_patch_ids[$patch_id]-} ]] || {
-                    printf 'Orange Pi source cache has a local commit outside fixed patches: %s\n' "$commit" >&2
-                    return 1
-                }
-            done < <(git -C "$repository" rev-list --reverse "${LINUX_REF}..${head}")
-        fi
-    fi
-    status=$(git -C "$repository" status --porcelain=v1 --untracked-files=all) || return 1
-    [[ -n $status ]] || return 0
-
-    if [[ -d ${LINUX_PATCH_DIR:-} ]]; then
-        for patch in "$LINUX_PATCH_DIR"/*.patch "$LINUX_PATCH_DIR"/*.diff; do
-            [[ -f $patch ]] || continue
-            if git -C "$repository" apply --reverse --check "$patch" >/dev/null 2>&1; then
-                while IFS= read -r path; do
-                    [[ -n $path && $path != /dev/null ]] && allowed_paths[$path]=1
-                done < <(sed -n 's@^+++ b/@@p; s@^--- a/@@p' "$patch" | LC_ALL=C sort -u)
-            fi
-            patch_base=$(basename -- "$patch")
-            allowed_paths[".patch_stamps/${patch_base}.applied"]=1
-        done
-    fi
-
-    while IFS= read -r entry; do
-        [[ -n $entry ]] || continue
-        code=${entry:0:2}
-        path=${entry:3}
-        [[ $code != *R* && $code != *C* ]] || {
-            printf 'Orange Pi source cache has an unsafe rename/copy: %s\n' "$entry" >&2
-            return 1
-        }
-        allowed=${allowed_paths[$path]-}
-        if [[ -n $allowed && $path == .patch_stamps/*.applied ]]; then
-            [[ -f $repository/$path && -z $(<"$repository/$path") ]] || allowed=
-        fi
-        if [[ -z $allowed && $path == userpatches/lib.config && -f $repository/$path ]]; then
-            if [[ $(<"$repository/$path") == $'IMAGE_PARTITION_TABLE=gpt\nBOOTFS_TYPE=fat\nBOOTSIZE=1024' ]]; then
-                allowed=1
-            fi
-        fi
-        [[ -n $allowed ]] || {
-            printf 'Orange Pi source cache has uncommitted user content: %s\n' "$entry" >&2
-            return 1
-        }
-    done <<<"$status"
-}
-
 orangepi_prepare_source() {
-    local source_preexisting=0
-    [[ ! -d $LINUX_SRC_DIR/.git ]] || source_preexisting=1
     info "Cloning Linux source repository $LINUX_REPO_URL -> $LINUX_SRC_DIR"
     clone_repository "$LINUX_REPO_URL" "$LINUX_SRC_DIR"
     orangepi_configure_source_excludes "$LINUX_SRC_DIR"
-    ((source_preexisting == 0)) || orangepi_assert_safe_source_tree "$LINUX_SRC_DIR"
-    info "Checking out Linux ref ${LINUX_REF}"
-    checkout_ref "$LINUX_SRC_DIR" "$LINUX_REF"
-    if [[ -d $LINUX_PATCH_DIR ]]; then
-        info "Applying patches..."
-        apply_patches "$LINUX_PATCH_DIR" "$LINUX_SRC_DIR"
-    fi
+    prepare_patched_source "$LINUX_SRC_DIR" "$LINUX_REF" "$LINUX_PATCH_DIR"
 }
 
 orangepi_restore_generated_ownership() {

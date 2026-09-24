@@ -46,30 +46,6 @@ test_chosen_overlay() {
 }
 run_ok 'chosen overlay compiles without its fragment false positive' test_chosen_overlay
 
-test_source_cache_ignores_framework_patch_metadata_only() (
-    local repository="$work/orangepi-source-cache" patch_dir="$work/orangepi-source-patches"
-    mkdir -p "$repository" "$patch_dir"
-    git -C "$repository" init -q
-    git -C "$repository" config user.name test
-    git -C "$repository" config user.email test@example.com
-    git -C "$repository" config core.excludesFile /dev/null
-    printf source >"$repository/source"
-    git -C "$repository" add source
-    git -C "$repository" commit -qm base
-    LINUX_REF=$(git -C "$repository" rev-parse HEAD)
-    LINUX_PATCH_DIR=$patch_dir
-    mkdir -p "$repository/.patch_stamps"
-    printf identity >"$repository/.patch_stamps/patch-set.sha256"
-
-    orangepi_configure_source_excludes "$repository"
-    orangepi_assert_safe_source_tree "$repository" || return 1
-
-    printf user >"$repository/user-file"
-    ! orangepi_assert_safe_source_tree "$repository"
-)
-run_ok 'Orange Pi source safety ignores framework patch metadata but rejects user files' \
-    test_source_cache_ignores_framework_patch_metadata_only
-
 # Exercise the real archive-to-ext4 path with small local benchmark fixtures.
 fixture_tree="$work/rootfs-fixture"
 fixture_archive="$work/jammy-minimal-arm64.fixture.tar.lz4"

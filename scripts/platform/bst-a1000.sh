@@ -46,13 +46,7 @@ linux() {
     if [[ "$@" != *"clean"* ]]; then
         info "Cloning Linux source repository $LINUX_REPO_URL -> $LINUX_SRC_DIR"
         clone_repository "$LINUX_REPO_URL" "$LINUX_SRC_DIR"
-        info "Checking out Linux ref ${LINUX_REF}"
-        checkout_ref "$LINUX_SRC_DIR" "$LINUX_REF"
-        
-        if [[ -d "$LINUX_PATCH_DIR" ]]; then
-            info "Applying patches..."
-            apply_patches "$LINUX_PATCH_DIR" "$LINUX_SRC_DIR"
-        fi
+        prepare_patched_source "$LINUX_SRC_DIR" "$LINUX_REF" "$LINUX_PATCH_DIR"
         info "Building to build the Linux system..."
     else
         info "Cleaning the Linux build artifacts..."

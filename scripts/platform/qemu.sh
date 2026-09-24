@@ -390,7 +390,7 @@ qemu_ivc_build_linux_tools() {
         clone_repository "${AXVISOR_TOOLS_REPO_URL}" "${AXVISOR_TOOLS_SRC_DIR}"
         # Update the requested ref before checkout.
         git -C "${AXVISOR_TOOLS_SRC_DIR}" fetch origin "${AXVISOR_TOOLS_REF}" || return 1
-        checkout_ref "${AXVISOR_TOOLS_SRC_DIR}" FETCH_HEAD || return 1
+        prepare_patched_source "${AXVISOR_TOOLS_SRC_DIR}" FETCH_HEAD /nonexistent-tgos-patches || return 1
     fi
     [[ -f "${AXVISOR_TOOLS_SRC_DIR}/Kbuild" ]] || die "axvisor-tools must provide a top-level Kbuild for the unified axvisor.ko"
 
