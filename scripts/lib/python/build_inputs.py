@@ -53,7 +53,21 @@ def source_state(repo, ref='HEAD'):
                 diff=hashlib.sha256(delta).hexdigest(), untracked=extra, submodules=submodules)
 
 
-def verify_patch_tree(repo, ref, directory):
+def legacy_marked_patches(repo, directory):
+    available = {name for name, _ in patch_set(directory)['patches']}
+    markers = list((Path(repo) / '.patch_stamps').glob('*.applied'))
+    if not markers:
+        raise ValueError('no legacy patch markers')
+    marked = set()
+    for marker in markers:
+        name = marker.name.removesuffix('.applied')
+        if marker.is_symlink() or not marker.is_file() or marker.read_bytes() not in (b'', b'\n') or name not in available:
+            raise ValueError(f'unverifiable legacy patch marker: {marker}')
+        marked.add(name)
+    return marked
+
+
+def verify_patch_tree(repo, ref, directory, marked=None):
     """Read-only worktree check using private Git indexes; no checkout/reset."""
     import os
     import subprocess
@@ -63,8 +77,27 @@ def verify_patch_tree(repo, ref, directory):
         env = dict(os.environ, GIT_INDEX_FILE=str(Path(temp) / 'index'))
         def git(*args):
             return subprocess.check_output(['git', '-C', repo, *args], env=env, stderr=subprocess.DEVNULL)
+        base = git('rev-parse', '--verify', f'{ref}^{{commit}}').strip()
+        head = git('rev-parse', 'HEAD').strip()
+        if head != base:
+            subprocess.check_call(['git', '-C', repo, 'merge-base', '--is-ancestor',
+                                   base.decode(), head.decode()], stderr=subprocess.DEVNULL)
+            allowed = set()
+            for name, _ in patch_set(directory)['patches']:
+                if marked is None or name in marked:
+                    content = (Path(directory) / name).read_bytes()
+                    patch_id = subprocess.check_output(['git', 'patch-id', '--stable'], input=content)
+                    if patch_id:
+                        allowed.add(patch_id.split(b' ', 1)[0])
+            for commit in git('rev-list', '--reverse', f'{base.decode()}..HEAD').splitlines():
+                content = git('show', '--pretty=format:', '--binary', commit.decode())
+                patch_id = subprocess.check_output(['git', 'patch-id', '--stable'], input=content)
+                if not patch_id or patch_id.split(b' ', 1)[0] not in allowed:
+                    return False
         git('read-tree', ref)
         for name, _ in patch_set(directory)['patches']:
+            if marked is not None and name not in marked:
+                continue
             patch = str(Path(directory).resolve() / name)
             try:
                 git('apply', '--cached', '--whitespace=nowarn', patch)
@@ -122,6 +155,14 @@ if __name__ == '__main__':
         try:
             sys.exit(0 if verify_patch_tree(*sys.argv[2:]) else 1)
         except (OSError, subprocess.CalledProcessError):
+            sys.exit(1)
+    if sys.argv[1] == '--verify-marked':
+        import subprocess
+        try:
+            repo, ref, directory = sys.argv[2:]
+            marked = legacy_marked_patches(repo, directory)
+            sys.exit(0 if verify_patch_tree(repo, ref, directory, marked) else 1)
+        except (OSError, ValueError, subprocess.CalledProcessError):
             sys.exit(1)
     data = source_state(sys.argv[2]) if sys.argv[1] == '--source' else patch_set(sys.argv[1])
     print(hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest())

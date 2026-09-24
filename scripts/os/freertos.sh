@@ -14,7 +14,10 @@ FREERTOS_REPO_URL="${FREERTOS_REPO_URL:-https://github.com/zephyrproject-rtos/rt
 FREERTOS_REF="${FREERTOS_REF:-3458360e7e038ca84a28c678e9bb7e967c565d87}"
 FREERTOS_KERNEL_REPO_URL="${FREERTOS_KERNEL_REPO_URL:-https://github.com/FreeRTOS/FreeRTOS-Kernel.git}"
 FREERTOS_KERNEL_REF="${FREERTOS_KERNEL_REF:-a8c9d351520d43bd94692361bd67b6d798985c98}"
-FREERTOS_KERNEL_SRC_DIR="${BUILD_DIR}/FreeRTOS-Kernel"
+FREERTOS_BASE_DIR="${BUILD_DIR}/freertos-sources"
+FREERTOS_BASE_SRC_DIR="${FREERTOS_BASE_DIR}/rtos-benchmark"
+FREERTOS_BASE_KERNEL_SRC_DIR="${FREERTOS_BASE_DIR}/FreeRTOS-Kernel"
+FREERTOS_KERNEL_SRC_DIR="$FREERTOS_BASE_KERNEL_SRC_DIR"
 FREERTOS_PATCH_DIR="${ROOT_DIR}/patches/freertos"
 if [[ -x "/code/rtos/zephyr-sdk-0.16.5-1/aarch64-zephyr-elf/bin/aarch64-zephyr-elf-gcc" ]]; then
     FREERTOS_CROSS_COMPILE="${FREERTOS_CROSS_COMPILE:-/code/rtos/zephyr-sdk-0.16.5-1/aarch64-zephyr-elf/bin/aarch64-zephyr-elf-}"
@@ -22,8 +25,8 @@ else
     FREERTOS_CROSS_COMPILE="${FREERTOS_CROSS_COMPILE:-aarch64-linux-gnu-}"
 fi
 
-# Shared source directory (all targets reuse the same clone, patches are re-applied per build)
-FREERTOS_SRC_DIR="${BUILD_DIR}/freertos"
+FREERTOS_SRC_DIR="$FREERTOS_BASE_SRC_DIR"
+FREERTOS_SOURCE_ROOT=""
 
 # Resolve cross-compiler binary directory
 CC_PATH="$(command -v "${FREERTOS_CROSS_COMPILE}gcc" 2>/dev/null || true)"
@@ -79,10 +82,14 @@ apply_single_patch() {
     local base
     base=$(basename "$patch_file")
     local stamp="${stamp_dir}/${base}.applied"
+    local digest
+    digest=$(sha256sum "$patch_file") || return 1
+    digest=${digest%% *}
 
     mkdir -p "$stamp_dir"
     if [[ -f "$stamp" ]]; then
-        info "[SKIP] $base (stamp exists)"
+        [[ $(<"$stamp") == "$digest" ]] || die "Patch changed after application: $base"
+        info "[SKIP] $base (content verified)"
         return 0
     fi
 
@@ -106,12 +113,12 @@ apply_single_patch() {
         if git apply --check "${exclude_args[@]}" "$patch_file" >/dev/null 2>&1; then
             if git apply "${exclude_args[@]}" "$patch_file" >>"${LOG_FILE}" 2>&1; then
                 applied=1
-                echo > "$stamp"
+                printf '%s\n' "$digest" >"$stamp"
                 info "[APPLY] $base (git apply)"
             fi
         elif [[ ${#exclude_args[@]} -eq 0 ]] && git apply --reverse --check "$patch_file" >/dev/null 2>&1; then
             info "[SKIP] $base (already applied)"
-            echo > "$stamp"
+            printf '%s\n' "$digest" >"$stamp"
             applied=1
         fi
     fi
@@ -120,7 +127,7 @@ apply_single_patch() {
     if [[ $applied -eq 0 ]] && [[ $can_use_git_apply -eq 1 ]]; then
         if git apply --3way "${exclude_args[@]}" "$patch_file" >>"${LOG_FILE}" 2>&1; then
             applied=1
-            echo > "$stamp"
+            printf '%s\n' "$digest" >"$stamp"
             info "[APPLY] $base (git apply --3way)"
         else
             # 3way merge left unmerged files; clean up before falling back
@@ -137,7 +144,7 @@ apply_single_patch() {
             if patch -p${plevel} --dry-run -f < "$patch_file" >/dev/null 2>&1; then
                 if patch -p${plevel} -f < "$patch_file" >>"${LOG_FILE}" 2>&1; then
                     applied=1
-                    echo > "$stamp"
+                    printf '%s\n' "$digest" >"$stamp"
                     info "[APPLY] $base (patch -p${plevel})"
                     break
                 fi
@@ -155,45 +162,23 @@ apply_single_patch() {
 # ── Clone and patch ──────────────────────────────────────────────────────────
 
 prepare_source() {
-    info "Cloning rtos-benchmark source repository $FREERTOS_REPO_URL -> $FREERTOS_SRC_DIR"
-    clone_repository "$FREERTOS_REPO_URL" "$FREERTOS_SRC_DIR"
-    info "Checking out rtos-benchmark ref ${FREERTOS_REF}"
-    checkout_ref "$FREERTOS_SRC_DIR" "$FREERTOS_REF"
+    info "Cloning rtos-benchmark source repository $FREERTOS_REPO_URL -> $FREERTOS_BASE_SRC_DIR"
+    clone_repository "$FREERTOS_REPO_URL" "$FREERTOS_BASE_SRC_DIR"
+    prepare_patched_source "$FREERTOS_BASE_SRC_DIR" "$FREERTOS_REF" /nonexistent-tgos-patches
 
-    info "Cloning FreeRTOS-Kernel source repository $FREERTOS_KERNEL_REPO_URL -> $FREERTOS_KERNEL_SRC_DIR"
-    clone_repository "$FREERTOS_KERNEL_REPO_URL" "$FREERTOS_KERNEL_SRC_DIR"
-    info "Checking out FreeRTOS-Kernel ref ${FREERTOS_KERNEL_REF}"
-    checkout_ref "$FREERTOS_KERNEL_SRC_DIR" "$FREERTOS_KERNEL_REF"
+    info "Cloning FreeRTOS-Kernel source repository $FREERTOS_KERNEL_REPO_URL -> $FREERTOS_BASE_KERNEL_SRC_DIR"
+    clone_repository "$FREERTOS_KERNEL_REPO_URL" "$FREERTOS_BASE_KERNEL_SRC_DIR"
+    prepare_patched_source "$FREERTOS_BASE_KERNEL_SRC_DIR" "$FREERTOS_KERNEL_REF" /nonexistent-tgos-patches
 }
 
-# Restore shared source to clean state and ensure it's cloned
 prepare_target_source() {
     prepare_source
-
-    # Restore source to clean state before patching (remove previous patches/build artifacts)
-    if [[ -d "${FREERTOS_SRC_DIR}/.git" ]]; then
-        info "Restoring source to clean state"
-        pushd "${FREERTOS_SRC_DIR}" >/dev/null
-        git reset HEAD 2>>"${LOG_FILE}" || true
-        git checkout -- . 2>>"${LOG_FILE}" || true
-        git clean -fd 2>>"${LOG_FILE}" || true
-        rm -rf .patch_stamps build-* */build
-        popd >/dev/null
-    fi
-
-    if [[ -d "${FREERTOS_KERNEL_SRC_DIR}/.git" ]]; then
-        info "Restoring FreeRTOS-Kernel source to clean state"
-        pushd "${FREERTOS_KERNEL_SRC_DIR}" >/dev/null
-        git checkout -- . 2>>"${LOG_FILE}" || true
-        git clean -fd 2>>"${LOG_FILE}" || true
-        popd >/dev/null
-    fi
-
-    # Patch stamps are now rooted at BUILD_DIR because the phytiumpi patch
-    # touches both the freertos and FreeRTOS-Kernel trees. Clear them before
-    # each target build so the combined patch is always re-applied after the
-    # source trees are reset.
-    rm -rf "${BUILD_DIR}/.patch_stamps"
+    FREERTOS_SOURCE_ROOT=$(mktemp -d "${BUILD_DIR}/freertos-work.XXXXXX") || return 1
+    trap '[[ -z ${FREERTOS_SOURCE_ROOT:-} ]] || rm -rf -- "$FREERTOS_SOURCE_ROOT"' EXIT
+    cp -a --reflink=auto -- "$FREERTOS_BASE_SRC_DIR" "$FREERTOS_SOURCE_ROOT/freertos" || return 1
+    cp -a --reflink=auto -- "$FREERTOS_BASE_KERNEL_SRC_DIR" "$FREERTOS_SOURCE_ROOT/FreeRTOS-Kernel" || return 1
+    FREERTOS_SRC_DIR="$FREERTOS_SOURCE_ROOT/freertos"
+    FREERTOS_KERNEL_SRC_DIR="$FREERTOS_SOURCE_ROOT/FreeRTOS-Kernel"
 }
 
 freertos_guest_source_matches_doc() {
@@ -548,7 +533,7 @@ phytiumpi() {
     prepare_target_source
 
     info "Applying patch: rtos-benchmark-phytiumpi.patch"
-    apply_single_patch "${FREERTOS_PATCH_DIR}/rtos-benchmark-phytiumpi.patch" "$BUILD_DIR"
+    apply_single_patch "${FREERTOS_PATCH_DIR}/rtos-benchmark-phytiumpi.patch" "$FREERTOS_SOURCE_ROOT"
 
     freertos_build_cmake \
         "freertos_aarch64_guest" \
@@ -576,7 +561,7 @@ tac_e400_plc() {
     prepare_target_source
 
     info "Applying patch: rtos-benchmark-phytiumpi.patch"
-    apply_single_patch "${FREERTOS_PATCH_DIR}/rtos-benchmark-phytiumpi.patch" "$BUILD_DIR"
+    apply_single_patch "${FREERTOS_PATCH_DIR}/rtos-benchmark-phytiumpi.patch" "$FREERTOS_SOURCE_ROOT"
 
     freertos_build_cmake \
         "freertos_aarch64_guest" \
@@ -728,7 +713,6 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                 qemu-aarch64 phytiumpi tac-e400-plc orangepi-5-plus -- "$@"
             ;;
         clean)
-            rm -rf "${FREERTOS_SRC_DIR}"
             run_sequential_targets os "freertos clean" run_script_target \
                 qemu-aarch64 phytiumpi tac-e400-plc orangepi-5-plus -- clean
             ;;

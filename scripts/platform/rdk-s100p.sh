@@ -18,63 +18,94 @@ PLATFORM_IMAGES_DIR="${ROOT_DIR}/IMAGES/rdk-s100p"
 PLATFORM_ROOTFS_DIR="${ROOT_DIR}/IMAGES/rootfs"
 
 # Apply patches to defconfig and uboot config (remote via SSH)
-apply_patches_remote() {
+apply_patches_remote() (
     local patch_dir="$1"
     local remote_host="$2"
     local remote_dir="$3"
-    
-    if [[ ! -d "${patch_dir}" ]]; then
-        info "No patch directory: ${patch_dir}"
-        return 0
-    fi
+    local patch_file base digest previous stamp legacy quoted_dir quoted_stamp_dir
+    local remote_stamps plevel applied
+    local -A expected_stamps=()
     
     shopt -s nullglob
-    local patch_files=("${patch_dir}"/*.patch)
-    if (( ${#patch_files[@]} == 0 )); then
-        info "No patch files in ${patch_dir}"
-        return 0
-    fi
-    
+    local patch_files=("${patch_dir}"/*.patch "${patch_dir}"/*.diff)
     info "Found ${#patch_files[@]} patch file(s)"
-    
     for patch_file in "${patch_files[@]}"; do
-        [[ -f "$patch_file" ]] || continue
-        local base=$(basename "$patch_file")
-        local stamp_dir="${remote_dir}/.patch_stamps"
-        
-        # Create stamp directory and check if already applied
-        ssh "${remote_host}" "mkdir -p '${stamp_dir}'"
-        if ssh "${remote_host}" "[ -f '${stamp_dir}/${base}.applied' ]"; then
-            info "[SKIP] ${base} (already applied)"
-            continue
+        expected_stamps["${patch_file##*/}.applied"]=1
+        expected_stamps["${patch_file##*/}.sha256"]=1
+    done
+    
+    printf -v quoted_dir '%q' "$remote_dir"
+    printf -v quoted_stamp_dir '%q' "$remote_dir/.patch_stamps"
+    ssh "$remote_host" "mkdir -p -- $quoted_stamp_dir" || return 1
+    remote_stamps=$(ssh "$remote_host" "find $quoted_stamp_dir -maxdepth 1 -type f \\( -name '*.applied' -o -name '*.sha256' \\) -printf '%f\\n' | LC_ALL=C sort") || return 1
+    if [[ -n $remote_stamps ]]; then
+        while IFS= read -r base; do
+            [[ -n ${expected_stamps[$base]-} ]] || {
+                error "RDK S100P remote SDK has a removed patch: $base; restore the SDK before rebuilding"
+                return 1
+            }
+        done <<<"$remote_stamps"
+    fi
+
+    for patch_file in "${patch_files[@]}"; do
+        base=${patch_file##*/}
+        digest=$(sha256sum "$patch_file") || return 1
+        digest=${digest%% *}
+        printf -v stamp '%q' "$remote_dir/.patch_stamps/${base}.sha256"
+        printf -v legacy '%q' "$remote_dir/.patch_stamps/${base}.applied"
+        previous=$(ssh "$remote_host" "if [ -f $stamp ]; then cat $stamp; elif [ -f $legacy ]; then printf legacy; fi") || return 1
+        if [[ -n $previous && $previous != "$digest" && $previous != legacy ]]; then
+            error "RDK S100P remote SDK patch changed: $base; restore the SDK before rebuilding"
+            return 1
         fi
-        
-        info "[APPLY] ${base}"
-        
-        # Try patch -p1 first, then patch -p0
-        local applied=0
-        for plevel in 1 0; do
-            if ssh "${remote_host}" "cd '${remote_dir}' && patch -p${plevel} --dry-run" < "${patch_file}" >/dev/null 2>&1; then
-                if ssh "${remote_host}" "cd '${remote_dir}' && patch -p${plevel}" < "${patch_file}"; then
-                    ssh "${remote_host}" "touch '${stamp_dir}/${base}.applied'"
+        if [[ -n $previous ]]; then
+            applied=0
+            for plevel in 1 0; do
+                if ssh "$remote_host" "cd $quoted_dir && patch --batch --forward -R -p$plevel --dry-run" \
+                    <"$patch_file" >/dev/null 2>&1; then
                     applied=1
-                    info "  patch -p${plevel} applied"
                     break
                 fi
-            fi
-        done
-        
-        if [[ $applied -eq 0 ]]; then
-            warn "Failed to apply ${base}"
+            done
+            ((applied == 1)) || {
+                error "RDK S100P remote SDK no longer matches applied patch: $base"
+                return 1
+            }
+            info "[SKIP] $base (content and remote patch verified)"
+        else
+            applied=0
+            for plevel in 1 0; do
+                if ssh "$remote_host" "cd $quoted_dir && patch --batch --forward -R -p$plevel --dry-run" \
+                    <"$patch_file" >/dev/null 2>&1; then
+                    applied=1
+                    info "[SKIP] $base (already applied without a stamp)"
+                    break
+                fi
+            done
+            for plevel in 1 0; do
+                ((applied == 0)) || break
+                if ssh "$remote_host" "cd $quoted_dir && patch --batch --forward -p$plevel --dry-run" \
+                    <"$patch_file" >/dev/null 2>&1; then
+                    ssh "$remote_host" "cd $quoted_dir && patch --batch --forward -p$plevel" <"$patch_file" || return 1
+                    applied=1
+                    info "[APPLY] $base"
+                    break
+                fi
+            done
+            ((applied == 1)) || {
+                error "Cannot apply RDK S100P remote SDK patch: $base"
+                return 1
+            }
         fi
+        ssh "$remote_host" "printf '%s\\n' $digest > $stamp && : > $legacy" || return 1
     done
-}
+)
 
 apply_patches_local_sdk() (
     local patch_dir="$1"
     local sdk_dir="$2"
     local trusted_sdk="/share/guest-images/rdk_s100p"
-    local resolved_sdk patch_file base applied plevel
+    local resolved_sdk
 
     resolved_sdk=$(realpath -e -- "$sdk_dir") || {
         error "RDK S100P SDK path does not exist: $sdk_dir"
@@ -85,30 +116,74 @@ apply_patches_local_sdk() (
         exit 1
     fi
 
+    rdk_apply_patches_local_tree "$patch_dir" "$resolved_sdk"
+)
+
+rdk_apply_patches_local_tree() (
+    local patch_dir=$1 sdk_dir=$2 patch_file base applied plevel digest previous stamp
+    local -A expected_stamps=()
+    local existing
     shopt -s nullglob
     local patch_files=("$patch_dir"/*.patch "$patch_dir"/*.diff)
     info "Found ${#patch_files[@]} RDK S100P SDK patch file(s)"
-    mkdir -p "$resolved_sdk/.patch_stamps"
-    pushd "$resolved_sdk" >/dev/null
     for patch_file in "${patch_files[@]}"; do
-        base=$(basename -- "$patch_file")
+        expected_stamps["${patch_file##*/}"]=1
+    done
+    mkdir -p "$sdk_dir/.patch_stamps"
+    for existing in "$sdk_dir/.patch_stamps/"*.applied "$sdk_dir/.patch_stamps/"*.sha256; do
+        base=${existing##*/}
+        base=${base%.applied}
+        base=${base%.sha256}
+        [[ -n ${expected_stamps[$base]-} ]] || {
+            error "RDK S100P SDK has a removed patch: $base; restore the SDK before rebuilding"
+            return 1
+        }
+    done
+    pushd "$sdk_dir" >/dev/null
+    for patch_file in "${patch_files[@]}"; do
+        base=${patch_file##*/}
+        digest=$(sha256sum "$patch_file") || return 1
+        digest=${digest%% *}
+        stamp="$sdk_dir/.patch_stamps/${base}.sha256"
+        previous=
+        if [[ -f $stamp ]]; then
+            previous=$(<"$stamp")
+            [[ $previous == "$digest" ]] || {
+                error "RDK S100P SDK patch changed: $base; restore the SDK before rebuilding"
+                return 1
+            }
+        elif [[ -f $sdk_dir/.patch_stamps/${base}.applied ]]; then
+            previous=legacy
+        fi
         applied=0
         if git apply --reverse --check "$patch_file" >/dev/null 2>&1; then
-            info "[SKIP] $base (already applied)"
             applied=1
+            info "[SKIP] $base (already applied)"
+        elif [[ -n $previous ]]; then
+            for plevel in 1 0; do
+                if patch --batch --forward -R -p"$plevel" --dry-run <"$patch_file" >/dev/null 2>&1; then
+                    applied=1
+                    info "[SKIP] $base (already applied, -p$plevel)"
+                    break
+                fi
+            done
+            ((applied == 1)) || {
+                error "RDK S100P SDK no longer matches applied patch: $base"
+                return 1
+            }
         elif git apply --check "$patch_file" >/dev/null 2>&1; then
             git apply "$patch_file"
             info "[APPLY] $base (git apply)"
             applied=1
         else
             for plevel in 1 0; do
-                if patch --batch -R -p"$plevel" --dry-run <"$patch_file" >/dev/null 2>&1; then
+                if patch --batch --forward -R -p"$plevel" --dry-run <"$patch_file" >/dev/null 2>&1; then
                     info "[SKIP] $base (already applied, -p$plevel)"
                     applied=1
                     break
                 fi
-                if patch --batch -p"$plevel" --dry-run <"$patch_file" >/dev/null 2>&1; then
-                    patch --batch -p"$plevel" <"$patch_file"
+                if patch --batch --forward -p"$plevel" --dry-run <"$patch_file" >/dev/null 2>&1; then
+                    patch --batch --forward -p"$plevel" <"$patch_file"
                     info "[APPLY] $base (patch -p$plevel)"
                     applied=1
                     break
@@ -117,9 +192,10 @@ apply_patches_local_sdk() (
         fi
         if ((applied == 0)); then
             error "Cannot verify or apply RDK S100P SDK patch: $base"
-            exit 1
+            return 1
         fi
-        : >"$resolved_sdk/.patch_stamps/${base}.applied"
+        printf '%s\n' "$digest" >"$stamp"
+        : >"$sdk_dir/.patch_stamps/${base}.applied"
     done
     popd >/dev/null
 )

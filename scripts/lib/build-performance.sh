@@ -174,7 +174,13 @@ build_task() (
 prepare_patched_source() {
     local source=$1 ref=$2 patches=$3
     build_assert_workspace_path "$source" || return
-    local state_dir="$source/.patch_stamps" identity current base
+    local state_dir="$source/.patch_stamps" identity current base head remote_head
+    if ! git -C "$source" diff --cached --quiet --exit-code HEAD --; then
+        error "Source has staged changes: $source; preserve or resolve them before rebuilding"
+        git -C "$source" status --short --untracked-files=normal -- . ':(exclude).patch_stamps' |
+            sed -n '1,40p' >&2
+        return 1
+    fi
     python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --protect-cmake-outputs "$source" || return
     if ! base=$(git -C "$source" rev-parse --verify "${ref}^{commit}" 2>/dev/null); then
         if [[ -n ${BUILD_SOURCE_CACHE_DIR:-} ]]; then
@@ -183,8 +189,8 @@ prepare_patched_source() {
             git -C "$source" fetch --quiet --no-tags --depth=1 origin "$ref" || return
             base=$(git -C "$source" rev-parse --verify 'FETCH_HEAD^{commit}') || return
         fi
-        ref=$base
     fi
+    ref=$base
     identity=$(python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" "$patches") || return
     current=$(python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --source "$source") || return
     if [[ -f $state_dir/source.sha256 && $(<"$state_dir/source.sha256") == "$current" ]]; then
@@ -203,12 +209,25 @@ prepare_patched_source() {
         printf '%s\n' "$base" >"$state_dir/base.commit"
         info "SOURCE CACHE HIT: verified existing patched source $source"
         return 0
+    elif [[ ! -f $state_dir/source.sha256 && ! -f $state_dir/patch-set.sha256 ]] &&
+         python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --verify-marked "$source" "$base" "$patches"; then
+        info "SOURCE CACHE MISS: verified legacy patches; preparing updated patch set"
     elif [[ -f $state_dir/source.sha256 ]] ||
          ! python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --verify "$source" HEAD /nonexistent-tgos-patches; then
         error "Source has unverified local changes: $source; preserve or resolve them before rebuilding"
         git -C "$source" status --short --untracked-files=normal -- . ':(exclude).patch_stamps' |
             sed -n '1,40p' >&2
         return 1
+    else
+        head=$(git -C "$source" rev-parse HEAD) || return
+        remote_head=$(git -C "$source" rev-parse --verify 'refs/remotes/origin/HEAD^{commit}' 2>/dev/null) || remote_head=
+        if [[ $head != "$base" && $head != "$remote_head" ]]; then
+            if ! git -C "$source" fetch --quiet --no-tags --depth=1 origin "$head" 2>/dev/null ||
+               [[ $(git -C "$source" rev-parse 'FETCH_HEAD^{commit}') != "$head" ]]; then
+                error "Source HEAD is not verified by origin: $source; preserve or resolve it before rebuilding"
+                return 1
+            fi
+        fi
     fi
     checkout_ref "$source" "$ref" || return
     if apply_patches "$patches" "$source"; then

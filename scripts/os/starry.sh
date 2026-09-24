@@ -113,15 +113,28 @@ starry_checkout_source_ref() {
         dev)
             info "Fetching latest tgoskits dev branch"
             git -C "${STARRY_SRC_DIR}" fetch --quiet --no-tags --depth=1 origin dev
-            git -C "${STARRY_SRC_DIR}" checkout --quiet --detach FETCH_HEAD
             ;;
         *)
             info "Fetching tgoskits ref ${STARRY_REF}"
             git -C "${STARRY_SRC_DIR}" fetch --quiet --no-tags --depth=1 origin "${STARRY_REF}"
-            git -C "${STARRY_SRC_DIR}" checkout --quiet --detach FETCH_HEAD
             ;;
     esac
-    rm -rf -- "${STARRY_SRC_DIR}/.patch_stamps"
+}
+
+starry_prepare_source() {
+    local patch_dir=/nonexistent-tgos-patches
+
+    clone_repository "${STARRY_REPO_URL}" "${STARRY_SRC_DIR}"
+    if git -C "${STARRY_SRC_DIR}" remote get-url origin >/dev/null 2>&1; then
+        git -C "${STARRY_SRC_DIR}" remote set-url origin "${STARRY_REPO_URL}"
+    else
+        git -C "${STARRY_SRC_DIR}" remote add origin "${STARRY_REPO_URL}"
+    fi
+    starry_checkout_source_ref
+    if [[ "${STARRY_CONFIG}" == "os/StarryOS/configs/board/orangepi-5-plus.toml" ]]; then
+        patch_dir="${ROOT_DIR}/patches/starry"
+    fi
+    prepare_patched_source "${STARRY_SRC_DIR}" FETCH_HEAD "$patch_dir"
 }
 
 starry_config_for_build() {
@@ -158,21 +171,14 @@ starry_build() {
     local artifact_candidate
     local source_commit
     local build_cmd
-
-    clone_repository "${STARRY_REPO_URL}" "${STARRY_SRC_DIR}"
-    if git -C "${STARRY_SRC_DIR}" remote get-url origin >/dev/null 2>&1; then
-        git -C "${STARRY_SRC_DIR}" remote set-url origin "${STARRY_REPO_URL}"
-    else
-        git -C "${STARRY_SRC_DIR}" remote add origin "${STARRY_REPO_URL}"
-    fi
-    starry_checkout_source_ref
-
-    if [[ "${STARRY_CONFIG}" == "os/StarryOS/configs/board/orangepi-5-plus.toml" ]]; then
-        apply_patches "${ROOT_DIR}/patches/starry" "${STARRY_SRC_DIR}"
-    fi
+    starry_prepare_source
 
     config_path="${STARRY_SRC_DIR}/${STARRY_CONFIG}"
     [[ -f "${config_path}" ]] || die "StarryOS build config not found: ${config_path}"
+    if [[ -n $STARRY_LOG ]]; then
+        STARRY_TEMP_CONFIG="${STARRY_SRC_DIR}/.tgosimages-starry-$(basename -- "$config_path")"
+        trap 'rm -f -- "$STARRY_TEMP_CONFIG"' EXIT
+    fi
     build_config="$(starry_config_for_build "${config_path}")"
 
     build_cmd=(build_cargo xtask starry build -c "${build_config}")

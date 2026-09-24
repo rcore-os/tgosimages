@@ -547,12 +547,11 @@ test_busybox_source_preparation_serializes() (
     BUSYBOX_PATCH_DIR="$area/patches"
     mkdir "$BUSYBOX_PATCH_DIR"
     clone_repository() { :; }
-    checkout_ref() {
+    prepare_patched_source() {
         if ! mkdir "$state" 2>/dev/null; then touch "$overlap"; return 1; fi
         sleep 0.2
         rmdir "$state"
     }
-    apply_patches() { :; }
     (composition_dir="$area/run-one"; mkdir "$composition_dir"; mkfs_prepare_busybox_source) &
     local first=$!
     (composition_dir="$area/run-two"; mkdir "$composition_dir"; mkfs_prepare_busybox_source) &

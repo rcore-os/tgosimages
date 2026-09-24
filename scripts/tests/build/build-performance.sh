@@ -204,6 +204,85 @@ checkout_ref "$work/patched" "$base"
 prepare_patched_source "$work/patched" "$base" "$work/ordered"
 [[ $(cat "$work/patched/value") == two ]]
 printf 'PASS: overlapping patches, changed/removed patches, legacy adoption, local edits, and checkout reset\n'
+
+mkdir "$work/legacy-source" "$work/legacy-patches"
+git -C "$work/legacy-source" init -q
+printf 'one\n' >"$work/legacy-source/value"
+git -C "$work/legacy-source" add value
+git -C "$work/legacy-source" -c user.name=test -c user.email=test@example.com commit -qm base
+legacy_base=$(git -C "$work/legacy-source" rev-parse HEAD)
+printf 'two\n' >"$work/legacy-source/value"
+git -C "$work/legacy-source" diff >"$work/legacy-patches/01.patch"
+git -C "$work/legacy-source" add value
+printf 'three\n' >"$work/legacy-source/value"
+git -C "$work/legacy-source" diff >"$work/legacy-patches/02.patch"
+git -C "$work/legacy-source" reset --hard -q "$legacy_base"
+git -C "$work/legacy-source" apply "$work/legacy-patches/01.patch"
+mkdir "$work/legacy-source/.patch_stamps"
+: >"$work/legacy-source/.patch_stamps/01.patch.applied"
+printf 'user edit\n' >"$work/legacy-source/value"
+if prepare_patched_source "$work/legacy-source" "$legacy_base" "$work/legacy-patches"; then exit 1; fi
+[[ $(<"$work/legacy-source/value") == 'user edit' ]]
+printf 'two\n' >"$work/legacy-source/value"
+: >"$work/legacy-source/.patch_stamps/removed.patch.applied"
+if prepare_patched_source "$work/legacy-source" "$legacy_base" "$work/legacy-patches"; then exit 1; fi
+rm "$work/legacy-source/.patch_stamps/removed.patch.applied"
+printf 'staged user edit\n' >"$work/legacy-source/value"
+git -C "$work/legacy-source" add value
+printf 'two\n' >"$work/legacy-source/value"
+if prepare_patched_source "$work/legacy-source" "$legacy_base" "$work/legacy-patches"; then exit 1; fi
+[[ $(git -C "$work/legacy-source" show :value) == 'staged user edit' ]]
+git -C "$work/legacy-source" restore --staged value
+prepare_patched_source "$work/legacy-source" "$legacy_base" "$work/legacy-patches"
+[[ $(<"$work/legacy-source/value") == three ]]
+printf 'PASS: verified legacy subset is invalidated when a new patch is added\n'
+
+git clone -q "$work/legacy-source" "$work/legacy-history"
+git -C "$work/legacy-history" checkout -q --detach "$legacy_base"
+git -C "$work/legacy-history" apply "$work/legacy-patches/01.patch"
+git -C "$work/legacy-history" -c user.name=test -c user.email=test@example.com commit --allow-empty -qm 'user empty commit'
+history_commit=$(git -C "$work/legacy-history" rev-parse HEAD)
+mkdir "$work/legacy-history/.patch_stamps"
+: >"$work/legacy-history/.patch_stamps/01.patch.applied"
+if prepare_patched_source "$work/legacy-history" "$legacy_base" "$work/legacy-patches"; then exit 1; fi
+[[ $(git -C "$work/legacy-history" rev-parse HEAD) == "$history_commit" ]]
+printf 'PASS: legacy patch validation preserves unrelated local commits\n'
+
+mkdir "$work/committed-source"
+git -C "$work/committed-source" init -q
+printf 'base\n' >"$work/committed-source/value"
+git -C "$work/committed-source" add value
+git -C "$work/committed-source" -c user.name=test -c user.email=test@example.com commit -qm base
+committed_base=$(git -C "$work/committed-source" rev-parse HEAD)
+printf 'user commit\n' >"$work/committed-source/value"
+git -C "$work/committed-source" add value
+git -C "$work/committed-source" -c user.name=test -c user.email=test@example.com commit -qm user
+user_commit=$(git -C "$work/committed-source" rev-parse HEAD)
+if prepare_patched_source "$work/committed-source" "$committed_base" /nonexistent-tgos-patches; then exit 1; fi
+[[ $(git -C "$work/committed-source" rev-parse HEAD) == "$user_commit" ]]
+printf 'PASS: unverified local commits are preserved\n'
+
+git clone -q "$work/committed-source" "$work/fresh-source"
+prepare_patched_source "$work/fresh-source" "$committed_base" /nonexistent-tgos-patches
+[[ $(git -C "$work/fresh-source" rev-parse HEAD) == "$committed_base" ]]
+printf 'PASS: a fresh clone can switch from the remote tip to a pinned ref\n'
+git clone -q "$work/committed-source" "$work/old-pinned-source"
+git -C "$work/old-pinned-source" checkout -q --detach "$committed_base"
+prepare_patched_source "$work/old-pinned-source" "$user_commit" /nonexistent-tgos-patches
+[[ $(git -C "$work/old-pinned-source" rev-parse HEAD) == "$user_commit" ]]
+printf 'PASS: an unstamped old pinned checkout can switch to a new ref\n'
+git clone -q "$work/committed-source" "$work/detached-user-source"
+git -C "$work/detached-user-source" checkout -q --detach "$committed_base"
+printf 'detached user commit\n' >"$work/detached-user-source/value"
+git -C "$work/detached-user-source" add value
+git -C "$work/detached-user-source" -c user.name=test -c user.email=test@example.com commit -qm user
+detached_user=$(git -C "$work/detached-user-source" rev-parse HEAD)
+git -C "$work/detached-user-source" checkout -q --detach "$committed_base"
+git -C "$work/detached-user-source" checkout -q --detach "$detached_user"
+if prepare_patched_source "$work/detached-user-source" "$user_commit" /nonexistent-tgos-patches; then exit 1; fi
+[[ $(git -C "$work/detached-user-source" rev-parse HEAD) == "$detached_user" ]]
+printf 'PASS: rechecked-out detached user commits are preserved\n'
+
 printf 'parallel\n' >"$work/input"
 run_task & first=$!
 run_task & second=$!

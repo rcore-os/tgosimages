@@ -14,7 +14,7 @@ IVC_SDK_REF="${IVC_SDK_REF:-}"
 IVC_SDK_DIR="${IVC_SDK_DIR:-}"
 IVC_SDK_CLONED=0
 TGOSKITS_REPO_URL="${TGOSKITS_REPO_URL:-https://github.com/rcore-os/tgoskits.git}"
-TGOSKITS_REF="${TGOSKITS_REF:-dev}"
+TGOSKITS_REF="${TGOSKITS_REF:-3531e72e734ada002ee20520f7467e58e5ea69e9}"
 TGOSKITS_SRC_DIR="${TGOSKITS_SRC_DIR:-${BUILD_DIR}/tgoskits-starry-ivc}"
 
 OUTPUT_ROOT="${OUTPUT_ROOT:-${TGOSIMAGES_ROOT}/IMAGES/orangepi/ivc}"
@@ -45,7 +45,7 @@ Options:
   --ivc-sdk-repo-url <url>   Repository used only when ivc-sdk is absent
   --ivc-sdk-ref <ref>        Checkout this ref only after a fresh ivc-sdk clone
   --tgoskits-repo-url <url>  tgoskits repository or local path for StarryOS
-  --tgoskits-ref <ref>       tgoskits ref for StarryOS build (default: dev)
+  --tgoskits-ref <ref>       tgoskits ref for StarryOS build (default: 3531e72e734ada002ee20520f7467e58e5ea69e9)
   --tgoskits-src-dir <path>  StarryOS source/build checkout directory
   --output-root <path>       Output root (default: IMAGES/orangepi/ivc)
   --stage-dir <path>         Payload directory (default: <output-root>)
