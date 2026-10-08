@@ -1,4 +1,3 @@
-diff --git a/os/StarryOS/configs/board/orangepi-5-plus.toml b/os/StarryOS/configs/board/orangepi-5-plus.toml
 --- a/os/StarryOS/configs/board/orangepi-5-plus.toml
 +++ b/os/StarryOS/configs/board/orangepi-5-plus.toml
 @@ -2,6 +2,7 @@
