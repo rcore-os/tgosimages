@@ -10,7 +10,7 @@ build_paths_init "$ROOT_DIR"
 source "${SCRIPT_DIR}/../lib/utils.sh"
 
 STARRY_REPO_URL="${STARRY_REPO_URL:-https://github.com/rcore-os/tgoskits.git}"
-STARRY_REF="${STARRY_REF:-3531e72e734ada002ee20520f7467e58e5ea69e9}"
+STARRY_REF="${STARRY_REF:-dev}"
 STARRY_SRC_DIR="${STARRY_SRC_DIR:-${BUILD_DIR}/tgoskits-starry}"
 STARRY_IMAGES_DIR="${ROOT_DIR}/IMAGES/starry"
 STARRY_RELEASE_IMAGES_DIR="${ROOT_DIR}/IMAGES/orangepi-5-plus-starry"
@@ -30,7 +30,7 @@ Usage:
 
 Options:
   --repo-url <url>             tgoskits repository URL
-  --ref <commit-or-ref>        tgoskits commit/ref (default: 3531e72e734ada002ee20520f7467e58e5ea69e9)
+  --ref <commit-or-ref>        tgoskits commit/ref (default: dev)
   --src-dir <dir>              source checkout (default: build/tgoskits-starry)
   --config <path>              config path relative to tgoskits
   --images-dir <dir>           guest-layout output directory
@@ -134,7 +134,7 @@ starry_prepare_source() {
     if [[ "${STARRY_CONFIG}" == "os/StarryOS/configs/board/orangepi-5-plus.toml" ]]; then
         patch_dir="${ROOT_DIR}/patches/starry"
     fi
-    prepare_patched_source "${STARRY_SRC_DIR}" FETCH_HEAD "$patch_dir"
+    prepare_patched_source "${STARRY_SRC_DIR}" FETCH_HEAD "${patch_dir}"
 }
 
 starry_config_for_build() {

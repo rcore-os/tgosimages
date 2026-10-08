@@ -9,7 +9,7 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 
 LOG_CREATE_DEFAULT_FILE=0 bash -c '
     source "$1/scripts/os/starry.sh"
-    [[ $STARRY_REF == 3531e72e734ada002ee20520f7467e58e5ea69e9 ]]
+    [[ $STARRY_REF == dev ]]
     starry_parse_args --ref custom-ref
     [[ $STARRY_REF == custom-ref ]]
 ' _ "$ROOT_DIR"
