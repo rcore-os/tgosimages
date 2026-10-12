@@ -234,9 +234,14 @@ test_injection_routing_and_order() (
         printf 'atomic:%s:%s:%s:%s:%s:ivc-guest=%s\n' "$1" "$2" "$3" "$4" "$5" "$ivc_guest" >>"$call_log"
     }
     _rootfs_validate_guest_image_set() { :; }
+    qemu_ivc_inject_nested_payloads() {
+        printf 'nested:%s:%s:%s\n' "$1" "$2" "$3" >>"$call_log"
+    }
     qemu_rootfs_inject_platform_dir || return 1
     [[ $(grep -c '^initramfs:' "$call_log") -eq 1 ]]
     [[ $(grep -c '^atomic:' "$call_log") -eq 3 ]]
+    [[ $(grep -c '^nested:' "$call_log") -eq 1 ]]
+    grep -q 'nested:.*rootfs-aarch64-alpine.img:.*qemu-aarch64-ivc-rootfs-overlay:19M$' "$call_log" || return 1
     [[ $(sed -n '1p' "$call_log") == initramfs:* ]]
     grep -q "atomic:$BUILD_DIR/qemu-rootfs-final-aarch64\..*/rootfs-aarch64-busybox.img:.*:.*:rootfs-aarch64-busybox.img:19M" "$call_log" || return 1
     grep -q "atomic:$BUILD_DIR/qemu-rootfs-final-aarch64\..*/rootfs-aarch64-alpine.img:.*:$BUILD_DIR/qemu-aarch64-ivc-rootfs-overlay:rootfs-aarch64-alpine.img:19M" "$call_log" || return 1
@@ -296,6 +301,57 @@ test_real_ext4_platform_injection() (
     [[ $(stat -c %y "$PLATFORM_IMAGES_DIR/linux/linux-qemu") == *.500000000* ]] || return 1
 )
 run_ok 'real ext4 platform injection normalizes private staging and preserves source timestamps' test_real_ext4_platform_injection
+
+test_real_ext4_shared_alpine_guests() (
+    local fake_root="$work/shared-alpine-root"
+    local outer="$fake_root/IMAGES/rootfs/rootfs-aarch64-alpine.img"
+    local nested="$work/shared-alpine-guest.img"
+    local seed="$work/shared-alpine-seed"
+    local guest_seed="$work/shared-alpine-guest-seed"
+    local extracted="$work/shared-alpine-extracted.img"
+    local index before_free
+    ROOT_DIR=$fake_root BUILD_DIR="$fake_root/build" ARCH=aarch64
+    PLATFORM_IMAGES_DIR="$fake_root/IMAGES/qemu-aarch64"
+    ROOTFS_BUILDERS=(alpine)
+    ROOTFS_GUEST_COUNT=2 QEMU_OUTER_FREE_SIZE=1M
+    mkdir -p "$BUILD_DIR" "$PLATFORM_IMAGES_DIR/linux" "$(dirname -- "$outer")" \
+        "$seed/guest" "$guest_seed/guest-tests/existing"
+    printf kernel >"$PLATFORM_IMAGES_DIR/linux/linux-qemu"
+    printf existing-test >"$guest_seed/guest-tests/existing/tool"
+    _rootfs_builder_normalize_overlay_seconds "$guest_seed"
+    make_ext4 "$nested"
+    _rootfs_inject_tree_via_debugfs "$nested" "$guest_seed"
+    before_free=$(rootfs_ext4_free_bytes "$nested")
+    make_ext4 "$outer"
+    for index in 0 1; do
+        cp "$nested" "$seed/guest/rootfs-aarch64-alpine-${index}.img"
+    done
+    _rootfs_builder_normalize_overlay_seconds "$seed"
+    _rootfs_inject_tree_via_debugfs "$outer" "$seed"
+    qemu_prepare_ivc_payloads() {
+        local overlay="$BUILD_DIR/qemu-aarch64-ivc-rootfs-overlay"
+        mkdir -p "$overlay/root"
+        printf matching-module >"$overlay/root/axvisor.ko"
+        printf subscriber >"$overlay/root/ivc-subscribe"
+        chmod 0755 "$overlay/root/ivc-subscribe"
+    }
+    qemu_ivc_validate_staged_payloads() { :; }
+    qemu_rootfs_inject_platform_dir || return 1
+    for index in 0 1; do
+        dump_ext4_path "$outer" "/guest/rootfs-aarch64-alpine-${index}.img" "$extracted" || return 1
+        dump_ext4_path "$extracted" /root/axvisor.ko "$work/module" || return 1
+        [[ $(cat "$work/module") == matching-module ]] || return 1
+        dump_ext4_path "$extracted" /root/ivc-subscribe "$work/subscriber" || return 1
+        [[ $(cat "$work/subscriber") == subscriber ]] || return 1
+        debugfs -R 'stat /root/ivc-subscribe' "$extracted" 2>/dev/null | grep -q 'Mode:  *0755' || return 1
+        dump_ext4_path "$extracted" /guest-tests/existing/tool "$work/existing" || return 1
+        [[ $(cat "$work/existing") == existing-test ]] || return 1
+        [[ $(rootfs_ext4_free_bytes "$extracted") -ge $before_free ]] || return 1
+    done
+    dump_ext4_path "$outer" /root/axvisor.ko "$work/module" || return 1
+    [[ $(cat "$work/module") == matching-module ]] || return 1
+)
+run_ok 'Alpine guests share IVC payloads without losing existing tests or free space' test_real_ext4_shared_alpine_guests
 
 test_real_ext4_overlay_failure_rolls_back() (
     local fake_root="$work/rollback-root"

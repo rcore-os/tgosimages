@@ -233,6 +233,11 @@ not leak into the nested image. There is deliberately no generated
 `run-all.sh`: selecting tests packages their assets but does not choose a test
 order or run them automatically.
 
+For QEMU AArch64 Alpine, `qemu_ivc_inject_nested_payloads()` also installs the
+matching `/root/axvisor.ko` (IVC + IVSHMEM) and `/root/ivc-subscribe` into every
+existing nested guest image. Other guest tests and their free-space reserves are
+preserved; no dedicated IVC rootfs is created, and the module is not loaded automatically.
+
 The defaults are:
 
 | Image scope | BusyBox | Alpine | Debian |

@@ -234,6 +234,11 @@ scripts/rootfs/debian.sh loongarch64 --debian unstable --out_dir IMAGES/rootfs
 外层专用平台文件和 `/opt/ltp` 不会进入嵌套镜像。系统刻意不生成
 `run-all.sh`：选择测试只负责打包测试资源，不规定执行顺序，也不会自动运行。
 
+QEMU AArch64 Alpine 的 `qemu_ivc_inject_nested_payloads()` 还会将匹配客户机内核的
+`/root/axvisor.ko`（IVC + IVSHMEM）和 `/root/ivc-subscribe` 安装到每份已有的
+嵌套客户机镜像。已有客户机测试和空闲空间预留保持不变，不新增 IVC 专用 rootfs，
+也不会自动加载模块。
+
 默认值如下：
 
 | 镜像范围 | BusyBox | Alpine | Debian |

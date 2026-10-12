@@ -104,7 +104,7 @@ usage() {
     printf '  * Guest paths are zero-based: /guest/rootfs-<arch>-<type>-0.img through -(count-1).img.\n'
     printf '  * Platform payload is added only to the outer image.\n'
     printf '  * BusyBox initramfs receives platform payload only; nested images and guest tests are excluded.\n'
-    printf '  * qemu-aarch64 Alpine rootfs receives one axvisor.ko (IVC + IVSHMEM); UIO is built into Linux.\n'
+    printf '  * qemu-aarch64 Alpine outer and nested guest rootfs receive axvisor.ko (IVC + IVSHMEM) and ivc-subscribe; UIO is built into Linux.\n'
     printf '  * Generated rootfs artifacts are stored directly under IMAGES/rootfs.\n'
     printf '\n'
     printf 'Examples:\n'
@@ -696,6 +696,36 @@ qemu_has_help_arg() {
     return 1
 }
 
+# Operate only on QEMU's private composed output; publication remains atomic.
+qemu_ivc_inject_nested_payloads() (
+    local image=$1 overlay=$2 outer_reserve
+    local stage count index member guest_image guest_free source_path destination_path
+    outer_reserve=$(rootfs_parse_size_bytes "$3") || return 1
+    _rootfs_validate_guest_image_set "$image" "rootfs-${ARCH}-alpine.img" || return 1
+    count=$(_rootfs_guest_count) || return 1
+    stage=$(mktemp -d "${BUILD_DIR}/qemu-${ARCH}-ivc-guests.XXXXXX") || return 1
+    trap 'rm -rf -- "$stage"' EXIT
+    mkdir -p "$stage/guest" "$stage/empty-overlay" || return 1
+    for ((index = 0; index < count; index++)); do
+        member=$(_rootfs_guest_image_name "rootfs-${ARCH}-alpine.img" "$index") || return 1
+        guest_image="$stage/$member"
+        source_path=$(_rootfs_debugfs_quote "/guest/$member") || return 1
+        destination_path=$(_rootfs_debugfs_quote "$guest_image") || return 1
+        _rootfs_run_tool 0 debugfs -R "dump $source_path $destination_path" "$image" || return 1
+        [[ -s "$guest_image" ]] || return 1
+        # Preserve the reserve and existing test payloads of each independent guest.
+        guest_free=$(rootfs_ext4_free_bytes "$guest_image") || return 1
+        # Earlier injections can advance the private overlay's access timestamps.
+        _rootfs_builder_normalize_overlay_seconds "$overlay" || return 1
+        rootfs_compose_guest_tests_atomic "$guest_image" "$overlay" "$guest_free" || return 1
+        mv -- "$guest_image" "$stage/guest/$member" || return 1
+        chmod 0644 "$stage/guest/$member" || return 1
+    done
+    _rootfs_builder_normalize_overlay_seconds "$stage/guest" || return 1
+    _rootfs_finish_outer_in_place "$image" "$stage/guest" "$stage/empty-overlay" "$outer_reserve" || return 1
+    _rootfs_compact_in_place "$image" "$outer_reserve" || return 1
+)
+
 qemu_rootfs_inject_platform_dir() (
     local guest_dir="${PLATFORM_IMAGES_DIR}"
     local stage_dir
@@ -790,6 +820,7 @@ qemu_rootfs_inject_platform_dir() (
                     _rootfs_builder_normalize_overlay_seconds "${ivc_overlay_dir}" || return 1
                     rootfs_inject_outer_payload_atomic "${outer_image}" "${builder_guest_dir}" \
                         "${ivc_overlay_dir}" "${protected_basename}" "${outer_reserve}" || return 1
+                    qemu_ivc_inject_nested_payloads "${outer_image}" "${ivc_overlay_dir}" "${outer_reserve}" || return 1
                 else
                     rootfs_inject_outer_payload_atomic "${outer_image}" "${builder_guest_dir}" \
                         "${empty_overlay_dir}" "${protected_basename}" "${outer_reserve}" || return 1
