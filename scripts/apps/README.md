@@ -2,11 +2,12 @@
 
 本目录存放“业务应用属于其他仓库、系统构建环境属于 TGOSImages”场景的薄封装脚本。
 
-当前包含两个外部应用入口：
+当前包含三个外部应用入口：
 
 ```text
 scripts/apps/aka-rk3588-zephyr.sh
 scripts/apps/ivc-rk3588.sh
+scripts/apps/zephyr-triple-guest-functional.sh
 ```
 
 `aka-rk3588-zephyr.sh` 查找 AKA 中的控制应用，然后调用 `scripts/os/zephyr.sh`，使用本仓库管理的 Zephyr
@@ -14,6 +15,10 @@ scripts/apps/ivc-rk3588.sh
 
 `ivc-rk3588.sh` 查找或下载 `ivc-sdk`，构建 Zephyr IVC demo/benchmark 客户机镜像、
 Starry 用户态程序和 StarryOS 客户机镜像，并把板端需要的文件收集到 Orange Pi 发布目录。
+
+`zephyr-triple-guest-functional.sh` 构建 Orange Pi 5 Plus Linux + StarryOS + Zephyr
+三客户机功能测试所用的 Zephyr 客户机镜像（应用源码位于本仓库 `apps/zephyr-triple-guest-functional/`），
+调用 `scripts/os/zephyr.sh orangepi-5-plus` 复用现有 board、patch、SDK 与 DTB 逻辑。
 
 本目录脚本不复制业务源码，也不负责修改 TGOSKits、部署镜像、启动 AxVisor 或运行板端
 程序。
@@ -113,7 +118,7 @@ scripts/apps/aka-rk3588-zephyr.sh
 使用自定义应用时，构建目录会追加 application basename：
 
 ```text
-build/zephyr/orangepi-5-plus-orangepi_robot_control
+build/objects/zephyr/orangepi-5-plus-orangepi_robot_control
 ```
 
 这可以避免与默认 benchmark 共用构建目录。
@@ -344,6 +349,41 @@ IMAGES/orangepi/ivc/usr/lib/libaxivc.so
 默认 release 打包入口是 `IMAGES/`，因此 `release/orangepi.tar.xz` 会包含整个
 `IMAGES/orangepi`，也就包含上面的 `ivc/guest` 和 `ivc/usr` 文件。部署由项目 CI 或板卡
 管理环境负责；服务器地址、认证信息和临时解包目录不写入仓库文档。
+
+### 3.7 构建 Orange Pi 三客户机功能 Zephyr 镜像
+
+板卡用例 `board-orangepi-5-plus-triple-guest-functional` 的第三台客户机是一个 Zephyr Shell
+镜像，用作 Orange Pi 5 Plus Linux + StarryOS + Zephyr 三客户机功能测试。构建入口是：
+
+```bash
+# 在 tgosimages 仓库根目录执行
+./scripts/apps/zephyr-triple-guest-functional.sh
+```
+
+它调用 `scripts/os/zephyr.sh orangepi-5-plus`，把 `--app` 指向本仓库的
+`apps/zephyr-triple-guest-functional/`，并把输出目录与镜像名固定为
+`IMAGES/orangepi/zephyr` 和 `zephyr-triple-guest-functional`。
+Zephyr 固定 ref、`patches/zephyr`、SDK、Python 环境和 `orangepi_5_plus_rk3588` board 都与
+默认 `orangepi-5-plus` 目标一致，默认 latency_measure 构建及其
+`IMAGES/orangepi/zephyr/orangepi-5-plus*` 产物不受影响。
+
+产物落在标准 Orange Pi Zephyr 镜像目录，三个文件同名前缀、同一次构建：
+
+```text
+IMAGES/orangepi/zephyr/zephyr-triple-guest-functional
+IMAGES/orangepi/zephyr/zephyr-triple-guest-functional.elf
+IMAGES/orangepi/zephyr/zephyr-triple-guest-functional.dtb
+```
+
+`clean` 必须作为唯一参数调用，只删除本 profile 自己的构建树（`BUILD_WORK_DIR` 下，默认
+为 `build/objects/zephyr/orangepi-5-plus-zephyr-triple-guest-functional`）与上面三个
+产物，不会清空共享的 `IMAGES/orangepi/zephyr` 目录。其它构建参数继续转发给
+`scripts/os/zephyr.sh`；`--app`、`--images-dir` 和 `--image-name` 由本入口固定。
+
+应用使用 Zephyr 自带的 shell、kernel shell、device shell 与 thread monitor，串口提示符
+保持 `zephyr:~$ `，用于板卡检查的 `kernel version`、`kernel thread list`、`device list`
+命令。`apps/zephyr-triple-guest-functional/boards/orangepi_5_plus_rk3588.overlay` 把
+`sram0` 钉到 Zephyr 虚拟机配置实际映射的 128 MiB 窗口，`&gic` 保持板卡固件地址不变。
 
 ---
 
