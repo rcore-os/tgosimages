@@ -209,7 +209,7 @@ def make_graph(arch, args, log_dir):
                 node['deps'] = []
                 node['command'] = ['bash', str(SHELL_LIB / 'rootfs-compose-node.sh'), target, rootfs_type,
                     str(base_dir), str(rootfs_stage_dir), '', '',
-                    rootfs_graph.option(args, '--guest-free-size') or '256M',
+                    rootfs_graph.option(args, '--guest-free-size') or '1G',
                     rootfs_graph.option(args, '--outer-free-size') or '256M']
                 nodes.append(base)
                 expanded = rootfs_graph.expand(node, f'{name}.rootfs.{rootfs_type}', target,

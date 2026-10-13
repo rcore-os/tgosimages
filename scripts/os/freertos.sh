@@ -164,11 +164,11 @@ apply_single_patch() {
 prepare_source() {
     info "Cloning rtos-benchmark source repository $FREERTOS_REPO_URL -> $FREERTOS_BASE_SRC_DIR"
     clone_repository "$FREERTOS_REPO_URL" "$FREERTOS_BASE_SRC_DIR"
-    prepare_patched_source "$FREERTOS_BASE_SRC_DIR" "$FREERTOS_REF" /nonexistent-tgos-patches
+    prepare_patched_source "$FREERTOS_BASE_SRC_DIR" "$FREERTOS_REF" /nonexistent-tgos-patches reset
 
     info "Cloning FreeRTOS-Kernel source repository $FREERTOS_KERNEL_REPO_URL -> $FREERTOS_BASE_KERNEL_SRC_DIR"
     clone_repository "$FREERTOS_KERNEL_REPO_URL" "$FREERTOS_BASE_KERNEL_SRC_DIR"
-    prepare_patched_source "$FREERTOS_BASE_KERNEL_SRC_DIR" "$FREERTOS_KERNEL_REF" /nonexistent-tgos-patches
+    prepare_patched_source "$FREERTOS_BASE_KERNEL_SRC_DIR" "$FREERTOS_KERNEL_REF" /nonexistent-tgos-patches reset
 }
 
 prepare_target_source() {

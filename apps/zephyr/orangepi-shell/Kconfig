@@ -1,0 +1,3 @@
+mainmenu "Orange Pi unified shell"
+
+source "Kconfig.zephyr"

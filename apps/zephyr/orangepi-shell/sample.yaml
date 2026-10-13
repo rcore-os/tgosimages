@@ -1,0 +1,7 @@
+sample:
+  description: Orange Pi AXIVC shell with selectable IVC workloads
+  name: orangepi-ivc-shell
+  tests:
+    sample.orangepi.ivc.shell:
+      platform_allow:
+        - orangepi_5_plus_rk3588

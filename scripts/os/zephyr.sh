@@ -11,9 +11,11 @@ source "${SCRIPT_DIR}/../lib/utils.sh"
 
 ZEPHYR_REPO_URL="${ZEPHYR_REPO_URL:-https://github.com/zephyrproject-rtos/zephyr.git}"
 ZEPHYR_REF="${ZEPHYR_REF:-30bef2a126198f73ecc1f8a90590579e03379b18}"
+ZEPHYR_SOURCE_PROVIDED=0
+[[ -z ${ZEPHYR_SRC_DIR:-} ]] || ZEPHYR_SOURCE_PROVIDED=1
 ZEPHYR_SRC_DIR="${ZEPHYR_SRC_DIR:-${BUILD_DIR}/zephyr}"
 ZEPHYR_PATCH_DIR="${ZEPHYR_PATCH_DIR:-${ROOT_DIR}/patches/zephyr}"
-ZEPHYR_PYENV="${ZEPHYR_PYENV:-/tmp/zephyr-pyenv}"
+ZEPHYR_PYENV="${ZEPHYR_PYENV:-${BUILD_DIR}/zephyr-pyenv}"
 ZEPHYR_PYTHON="${ZEPHYR_PYTHON:-${ZEPHYR_PYENV}/bin/python}"
 ZEPHYR_SDK_URL="${ZEPHYR_SDK_URL:-https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v1.0.1/toolchain_gnu_linux-x86_64_aarch64-zephyr-elf.tar.xz}"
 ZEPHYR_SDK_DIR="${ZEPHYR_SDK_DIR:-${BUILD_DIR}/zephyr-sdk}"
@@ -79,6 +81,7 @@ zephyr_parse_args() {
                 ;;
             --src-dir)
                 ZEPHYR_SRC_DIR="$2"
+                ZEPHYR_SOURCE_PROVIDED=1
                 shift 2
                 ;;
             --patch-dir)
@@ -117,17 +120,32 @@ zephyr_parse_args() {
     done
 }
 
-ensure_zephyr_python() {
+ensure_zephyr_python() (
+    local python_lock
+    mkdir -p -- "$(dirname -- "${ZEPHYR_PYENV}")"
+    exec {python_lock}>"${ZEPHYR_PYENV}.lock"
+    flock -x "${python_lock}"
+
     if [[ ! -x "${ZEPHYR_PYTHON}" ]]; then
         info "Creating Zephyr Python venv at ${ZEPHYR_PYENV}"
         python3 -m venv "${ZEPHYR_PYENV}"
     fi
 
-    if ! "${ZEPHYR_PYTHON}" -c 'import pykwalify, yaml, west' >/dev/null 2>&1; then
-        info "Installing Zephyr Python requirements"
-        "${ZEPHYR_PYENV}/bin/pip" install -r "${ZEPHYR_SRC_DIR}/scripts/requirements-base.txt"
+    if ! "${ZEPHYR_PYTHON}" -m pip --version >/dev/null 2>&1; then
+        [[ "${ZEPHYR_PYTHON}" == "${ZEPHYR_PYENV}/bin/python" ]] ||
+            die "Selected Python has no working pip: ${ZEPHYR_PYTHON}"
+        info "Recreating incomplete Zephyr Python venv at ${ZEPHYR_PYENV}"
+        python3 -m venv --clear "${ZEPHYR_PYENV}"
     fi
-}
+
+    if ! "${ZEPHYR_PYTHON}" -c 'import pykwalify, yaml, west.app.main' >/dev/null 2>&1; then
+        info "Installing Zephyr Python requirements"
+        "${ZEPHYR_PYTHON}" -m pip install --force-reinstall -r "${ZEPHYR_SRC_DIR}/scripts/requirements-base.txt"
+    fi
+
+    "${ZEPHYR_PYTHON}" -c 'import pykwalify, yaml, west.app.main' ||
+        die "Zephyr Python environment is incomplete: ${ZEPHYR_PYTHON}"
+)
 
 ensure_zephyr_sdk() {
     if [[ -x "${ZEPHYR_CROSS_COMPILE}gcc" ]]; then
@@ -155,14 +173,14 @@ ensure_zephyr_sdk() {
 }
 
 prepare_zephyr_source() {
-    if [[ ! -d "${ZEPHYR_SRC_DIR}/.git" ]]; then
-        info "Cloning Zephyr source repository ${ZEPHYR_REPO_URL} -> ${ZEPHYR_SRC_DIR}"
-        clone_repository "${ZEPHYR_REPO_URL}" "${ZEPHYR_SRC_DIR}"
-    else
-        info "Using existing Zephyr source tree at ${ZEPHYR_SRC_DIR}"
+    if [[ $ZEPHYR_SOURCE_PROVIDED == 1 && -e $ZEPHYR_SRC_DIR/.git ]]; then
+        info "Using provided source without updating or cleaning: $ZEPHYR_SRC_DIR"
+        return 0
     fi
-
-    prepare_patched_source "${ZEPHYR_SRC_DIR}" "${ZEPHYR_REF:-HEAD}" "${ZEPHYR_PATCH_DIR}"
+    local policy=reset
+    [[ $ZEPHYR_SOURCE_PROVIDED == 0 ]] || policy=preserve
+    clone_repository "$ZEPHYR_REPO_URL" "$ZEPHYR_SRC_DIR"
+    prepare_patched_source "$ZEPHYR_SRC_DIR" "${ZEPHYR_REF:-HEAD}" "$ZEPHYR_PATCH_DIR" "$policy"
 }
 
 copy_if_exists() {
@@ -207,7 +225,7 @@ zephyr_build() {
 
     if [[ ! -d "${ZEPHYR_SRC_DIR}/.west" ]]; then
         info "Initializing west workspace in ${ZEPHYR_SRC_DIR}"
-        "${ZEPHYR_PYENV}/bin/west" init -l "${ZEPHYR_SRC_DIR}" --mf west.yml
+        "${ZEPHYR_PYTHON}" -m west init -l "${ZEPHYR_SRC_DIR}" --mf west.yml
     fi
 
     if [[ -f "${build_dir}/CMakeCache.txt" ]]; then

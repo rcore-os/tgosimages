@@ -12,6 +12,8 @@ source "${SCRIPT_DIR}/../lib/utils.sh"
 # Default values
 ARCEOS_REPO_URL="${ARCEOS_REPO_URL:-https://github.com/rcore-os/tgoskits.git}"
 ARCEOS_REF="${ARCEOS_REF:-dev}"
+ARCEOS_SOURCE_PROVIDED=0
+[[ -z ${ARCEOS_SRC_DIR:-} ]] || ARCEOS_SOURCE_PROVIDED=1
 ARCEOS_SRC_DIR="${ARCEOS_SRC_DIR:-${BUILD_DIR}/tgoskits}"
 ARCEOS_PATCH_DIR="${ARCEOS_PATCH_DIR:-${ROOT_DIR}/patches/arceos}"
 
@@ -99,6 +101,7 @@ arceos_parse_args() {
                 ;;
             --src-dir)
                 ARCEOS_SRC_DIR="$2"
+                ARCEOS_SOURCE_PROVIDED=1
                 shift 2
                 ;;
             --patch-dir)
@@ -215,9 +218,15 @@ arceos_build() {
 
 arceos() {
     if [[ "${ARCEOS_ARGS}" != *"clean"* ]]; then
-        info "Cloning tgoskits source repository $ARCEOS_REPO_URL -> $ARCEOS_SRC_DIR"
-        clone_repository "$ARCEOS_REPO_URL" "$ARCEOS_SRC_DIR"
-        prepare_patched_source "$ARCEOS_SRC_DIR" "$ARCEOS_REF" "$ARCEOS_PATCH_DIR"
+        if [[ $ARCEOS_SOURCE_PROVIDED == 1 && -e $ARCEOS_SRC_DIR/.git ]]; then
+            info "Using provided source without updating or cleaning: $ARCEOS_SRC_DIR"
+        else
+            local policy=reset
+            [[ $ARCEOS_SOURCE_PROVIDED == 0 ]] || policy=preserve
+            info "Cloning tgoskits source repository $ARCEOS_REPO_URL -> $ARCEOS_SRC_DIR"
+            clone_repository "$ARCEOS_REPO_URL" "$ARCEOS_SRC_DIR"
+            prepare_patched_source "$ARCEOS_SRC_DIR" "$ARCEOS_REF" "$ARCEOS_PATCH_DIR" "$policy"
+        fi
     fi
 
     arceos_build

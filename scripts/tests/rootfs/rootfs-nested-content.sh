@@ -12,7 +12,7 @@ image_dir="$repo_root/IMAGES/rootfs"
 selected_arch=''
 selected_rootfs=''
 guest_tests='cyclictest,lmbench,iozone'
-guest_free_size=256M
+guest_free_size=1G
 outer_free_size=256M
 declare -a outer_only_paths=()
 tmp_dir=''
@@ -27,7 +27,7 @@ Verify composed outer ext4 rootfs images and their nested guest images.
   --arch <arch>               Select aarch64, riscv64, x86_64, or loongarch64
   --rootfs <type>             Select busybox, alpine, or debian
   --guest-tests <list>        Expected nested plugins (default: cyclictest,lmbench,iozone)
-  --guest-free-size <size>    Minimum nested free bytes (default: 256M)
+  --guest-free-size <size>    Minimum nested free bytes (default: 1G)
   --outer-free-size <size>    Minimum outer free bytes (default: 256M)
   --outer-only-path <path>    Require path in outer and forbid it in nested (repeatable)
   -h, --help                  Show this help

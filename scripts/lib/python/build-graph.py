@@ -23,6 +23,21 @@ PYTHON_LIB = Path(__file__).resolve().parent
 SHELL_LIB = PYTHON_LIB.parent
 
 
+def signal_process_group(pgid, signum):
+    try:
+        os.killpg(pgid, signum)
+    except PermissionError as denied:
+        # Builders already use sudo for system tools. Reuse cached credentials
+        # for their descendants without prompting during failure cleanup.
+        try:
+            subprocess.run(['sudo', '-n', '--', '/bin/kill', '-s',
+                            signal.Signals(signum).name, '--', f'-{pgid}'],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE, text=True, timeout=3, check=True)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise PermissionError(f'{denied}; non-interactive sudo cleanup failed: {exc}') from exc
+
+
 def positive(value):
     number = int(value)
     if number < 1:
@@ -195,7 +210,7 @@ def execute(graph, log_dir):
         processes = list(processes)
         for name, process in processes:
             try:
-                os.killpg(process.pid, signal.SIGTERM)
+                signal_process_group(process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
             except PermissionError as exc:
@@ -210,7 +225,7 @@ def execute(graph, log_dir):
                 time.sleep(min(0.05, max(0, deadline - time.monotonic())))
         for name, process in processes:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                signal_process_group(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             except PermissionError as exc:

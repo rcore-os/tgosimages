@@ -5,6 +5,7 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd -P)
 work=$(mktemp -d /tmp/orangepi-rootfs-flow.XXXXXX)
 trap 'rm -rf -- "$work"' EXIT
 
+export ORANGEPI_WITH_AKA=0
 # shellcheck source=/dev/null
 source "$repo_root/scripts/platform/orangepi-5-plus.sh"
 # shellcheck source=/dev/null
@@ -51,6 +52,22 @@ fixture_tree="$work/rootfs-fixture"
 fixture_archive="$work/jammy-minimal-arm64.fixture.tar.lz4"
 fixture_image_dir="$work/formal-rootfs-images"
 fixture_output="$fixture_image_dir/rootfs-fixture.img"
+fixture_ivc="$work/ivc-payload"
+mkdir -p "$fixture_ivc/usr/bin"
+for program in ivc-demo ivc-starry-bench ivc-roundtrip; do
+    printf 'fixture-%s\n' "$program" >"$fixture_ivc/usr/bin/$program"
+    chmod 0755 "$fixture_ivc/usr/bin/$program"
+done
+fixture_assets="$work/platform-assets"
+fixture_release=6.1.99-fixture
+fixture_modules="$fixture_assets/linux/lib/modules/$fixture_release"
+mkdir -p "$fixture_modules/kernel/drivers/net/ethernet/realtek"
+printf '%s\n' "$fixture_release" >"$fixture_assets/linux/kernel.release"
+printf fixture-module >"$fixture_modules/kernel/drivers/net/ethernet/realtek/r8125.ko"
+mkdir -p "$fixture_modules/extra"
+printf fixture-ivc-module >"$fixture_modules/extra/axvisor.ko"
+printf fixture-alias >"$fixture_modules/modules.alias.bin"
+printf fixture-dep >"$fixture_modules/modules.dep.bin"
 fixture_wrapper="$work/fixture-wrapper"
 fixture_mktemp_log="$work/fixture-mktemp.log"
 mkdir "$fixture_image_dir" "$fixture_wrapper"
@@ -61,7 +78,8 @@ printf '%s\n' "$*" >>"$MKTEMP_LOG"
 exec "$REAL_MKTEMP" "$@"
 MKTEMP
 chmod +x "$fixture_wrapper/mktemp"
-mkdir -p "$fixture_tree/etc"
+mkdir -p "$fixture_tree/etc" "$fixture_tree/usr/lib"
+ln -s usr/lib "$fixture_tree/lib"
 printf orangepi-jammy >"$fixture_tree/etc/rootfs-marker"
 FAKEROOTDONTTRYCHOWN=1 fakeroot -- bash -euo pipefail -c \
     'chown 123:456 "$1/etc/rootfs-marker"; tar -cpf - --xattrs -C "$1" . | lz4 -q - "$2"' \
@@ -97,9 +115,10 @@ run_ok 'Orange Pi archive becomes a benchmark guest ext4' \
                 printf -v "$outer_var" %s "$parent/outer"
                 printf -v "$guest_var" %s "$parent/guest"
             }
-            BUILD_DIR=$2 ORANGEPI_GUEST_FREE_SIZE=8M
+            BUILD_DIR=$2 ORANGEPI_GUEST_FREE_SIZE=8M ORANGEPI_IVC_PACKAGE=$5
+            PLATFORM_IMAGES_DIR=$6
             orangepi_build_guest_rootfs "$3" "$4"
-        ' _ "$repo_root" "$BUILD_DIR" "$fixture_archive" "$fixture_output"
+        ' _ "$repo_root" "$BUILD_DIR" "$fixture_archive" "$fixture_output" "$fixture_ivc" "$fixture_assets"
 run_ok 'Orange Pi guest rootfs keeps publication temporaries out of the image directory' \
     bash -c '! grep -F -- "$1/" "$2"' _ "$fixture_image_dir" "$fixture_mktemp_log"
 run_ok 'generated guest ext4 is clean' e2fsck -fn "$fixture_output"
@@ -111,10 +130,40 @@ debugfs -R 'stat /etc/rootfs-marker' "$fixture_output" 2>&1 | \
 for path in \
     /guest-tests/cyclictest/cyclictest \
     /guest-tests/lmbench/bin/Linux/lat_syscall \
-    /guest-tests/iozone/iozone; do
+    /guest-tests/iozone/iozone \
+    /usr/lib/modules/6.1.99-fixture/kernel/drivers/net/ethernet/realtek/r8125.ko \
+    /usr/lib/modules/6.1.99-fixture/extra/axvisor.ko \
+    /usr/lib/modules/6.1.99-fixture/modules.alias.bin \
+    /usr/lib/modules/6.1.99-fixture/modules.dep.bin; do
     debugfs -R "stat $path" "$fixture_output" 2>&1 | grep -q 'Inode:' || \
         fail "guest rootfs lacks $path"
 done
+
+for program in ivc-demo ivc-starry-bench ivc-roundtrip; do
+    actual=$(debugfs -R "cat /usr/bin/$program" "$fixture_output" 2>/dev/null)
+    assert_eq "fixture-$program" "$actual" "standalone guest rootfs contains $program"
+done
+
+test_default_aka_control() {
+    mkdir -p "$work/aka-source/zephyr/orangepi_robot_control"
+    printf fixture >"$work/aka-source/zephyr/orangepi_robot_control/CMakeLists.txt"
+    git init -q "$work/aka-source"
+    env -u ORANGEPI_WITH_AKA -u ORANGEPI_AKA_PACKAGE bash -c '
+        set -euo pipefail
+        source "$1/scripts/platform/orangepi-5-plus.sh"
+        [[ $ORANGEPI_WITH_AKA == 1 && $ORANGEPI_AKA_PACKAGE == "$1/IMAGES/orangepi/aka" ]]
+        ORANGEPI_AKA_SOURCE_DIR=$2
+        info() { :; }; warn() { printf "%s\n" "$*" >&2; }
+        bash() {
+            [[ " $* " == *" --aka-dir $ORANGEPI_AKA_SOURCE_DIR "* ]]
+        }
+        zephyr
+        ORANGEPI_WITH_AKA=0
+        bash() { [[ " $* " != *" --aka-dir "* ]]; }
+        zephyr
+    ' _ "$repo_root" "$work/aka-source"
+}
+run_ok 'Orange Pi enables AKA package and controller by default with explicit opt-out' test_default_aka_control
 
 # Verify the public command boundaries without invoking expensive upstream builds.
 BUILD_DIR="$work/build"
@@ -136,11 +185,45 @@ orangepi_prepare_source() {
 }
 orangepi_run_upstream() { printf 'upstream:%s\n' "$1" >>"$call_log"; }
 copy_required() { mkdir -p "$(dirname -- "$2")"; cp "$1" "$2"; }
+orangepi_publish_linux_modules() {
+    [[ $1 == "$LINUX_SRC_DIR/kernel/orange-pi-6.1-rk35xx" ]] || return 1
+    mkdir -p "$2"
+    printf '6.1.99-fixture\n' >"$2/kernel.release"
+}
+
+test_ivc_stage_contract() (
+    local first_status=42 linux_status=0 observed=0 calls=0
+    local expected_sdk="$work/selected-sdk" expected_objects="$work/selected-objects"
+    bash() {
+        case "$1" in
+        */apps/ivc-rk3588.sh)
+            [[ " $* " == *" --skip-starry-image "* && " $* " == *" --skip-zephyr "* ]] || return 98
+            return "$first_status"
+            ;;
+        */platform/ivc-linux.sh)
+            ((calls += 1))
+            [[ ${IVC_SDK_DIR:-} == "$expected_sdk" && ${IVC_BUILD_DIR:-} == "$expected_objects" ]] || return 97
+            return "$linux_status"
+            ;;
+        *) return 99 ;;
+        esac
+    }
+    ivc --ivc-sdk-dir "$expected_sdk" --ivc-build-dir "$expected_objects" || observed=$?
+    [[ $observed == 42 && $calls == 0 ]] || return 1
+    first_status=0 linux_status=43 observed=0
+    ivc --ivc-sdk-dir "$expected_sdk" --ivc-build-dir "$expected_objects" || observed=$?
+    [[ $observed == 43 && $calls == 1 ]] || return 1
+    linux_status=0
+    ivc --ivc-sdk-dir "$expected_sdk" --ivc-build-dir "$expected_objects"
+    [[ $calls == 2 ]]
+)
+run_ok 'IVC stages propagate errors and share selected SDK/object paths' test_ivc_stage_contract
 
 run_ok 'linux builds only the upstream kernel stage' linux
 assert_eq $'prepare\nupstream:kernel' "$(cat "$call_log")" 'linux stage calls'
 [[ -f $PLATFORM_IMAGES_DIR/linux/orangepi-5-plus &&
-   -f $PLATFORM_IMAGES_DIR/linux/orangepi-5-plus.dtb ]] || fail 'linux outputs are incomplete'
+   -f $PLATFORM_IMAGES_DIR/linux/orangepi-5-plus.dtb &&
+   -f $PLATFORM_IMAGES_DIR/linux/kernel.release ]] || fail 'linux outputs are incomplete'
 
 : >"$call_log"
 orangepi_select_rootfs_archive() { printf '%s\n' "$fixture_archive"; }
@@ -190,7 +273,7 @@ ivc() { printf 'ivc\n' >>"$call_log"; }
 orangepi_build_base_image() { printf 'base-image\n' >>"$call_log"; }
 finalize_linux_image() { printf 'finalize\n' >>"$call_log"; }
 run_ok 'all builds every payload before publishing the final image' all
-assert_eq $'linux\nrootfs\nparallel:all uboot arceos starry zephyr freertos --\nivc\nbase-image\nfinalize' \
+assert_eq $'linux\nivc\nrootfs\nparallel:all uboot arceos starry zephyr freertos --\nbase-image\nfinalize' \
     "$(cat "$call_log")" 'all build/finalize ordering'
 
 run_fail 'the removed img subcommand is rejected' \

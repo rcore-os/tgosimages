@@ -69,6 +69,39 @@ These scripts generate filesystem contents or filesystem images.
 | `scripts/rootfs/alpine.sh` | Download Alpine minirootfs and pack an ext4 image | `rootfs-<arch>-alpine.img` |
 | `scripts/rootfs/debian.sh` | Use Docker + debootstrap to build a Debian rootfs image | `rootfs-<arch>-debian.img` |
 
+
+### Orange Pi ArceOS network image
+
+The Orange Pi ArceOS target builds arceos-virtio-net-peer using the TGOSKits
+application configuration
+apps/axvisor/normal/board-orangepi-5-plus/virtio-net-peer/arceos-guest-build.toml.
+It enables runtime MAC identity and Error logging. Guests with MAC
+52:54:00:20:01:N identify themselves as VMN at 10.0.2.(14+N), so multiple
+guests share one image.
+
+~~~sh
+./build.sh platform orangepi-5-plus arceos
+~~~
+
+The artifact is IMAGES/orangepi/arceos/orangepi-5-plus. The all target
+includes it in the outer host filesystem at /guest/arceos/orangepi-5-plus;
+it is not installed inside the nested Jammy guest filesystems. Other platforms
+and the common ArceOS builder keep their existing defaults.
+
+### Orange Pi AKA defaults
+
+`./build.sh platform orangepi-5-plus all` installs the AKA perception package in the guest ext4 at `/opt/aka` and builds the AKA controller into the unified Zephyr shell. Start the controller explicitly with `aka run`.
+
+Controller sources default to the sibling `../aka-rk3588` checkout, which is downloaded if absent. The perception package defaults to `IMAGES/orangepi/aka` and must contain the real AArch64 program, model, runtime libraries, and device calibration files. This directory is Git-ignored; prepare it in each new build environment using `scripts/apps/orangepi-aka-perception.sh` and the real runtime inputs. The platform build validates and installs this package; it does not generate calibration data.
+
+Override inputs with `ORANGEPI_AKA_SOURCE_DIR` (or `--aka-dir`) and `ORANGEPI_AKA_PACKAGE`. Disable default AKA with:
+
+```sh
+ORANGEPI_WITH_AKA=0 ./build.sh platform orangepi-5-plus all
+```
+
+Rebuild the rootfs to remove `/opt/aka` from an existing image.
+
 ## Supported Targets
 
 ### Platform OS Targets
@@ -155,7 +188,7 @@ The less obvious entries:
 Some platform builds require:
 
 - Access to private repositories
-- Access to the intranet SDK host `10.3.10.194`
+- Access to the intranet SDK host `<sdk-host>`
 - Additional vendor SDK dependencies
 - Administrator privileges or passwordless sudo
 
@@ -256,7 +289,7 @@ joins wait for their plugins, followed by rootfs and platform-image nodes. This
 lets tests across architectures and platforms share the global budget, while a
 plugin failure blocks only its dependent image chain.
 
-Each guest and the outer ext4 image reserve 256 MiB free space by default;
+Each guest ext4 image reserves 1 GiB free space by default; the outer image retains a 256 MiB reserve;
 `--guest-free-size` applies separately to every guest. The outer filesystem is
 automatically expanded for all guest files, platform payloads, metadata, and
 `--outer-free-size`; raw image size therefore grows approximately linearly with
@@ -403,8 +436,9 @@ Artifacts are collected under `IMAGES/`. Common locations include:
 | `IMAGES/rootfs` | Standalone rootfs images generated directly by rootfs scripts |
 | `IMAGES/<platform>/linux` | Linux artifacts for a hardware platform |
 | `IMAGES/<platform>/arceos` | ArceOS artifacts for a hardware platform |
+| `IMAGES/orangepi/arceos/orangepi-5-plus` | ArceOS VirtIO network peer for `/guest/arceos/orangepi-5-plus` |
 | `IMAGES/orangepi/starry/orangepi-5-plus` | StarryOS kernel for `/guest/starry/orangepi-5-plus` |
-| `IMAGES/orangepi-5-plus-starry` | Standalone StarryOS release staging (image, manifest, and SHA256) |
+| `IMAGES/orangepi/starry` | StarryOS image, manifest, and SHA256 |
 | `IMAGES/rootfs/rootfs-aarch64-orangepi-jammy.img` | Orange Pi Jammy guest rootfs with the three benchmarks |
 | `IMAGES/rootfs/orangepi-5-plus.img` | Flashable Ubuntu Jammy minimal image with a same-origin nested guest rootfs |
 
@@ -416,7 +450,7 @@ The Orange Pi commands have separate outputs. Build only the kernel and DTB with
 ./build.sh platform orangepi-5-plus linux
 ```
 
-Build only the Jammy guest rootfs containing the three benchmarks with:
+Build the Jammy guest rootfs with the three benchmarks and IVC tools (Linux and IVC dependencies are prepared automatically):
 
 ```bash
 ./build.sh platform orangepi-5-plus rootfs
@@ -444,7 +478,7 @@ root filesystem contains all platform payloads under `/guest` and the nested roo
 
 The guest ext4 is built from the pinned Orange Pi Jammy rootfs archive and receives
 the three statically linked AArch64 workloads before final image composition. The
-nested and outer filesystems reserve 256 MiB each by default. The build requires
+nested filesystems reserve 1 GiB each by default; the outer filesystem retains a 256 MiB reserve. Its total size still grows to contain the larger nested guest images. The build requires
 `lz4`, `mke2fs`, `sfdisk`, `python3`, `debugfs`, `dumpe2fs`, `e2fsck`, and
 `resize2fs`, but does not require loop mounts for image composition. It packages the
 workloads without running them. Validate a completed image with:
@@ -464,7 +498,7 @@ Use the unified platform entry point:
 
 The builder uses `os/StarryOS/configs/board/orangepi-5-plus.toml` from the
 tgoskits `dev` branch by default and applies a small local configuration patch
-that enables the upstream `ax-driver/virtio-blk` feature. The driver itself is
+that enables the upstream `ax-driver/virtio-blk` and `ax-driver/virtio-net` features for guest disks and networking. The drivers are
 provided by tgoskits; no driver implementation is maintained here.
 The generated `manifest.toml` records the base commit used. Override it
 explicitly for revision-specific builds:
@@ -474,8 +508,8 @@ explicitly for revision-specific builds:
 ```
 
 The guest kernel is written to `IMAGES/orangepi/starry/orangepi-5-plus` and the
-standalone release staging directory is `IMAGES/orangepi-5-plus-starry/`.
-`./build.sh release pack` creates `release/orangepi-5-plus-starry.tar.xz`.
+StarryOS image and release metadata are kept in `IMAGES/orangepi/starry/`.
+`./build.sh release pack` creates `release/orangepi.tar.xz`.
 Clean both outputs with:
 
 ```bash

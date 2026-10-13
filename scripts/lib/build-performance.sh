@@ -172,10 +172,16 @@ build_task() (
 # Reuse source preparation only when the entire patched tree is verified.
 # Callers must serialize use of shared source trees through the build phase.
 prepare_patched_source() {
-    local source=$1 ref=$2 patches=$3
+    local source=$1 ref=$2 patches=$3 policy=${4:-preserve}
+    if [[ $policy == reset ]]; then
+        case $(realpath -m -- "$source") in
+            "$BUILD_DIR/"*) ;;
+            *) error "Reset policy requires a source inside the build directory: $source"; return 1 ;;
+        esac
+    fi
     build_assert_workspace_path "$source" || return
     local state_dir="$source/.patch_stamps" identity current base head remote_head
-    if ! git -C "$source" diff --cached --quiet --exit-code HEAD --; then
+    if [[ $policy != reset ]] && ! git -C "$source" diff --cached --quiet --exit-code HEAD --; then
         error "Source has staged changes: $source; preserve or resolve them before rebuilding"
         git -C "$source" status --short --untracked-files=normal -- . ':(exclude).patch_stamps' |
             sed -n '1,40p' >&2
@@ -193,13 +199,16 @@ prepare_patched_source() {
     ref=$base
     identity=$(python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" "$patches") || return
     current=$(python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --source "$source") || return
-    if [[ -f $state_dir/source.sha256 && $(<"$state_dir/source.sha256") == "$current" ]]; then
+    if [[ -f $state_dir/source.sha256 && $(<"$state_dir/source.sha256") == "$current" ]] &&
+       git -C "$source" diff --cached --quiet --exit-code HEAD --; then
         if [[ -f $state_dir/base.commit && $(<"$state_dir/base.commit") == "$base" &&
               -f $state_dir/patch-set.sha256 && $(<"$state_dir/patch-set.sha256") == "$identity" ]]; then
             info "SOURCE CACHE HIT: $source (base and patched tree verified)"
             return 0
         fi
         info "SOURCE CACHE MISS: base revision or ordered patch set changed"
+    elif [[ $policy == reset ]]; then
+        info "SOURCE CACHE MISS: resetting managed build source $source"
     elif python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --verify "$source" "$base" "$patches"; then
         # Adopt legacy stamps only after reconstructing and comparing the
         # expected complete tree. This also handles overlapping patch chains.
@@ -212,6 +221,11 @@ prepare_patched_source() {
     elif [[ ! -f $state_dir/source.sha256 && ! -f $state_dir/patch-set.sha256 ]] &&
          python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --verify-marked "$source" "$base" "$patches"; then
         info "SOURCE CACHE MISS: verified legacy patches; preparing updated patch set"
+    elif [[ -f $state_dir/base.commit && -f $state_dir/source.sha256 ]] &&
+         python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --verify "$source" "$(<"$state_dir/base.commit")" "$patches"; then
+        # A moved workspace has a different path fingerprint. Verify its full
+        # tree against the recorded base before advancing to the fetched base.
+        info "SOURCE CACHE MISS: verified owned patches against the previous base"
     elif [[ -f $state_dir/source.sha256 ]] ||
          ! python3 "$TGOS_BUILD_LIB_DIR/python/build_inputs.py" --verify "$source" HEAD /nonexistent-tgos-patches; then
         error "Source has unverified local changes: $source; preserve or resolve them before rebuilding"

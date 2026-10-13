@@ -72,10 +72,8 @@ run_preparation updated-main
 ! find "$BUILD_WORK_DIR" -maxdepth 1 -name 'freertos-work.*' -print -quit | grep -q .
 
 printf 'user edit\n' >"$BUILD_WORK_DIR/freertos-sources/rtos-benchmark/value"
-if run_preparation updated-main; then
-    printf 'edited FreeRTOS source cache was accepted\n' >&2
-    exit 1
-fi
-[[ $(<"$BUILD_WORK_DIR/freertos-sources/rtos-benchmark/value") == 'user edit' ]]
-
-printf 'PASS: FreeRTOS prepares isolated patch copies and preserves source cache edits\n'
+printf extra >"$BUILD_WORK_DIR/freertos-sources/FreeRTOS-Kernel/extra-file"
+run_preparation updated-main
+[[ $(<"$BUILD_WORK_DIR/freertos-sources/rtos-benchmark/value") == base ]]
+[[ ! -e $BUILD_WORK_DIR/freertos-sources/FreeRTOS-Kernel/extra-file ]]
+printf 'PASS: FreeRTOS prepares isolated patch copies and directly retries managed caches\n'

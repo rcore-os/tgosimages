@@ -12,19 +12,23 @@ source "${TGOSIMAGES_ROOT}/scripts/lib/utils.sh"
 IVC_SDK_REPO_URL="${IVC_SDK_REPO_URL:-https://github.com/rcore-os/ivc-sdk.git}"
 IVC_SDK_REF="${IVC_SDK_REF:-}"
 IVC_SDK_DIR="${IVC_SDK_DIR:-}"
-IVC_SDK_CLONED=0
 TGOSKITS_REPO_URL="${TGOSKITS_REPO_URL:-https://github.com/rcore-os/tgoskits.git}"
 TGOSKITS_REF="${TGOSKITS_REF:-dev}"
-TGOSKITS_SRC_DIR="${TGOSKITS_SRC_DIR:-${BUILD_DIR}/tgoskits-starry-ivc}"
+TGOSKITS_SRC_DIR="${TGOSKITS_SRC_DIR:-${BUILD_DIR}/tgoskits-starry}"
 
 OUTPUT_ROOT="${OUTPUT_ROOT:-${TGOSIMAGES_ROOT}/IMAGES/orangepi/ivc}"
-ZEPHYR_IMAGES_DIR="${ZEPHYR_IMAGES_DIR:-${BUILD_DIR}/ivc-rk3588/zephyr}"
+ZEPHYR_IMAGES_DIR="${ZEPHYR_IMAGES_DIR:-${TGOSIMAGES_ROOT}/IMAGES/orangepi/zephyr}"
+ZEPHYR_SHELL_APP="${ZEPHYR_SHELL_APP:-${TGOSIMAGES_ROOT}/apps/zephyr/orangepi-shell}"
+ZEPHYR_SHELL_IMAGE_NAME="${ZEPHYR_SHELL_IMAGE_NAME:-orangepi-5-plus}"
+AKA_RK3588_SOURCE_DIR="${AKA_RK3588_SOURCE_DIR:-}"
+AKA_RK3588_LIBRARY="${AKA_RK3588_LIBRARY:-}"
+AKA_RK3588_INCLUDE_DIR="${AKA_RK3588_INCLUDE_DIR:-}"
 STAGE_DIR="${STAGE_DIR:-${OUTPUT_ROOT}}"
 IVC_BUILD_DIR="${IVC_BUILD_DIR:-${BUILD_DIR}/ivc-sdk}"
 
 STARRY_CONFIG="${STARRY_CONFIG:-os/StarryOS/configs/board/orangepi-5-plus.toml}"
 STARRY_IMAGES_DIR="${STARRY_IMAGES_DIR:-${TGOSIMAGES_ROOT}/IMAGES/orangepi/starry}"
-STARRY_RELEASE_IMAGES_DIR="${STARRY_RELEASE_IMAGES_DIR:-${TGOSIMAGES_ROOT}/IMAGES/orangepi-5-plus-starry}"
+STARRY_RELEASE_IMAGES_DIR="${STARRY_RELEASE_IMAGES_DIR:-${TGOSIMAGES_ROOT}/IMAGES/orangepi/starry}"
 STARRY_IMAGE_NAME="${STARRY_IMAGE_NAME:-orangepi-5-plus}"
 STARRY_LOG="${STARRY_LOG:-Error}"
 
@@ -32,6 +36,7 @@ AXIVC_BENCH_ITERATIONS="${AXIVC_BENCH_ITERATIONS:-}"
 SKIP_STARRY_IMAGE=0
 SKIP_ZEPHYR=0
 SKIP_USER_APPS=0
+SHELL_ONLY=0
 
 usage() {
     cat <<'EOF'
@@ -43,25 +48,28 @@ Usage:
 Options:
   --ivc-sdk-dir <path>       Use this ivc-sdk checkout
   --ivc-sdk-repo-url <url>   Repository used only when ivc-sdk is absent
-  --ivc-sdk-ref <ref>        Checkout this ref only after a fresh ivc-sdk clone
+  --ivc-sdk-ref <ref>        Version for managed ivc-sdk checkout
   --tgoskits-repo-url <url>  tgoskits repository or local path for StarryOS
   --tgoskits-ref <ref>       tgoskits ref for StarryOS build (default: dev)
   --tgoskits-src-dir <path>  StarryOS source/build checkout directory
   --output-root <path>       Output root (default: IMAGES/orangepi/ivc)
   --stage-dir <path>         Payload directory (default: <output-root>)
   --ivc-build-dir <path>     ivc-sdk object output directory
+  --zephyr-shell-app <path>  Unified Zephyr Shell application
+  --aka-dir <path>           AKA checkout to compile into the unified shell
+  --aka-library <path>       Optional aka-rk3588 library to link into shell
+  --aka-include-dir <path>   Optional aka-rk3588 include directory
   --starry-config <path>     StarryOS build config relative to tgoskits
   --starry-log <level>       StarryOS log level override (default: Error)
   --bench-iterations <n>     Define AXIVC_BENCH_ITERATIONS for benchmark builds
   --skip-starry-image        Do not rebuild the StarryOS kernel image
   --skip-zephyr              Do not rebuild Zephyr images
   --skip-user-apps           Do not rebuild Starry userspace programs
+  --shell-only               Build only the unified Orange Pi Zephyr shell
   -h, --help                 Show this help
 
 Outputs:
-  <stage-dir>/guest/starry/orangepi-5-plus
-  <stage-dir>/guest/zephyr/zephyr-ivc-demo.bin
-  <stage-dir>/guest/zephyr/zephyr-ivc-benchmark.bin
+  <stage-dir>/usr/bin/ivc-roundtrip
   <stage-dir>/usr/bin/ivc-demo
   <stage-dir>/usr/bin/ivc-starry-bench
 EOF
@@ -115,6 +123,26 @@ while [[ $# -gt 0 ]]; do
             IVC_BUILD_DIR="$2"
             shift 2
             ;;
+        --zephyr-shell-app)
+            [[ $# -ge 2 ]] || die "--zephyr-shell-app needs a path"
+            ZEPHYR_SHELL_APP="$2"
+            shift 2
+            ;;
+        --aka-dir)
+            [[ $# -ge 2 ]] || die "--aka-dir needs a path"
+            AKA_RK3588_SOURCE_DIR="$2"
+            shift 2
+            ;;
+        --aka-library)
+            [[ $# -ge 2 ]] || die "--aka-library needs a path"
+            AKA_RK3588_LIBRARY="$2"
+            shift 2
+            ;;
+        --aka-include-dir)
+            [[ $# -ge 2 ]] || die "--aka-include-dir needs a path"
+            AKA_RK3588_INCLUDE_DIR="$2"
+            shift 2
+            ;;
         --starry-config)
             [[ $# -ge 2 ]] || die "--starry-config needs a path"
             STARRY_CONFIG="$2"
@@ -142,6 +170,12 @@ while [[ $# -gt 0 ]]; do
             SKIP_USER_APPS=1
             shift
             ;;
+        --shell-only)
+            SHELL_ONLY=1
+            SKIP_STARRY_IMAGE=1
+            SKIP_USER_APPS=1
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -152,26 +186,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# SDK make runs from its own checkout; normalize caller-relative object paths.
+IVC_BUILD_DIR=$(realpath -m -- "$IVC_BUILD_DIR")
+
 resolve_ivc_sdk() {
-    if [[ -z "${IVC_SDK_DIR}" ]]; then
-        IVC_SDK_DIR="${TGOSIMAGES_ROOT}/../ivc-sdk"
-    fi
-
-    if [[ ! -d "${IVC_SDK_DIR}/.git" ]]; then
-        if [[ -e "${IVC_SDK_DIR}" ]]; then
-            die "${IVC_SDK_DIR} exists but is not a Git checkout"
-        fi
-        info "ivc-sdk is absent; cloning ${IVC_SDK_REPO_URL} to ${IVC_SDK_DIR}"
-        git clone "${IVC_SDK_REPO_URL}" "${IVC_SDK_DIR}"
-        IVC_SDK_CLONED=1
-    fi
-
-    IVC_SDK_DIR=$(cd "${IVC_SDK_DIR}" && pwd -P)
-    if [[ ${IVC_SDK_CLONED} -eq 1 && -n "${IVC_SDK_REF}" ]]; then
-        git -C "${IVC_SDK_DIR}" checkout "${IVC_SDK_REF}"
-    elif [[ ${IVC_SDK_CLONED} -eq 0 && -n "${IVC_SDK_REF}" ]]; then
-        info "Ignoring --ivc-sdk-ref for existing checkout; local state is preserved"
-    fi
+    local provided=0
+    [[ -z $IVC_SDK_DIR ]] || provided=1
+    IVC_SDK_DIR="${IVC_SDK_DIR:-${BUILD_DIR}/ivc-sdk-source}"
+    build_prepare_checkout "$IVC_SDK_DIR" "$IVC_SDK_REPO_URL" "${IVC_SDK_REF:-HEAD}" "$provided"
+    IVC_SDK_DIR=$(cd "$IVC_SDK_DIR" && pwd -P)
 
     [[ -f "${IVC_SDK_DIR}/Makefile" ]] || die "ivc-sdk Makefile not found: ${IVC_SDK_DIR}/Makefile"
     [[ -f "${IVC_SDK_DIR}/zephyr/module.yml" ]] || die "ivc-sdk Zephyr module not found: ${IVC_SDK_DIR}/zephyr/module.yml"
@@ -198,29 +221,39 @@ build_user_apps() {
     info "Building Starry userspace AXIVC programs from ivc-sdk"
     build_make -C "${IVC_SDK_DIR}" clean-linux BUILD_DIR="${IVC_BUILD_DIR}"
     build_make -C "${IVC_SDK_DIR}" all BUILD_DIR="${IVC_BUILD_DIR}"
-}
-
-build_zephyr_image() {
-    local app_name="$1"
-    local image_name="$2"
-    local app_dir="${IVC_SDK_DIR}/zephyr/samples/axivc/${app_name}"
-
-    [[ -f "${app_dir}/CMakeLists.txt" ]] || die "Zephyr AXIVC sample not found: ${app_dir}"
-    info "Building Zephyr AXIVC sample ${app_name} -> ${image_name}"
-
-    AXIVC_BENCH_ITERATIONS="${AXIVC_BENCH_ITERATIONS}" \
-        "${TGOSIMAGES_ROOT}/scripts/os/zephyr.sh" orangepi-5-plus \
-            --images-dir "${ZEPHYR_IMAGES_DIR}" \
-            --image-name "${image_name}" \
-            --app "${app_dir}" \
-            --extra-module "${IVC_SDK_DIR}"
+    source "${TGOSIMAGES_ROOT}/scripts/lib/ivc-user-apps.sh"
+    build_ivc_roundtrip "${TGOSIMAGES_ROOT}" "${IVC_SDK_DIR}" "${IVC_BUILD_DIR}"
 }
 
 build_zephyr_images() {
     [[ "${SKIP_ZEPHYR}" == "0" ]] || return 0
 
-    build_zephyr_image zephyr-starry zephyr-ivc-demo
-    build_zephyr_image zephyr-starry-benchmark zephyr-ivc-benchmark
+    [[ -f "${ZEPHYR_SHELL_APP}/CMakeLists.txt" ]] ||
+        die "Unified Zephyr Shell app not found: ${ZEPHYR_SHELL_APP}"
+    info "Building unified Orange Pi Zephyr Shell"
+    if [[ -n "${AKA_RK3588_SOURCE_DIR}" ]]; then
+        [[ -f "${AKA_RK3588_SOURCE_DIR}/zephyr/orangepi_robot_control/CMakeLists.txt" ]] ||
+            die "AKA controller source not found: ${AKA_RK3588_SOURCE_DIR}"
+        AKA_RK3588_SOURCE_DIR=$(cd "${AKA_RK3588_SOURCE_DIR}" && pwd -P)
+    fi
+    if [[ -n "${AKA_RK3588_LIBRARY}" ]]; then
+        [[ -f "${AKA_RK3588_LIBRARY}" ]] || die "AKA library not found: ${AKA_RK3588_LIBRARY}"
+    fi
+    if [[ -n "${AKA_RK3588_INCLUDE_DIR}" ]]; then
+        [[ -d "${AKA_RK3588_INCLUDE_DIR}" ]] || die "AKA include directory not found: ${AKA_RK3588_INCLUDE_DIR}"
+    fi
+    local -a aka_args=(
+        "-DAKA_RK3588_SOURCE_DIR=${AKA_RK3588_SOURCE_DIR}"
+        "-DAKA_RK3588_LIBRARY=${AKA_RK3588_LIBRARY}"
+        "-DAKA_RK3588_INCLUDE_DIR=${AKA_RK3588_INCLUDE_DIR}"
+    )
+    AXIVC_BENCH_ITERATIONS="${AXIVC_BENCH_ITERATIONS}" \
+        "${TGOSIMAGES_ROOT}/scripts/os/zephyr.sh" orangepi-5-plus \
+            --images-dir "${ZEPHYR_IMAGES_DIR}" \
+            --image-name "${ZEPHYR_SHELL_IMAGE_NAME}" \
+            --app "${ZEPHYR_SHELL_APP}" \
+            --extra-module "${IVC_SDK_DIR}" \
+            "${aka_args[@]}"
 }
 
 build_starry_image() {
@@ -241,9 +274,7 @@ build_starry_image() {
 stage_payloads() {
     info "Staging AXIVC payloads into ${STAGE_DIR}"
     local required_artifacts=(
-        "${STARRY_IMAGES_DIR}/${STARRY_IMAGE_NAME}"
-        "${ZEPHYR_IMAGES_DIR}/zephyr-ivc-demo"
-        "${ZEPHYR_IMAGES_DIR}/zephyr-ivc-benchmark"
+        "${IVC_BUILD_DIR}/examples/ivc-roundtrip"
         "${IVC_BUILD_DIR}/examples/ivc-demo"
         "${IVC_BUILD_DIR}/examples/ivc-starry-bench"
     )
@@ -254,20 +285,22 @@ stage_payloads() {
     done
 
     rm -rf "${STAGE_DIR}"
-    mkdir -p "${STAGE_DIR}/guest/zephyr" "${STAGE_DIR}/guest/starry" "${STAGE_DIR}/usr/bin" "${STAGE_DIR}/usr/lib"
-
-    copy_required "${STARRY_IMAGES_DIR}/${STARRY_IMAGE_NAME}" "${STAGE_DIR}/guest/starry/${STARRY_IMAGE_NAME}"
-
-    copy_required "${ZEPHYR_IMAGES_DIR}/zephyr-ivc-demo" "${STAGE_DIR}/guest/zephyr/zephyr-ivc-demo.bin"
-    copy_required "${ZEPHYR_IMAGES_DIR}/zephyr-ivc-benchmark" "${STAGE_DIR}/guest/zephyr/zephyr-ivc-benchmark.bin"
+    mkdir -p "${STAGE_DIR}/usr/bin" "${STAGE_DIR}/usr/lib"
 
     copy_required "${IVC_BUILD_DIR}/examples/ivc-demo" "${STAGE_DIR}/usr/bin/ivc-demo"
     copy_required "${IVC_BUILD_DIR}/examples/ivc-starry-bench" "${STAGE_DIR}/usr/bin/ivc-starry-bench"
+    copy_required "${IVC_BUILD_DIR}/examples/ivc-roundtrip" "${STAGE_DIR}/usr/bin/ivc-roundtrip"
     copy_optional "${IVC_BUILD_DIR}/libaxivc.so" "${STAGE_DIR}/usr/lib/libaxivc.so"
 
-    chmod 0755 "${STAGE_DIR}/usr/bin/ivc-demo" "${STAGE_DIR}/usr/bin/ivc-starry-bench"
+    chmod 0755 "${STAGE_DIR}/usr/bin/ivc-roundtrip" "${STAGE_DIR}/usr/bin/ivc-demo" "${STAGE_DIR}/usr/bin/ivc-starry-bench"
     success "AXIVC RK3588 payloads are ready in ${STAGE_DIR}"
 }
+
+if [[ "${SHELL_ONLY}" == "1" ]]; then
+    resolve_ivc_sdk
+    build_zephyr_images
+    exit 0
+fi
 
 resolve_ivc_sdk
 print_build_inputs

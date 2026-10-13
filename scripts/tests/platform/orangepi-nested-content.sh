@@ -5,7 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 repo_root=$(CDPATH= cd -- "$script_dir/../../.." && pwd -P)
 
 image=
-guest_free_value=256M
+guest_free_value=1G
 outer_free_value=256M
 skip_elf_check=0
 

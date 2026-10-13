@@ -2,12 +2,12 @@
 
 本目录存放“业务应用属于其他仓库、系统构建环境属于 TGOSImages”场景的薄封装脚本。
 
-当前包含三个外部应用入口：
+主要外部应用入口：
 
 ```text
 scripts/apps/aka-rk3588-zephyr.sh
 scripts/apps/ivc-rk3588.sh
-scripts/apps/zephyr-triple-guest-functional.sh
+scripts/apps/orangepi-aka-package.sh
 ```
 
 `aka-rk3588-zephyr.sh` 查找 AKA 中的控制应用，然后调用 `scripts/os/zephyr.sh`，使用本仓库管理的 Zephyr
@@ -16,9 +16,8 @@ scripts/apps/zephyr-triple-guest-functional.sh
 `ivc-rk3588.sh` 查找或下载 `ivc-sdk`，构建 Zephyr IVC demo/benchmark 客户机镜像、
 Starry 用户态程序和 StarryOS 客户机镜像，并把板端需要的文件收集到 Orange Pi 发布目录。
 
-`zephyr-triple-guest-functional.sh` 构建 Orange Pi 5 Plus Linux + StarryOS + Zephyr
-三客户机功能测试所用的 Zephyr 客户机镜像（应用源码位于本仓库 `apps/zephyr-triple-guest-functional/`），
-调用 `scripts/os/zephyr.sh orangepi-5-plus` 复用现有 board、patch、SDK 与 DTB 逻辑。
+Orange Pi 三客户机基础功能检查统一使用 `apps/zephyr/orangepi-shell`，通过
+`ivc-rk3588.sh --shell-only` 构建，与 IVC 和可选 AKA 控制端共用同一镜像。
 
 本目录脚本不复制业务源码，也不负责修改 TGOSKits、部署镜像、启动 AxVisor 或运行板端
 程序。
@@ -40,7 +39,7 @@ tgosimages/                               # 系统构建环境和发布产物
 ├── scripts/apps/aka-rk3588-zephyr.sh     # AKA Zephyr 入口
 ├── scripts/apps/ivc-rk3588.sh            # AXIVC demo/benchmark 入口
 ├── patches/zephyr/                       # Zephyr 补丁
-├── build/                                # Zephyr 源码、SDK、构建缓存
+├── build/                                # AKA/Zephyr 源码、SDK、构建缓存
 └── IMAGES/                               # 最终镜像
 ```
 
@@ -175,12 +174,13 @@ Twister 生成的 CMake cache、对象文件、ELF、XML/JSON 和日志都不应
 
 1. `--aka-dir <路径>`；
 2. 环境变量 `AKA_RK3588_DIR`；
-3. `tgosimages` 同级的 `aka-rk3588` checkout；
-4. 以上均不存在时，在 `tgosimages` 同级创建 `aka-rk3588` checkout。
+3. `${BUILD_DIR}/aka-rk3588`（默认 `build/aka-rk3588`，设置 `BUILD_WORK_DIR` 时使用该工作目录）；
+4. 以上均不存在时，从 `https://github.com/bullhh/aka-rk3588.git` 下载到该目录，默认检出 `dual` 分支。
 
-`ivc-sdk` 使用同样的查找规则，默认使用 `tgosimages` 同级的 `ivc-sdk` checkout。不存在时 clone
-`https://github.com/rcore-os/ivc-sdk.git` 的当前默认分支；已有 checkout 不会被自动
-pull、切换、reset 或清理。
+`master` 分支不包含所需的 Zephyr 控制应用。`--aka-ref` 或 `AKA_RK3588_REF` 可覆盖首次下载的版本；显式指定的已有源码不会自动更新或切换；自动下载到构建目录的源码重跑时会更新并清除残留改动。
+
+`ivc-sdk` 可通过 `--ivc-sdk-dir` 或 `IVC_SDK_DIR` 指定，默认使用 `${BUILD_DIR}/ivc-sdk-source`。不存在时 clone
+`https://github.com/rcore-os/ivc-sdk.git` 的当前默认分支；显式指定的已有 checkout 按原样使用；默认构建缓存会更新并清理。
 
 输出会包含：
 
@@ -224,23 +224,16 @@ AKA 不存在时可以覆盖 clone 地址：
   --aka-repo-url https://example.com/aka-rk3588.git
 ```
 
-只对本次新 clone 指定 branch、tag 或 commit：
+为自动管理的构建源码指定 branch、tag 或 commit：
 
 ```bash
 ./scripts/apps/aka-rk3588-zephyr.sh \
   --aka-ref <ref>
 ```
 
-已有 AKA 工作树不会被自动执行：
+默认构建目录中的 AKA 和 IVC SDK 会在重跑时获取指定版本，清除源码残留改动和未跟踪文件后继续构建，不做备份。
 
-- pull；
-- checkout 或切换分支；
-- reset；
-- clean；
-- 覆盖本地修改。
-
-若目录已经存在，`--aka-ref` 会被忽略并打印提示。需要更新时，应由使用者进入 AKA 仓库
-显式处理版本和本地修改。
+通过 `--aka-dir`、`--ivc-sdk-dir` 或对应路径环境变量指定的已有工作树按原样使用，不自动切换版本或清理；这类已有源码会忽略 ref 参数。
 
 ### 3.4 从 AKA 侧构建
 
@@ -308,13 +301,17 @@ Orange Pi 5 Plus 上的 Zephyr-Starry IVC 测例使用：
 
 默认行为：
 
-- `ivc-sdk` 优先使用 `tgosimages` 同级的同名 checkout；不存在时 clone
+- `ivc-sdk` 默认使用 `${BUILD_DIR}/ivc-sdk-source`；不存在时 clone
   `https://github.com/rcore-os/ivc-sdk.git`。
 - StarryOS 使用远端 `https://github.com/rcore-os/tgoskits.git` 的 `dev` 分支，不使用同级本地
   `tgoskits`。
-- StarryOS 日志级别默认为 `Error`。
-- Zephyr demo application 为 `ivc-sdk/samples/zephyr-starry`。
-- Zephyr benchmark application 为 `ivc-sdk/samples/zephyr-starry-benchmark`。
+- ArceOS、StarryOS、Zephyr、RT-Thread、FreeRTOS、AKA 和 IVC SDK 自动下载到构建目录的源码是可重建缓存；重跑时直接清除残留改动及未跟踪文件、检出目标版本并重新应用项目补丁，不做备份。通过路径参数或环境变量指定的已有源码按原样使用（FreeRTOS 仅使用内部源码缓存）。
+- 平台 StarryOS 日志由构建配置或 `--log` 决定；独立 `ivc-rk3588.sh` 构建内核时默认 `Error`。
+- IVC Linux 模块直接复用 Linux 任务已经准备好的内核配置和版本文件，不再次执行 `olddefconfig`/`modules_prepare` 或 `make kernelrelease`。
+- Linux任务从同一次内核构建执行modules_install，在IMAGES/orangepi/linux发布kernel.release及lib/modules/<release>和模块索引；客户机rootfs将其写入/usr/lib/modules，Jammy的/lib别名指向同一目录。缺少对应版本或索引时构建明确失败；Linux资产变化也会使客户机基础rootfs缓存失效，避免仅替换内核后丢失RTL8125等模块驱动。
+- IVC initramfs 在同一个 `fakeroot` 会话中解包、添加程序和打包，保留 BusyBox 的设备节点与文件属主，普通用户无需 sudo。
+- Zephyr 使用统一的 `apps/zephyr/orangepi-shell`，普通通信、基础检查和中断测量共用同一镜像。
+- 平台 Zephyr 默认从 `${BUILD_DIR}/aka-rk3588` 的 `dual` 分支构建 AKA 控制端，可用 `--aka-dir` 或库参数覆盖；`ORANGEPI_WITH_AKA=0` 关闭默认接入。
 - Starry 用户态程序由 `ivc-sdk` 的 Makefile 构建。
 
 常用覆盖参数：
@@ -322,23 +319,31 @@ Orange Pi 5 Plus 上的 Zephyr-Starry IVC 测例使用：
 ```bash
 ./build.sh platform orangepi-5-plus ivc \
   --ivc-sdk-dir <ivc-sdk-checkout> \
-  --tgoskits-ref dev \
-  --starry-log Error
+  --ivc-build-dir <object-directory>
 ```
+
+整套平台构建中，`starry` 和 `zephyr` 分别构建客户机内核；`ivc` 只构建用户态程序、
+Linux 驱动和 initramfs，不重复构建内核。`rootfs` 等待 IVC 工具就绪后，把三个程序加入
+正式独立 ext4 的 `/usr/bin`。最终烧写镜像直接嵌入这份客户机文件系统。
+SDK、对象目录和 AKA 参数只转发给支持它们的组件。rootfs 缓存包含 IVC 和默认 AKA
+运行包的内容，更新程序、模型或校准参数后不会复用旧叠加内容。
 
 发布目录会生成以下板端 payload：
 
 ```text
-IMAGES/orangepi/ivc/guest/starry/orangepi-5-plus
-IMAGES/orangepi/ivc/guest/zephyr/zephyr-ivc-demo.bin
-IMAGES/orangepi/ivc/guest/zephyr/zephyr-ivc-benchmark.bin
+IMAGES/orangepi/starry/orangepi-5-plus
+IMAGES/orangepi/zephyr/orangepi-5-plus
+IMAGES/orangepi/zephyr/orangepi-5-plus.dtb
+IMAGES/orangepi/linux/initramfs.cpio
+IMAGES/orangepi/ivc/usr/bin/ivc-roundtrip
 IMAGES/orangepi/ivc/usr/bin/ivc-demo
 IMAGES/orangepi/ivc/usr/bin/ivc-starry-bench
 IMAGES/orangepi/ivc/usr/lib/libaxivc.so
+IMAGES/orangepi/linux/usr/bin/axivc-pingpong
 ```
 
-其中 `zephyr-ivc-*` 是板端使用的 Zephyr IVC 镜像文件名。Zephyr 的 ELF/DTB 等调试产物
-保留在 `build/ivc-rk3588/zephyr`，不会进入发布 payload。
+IVC demo、benchmark 和可选 AKA 控制端共用统一的 Zephyr `orangepi-5-plus` 镜像。
+Zephyr 的 ELF 与 DTB 沿用统一构建入口的正式产物目录。
 
 构建完成后可以生成发布包：
 
@@ -347,43 +352,43 @@ IMAGES/orangepi/ivc/usr/lib/libaxivc.so
 ```
 
 默认 release 打包入口是 `IMAGES/`，因此 `release/orangepi.tar.xz` 会包含整个
-`IMAGES/orangepi`，也就包含上面的 `ivc/guest` 和 `ivc/usr` 文件。部署由项目 CI 或板卡
+`IMAGES/orangepi`，也就包含上面的客户机镜像和 `ivc/usr` 文件。部署由项目 CI 或板卡
 管理环境负责；服务器地址、认证信息和临时解包目录不写入仓库文档。
 
-### 3.7 构建 Orange Pi 三客户机功能 Zephyr 镜像
+正式独立 ext4 包含 `ivc-demo`、`ivc-starry-bench` 和 `ivc-roundtrip`，最终宿主机镜像
+还会将这三个程序安装到宿主机的 `/usr/bin/`。嵌套客户机副本使用同一份独立 ext4，
+磁盘组合层不再维护另一套 IVC 注入逻辑。
+Linux 客户机使用独立的 `linux/orangepi-5-plus` 和 `linux/initramfs.cpio`，其中 initramfs
+包含 `axvisor.ko` 及 Linux 侧 IVC 程序。Zephyr 只使用统一的
+`guest/zephyr/orangepi-5-plus` 与对应 DTB，AKA 控制逻辑应集成到该 shell 中。
+`axvisor.ko` 是 Linux 客户机的 IVC 驱动模块，必须随 initramfs 一起发布；它不需要复制到
+StarryOS rootfs、Zephyr shell 或 Orange Pi 宿主机的 `/usr/bin/`。
 
-板卡用例 `board-orangepi-5-plus-triple-guest-functional` 的第三台客户机是一个 Zephyr Shell
-镜像，用作 Orange Pi 5 Plus Linux + StarryOS + Zephyr 三客户机功能测试。构建入口是：
+AKA 仓库本身不需要修改；构建时可传入其现有库和头文件目录：
 
 ```bash
-# 在 tgosimages 仓库根目录执行
-./scripts/apps/zephyr-triple-guest-functional.sh
+./build.sh platform orangepi-5-plus zephyr \
+  --aka-library <aka-rk3588-library> \
+  --aka-include-dir <aka-rk3588-include-dir>
 ```
 
-它调用 `scripts/os/zephyr.sh orangepi-5-plus`，把 `--app` 指向本仓库的
-`apps/zephyr-triple-guest-functional/`，并把输出目录与镜像名固定为
-`IMAGES/orangepi/zephyr` 和 `zephyr-triple-guest-functional`。
-Zephyr 固定 ref、`patches/zephyr`、SDK、Python 环境和 `orangepi_5_plus_rk3588` board 都与
-默认 `orangepi-5-plus` 目标一致，默认 latency_measure 构建及其
-`IMAGES/orangepi/zephyr/orangepi-5-plus*` 产物不受影响。
+统一 shell 提供 `aka run` 命令，并通过可选的 `aka_rk3588_run()` C ABI 调用外部库。未提供库时，shell 仍可构建并保留
+现有 IVC 功能。
 
-产物落在标准 Orange Pi Zephyr 镜像目录，三个文件同名前缀、同一次构建：
+### 3.7 三客户机基础功能检查
 
-```text
-IMAGES/orangepi/zephyr/zephyr-triple-guest-functional
-IMAGES/orangepi/zephyr/zephyr-triple-guest-functional.elf
-IMAGES/orangepi/zephyr/zephyr-triple-guest-functional.dtb
+基础功能检查已整合到 `apps/zephyr/orangepi-shell`，使用统一入口：
+
+```bash
+./scripts/apps/ivc-rk3588.sh --shell-only --ivc-sdk-dir /path/to/ivc-sdk
+# 需要 AKA 控制端时追加 --aka-dir /path/to/aka-rk3588
 ```
 
-`clean` 必须作为唯一参数调用，只删除本 profile 自己的构建树（`BUILD_WORK_DIR` 下，默认
-为 `build/objects/zephyr/orangepi-5-plus-zephyr-triple-guest-functional`）与上面三个
-产物，不会清空共享的 `IMAGES/orangepi/zephyr` 目录。其它构建参数继续转发给
-`scripts/os/zephyr.sh`；`--app`、`--images-dir` 和 `--image-name` 由本入口固定。
+镜像输出为 `IMAGES/orangepi/zephyr/orangepi-5-plus`、`.elf` 和 `.dtb`。普通 IVC 和 AKA
+构建均可执行 `kernel version`、`kernel thread list`、`device list`；提示符为 `zephyr:~$ `。
+线程监控、线程名称和栈信息在统一配置中启用，客户机沿用 128 MiB 内存 overlay。
+串口和 GIC 配置由现有统一 shell 与 AKA overlay 管理，不复制旧基础应用的 UART 配置。
 
-应用使用 Zephyr 自带的 shell、kernel shell、device shell 与 thread monitor，串口提示符
-保持 `zephyr:~$ `，用于板卡检查的 `kernel version`、`kernel thread list`、`device list`
-命令。`apps/zephyr-triple-guest-functional/boards/orangepi_5_plus_rk3588.overlay` 把
-`sram0` 钉到 Zephyr 虚拟机配置实际映射的 128 MiB 窗口，`&gic` 保持板卡固件地址不变。
 
 ---
 
@@ -597,3 +602,65 @@ TGOSKits 虚拟机配置
 
 机器人业务应在 AKA 单独提交；AxVisor 双客户机配置和设备直通应在 TGOSKits 单独提交。
 三个仓库可以记录兼容 commit，但不应混合代码所有权。
+
+
+## 9. 从统一 shell 启动 AKA
+
+`ivc-rk3588.sh --shell-only --aka-dir <aka-dual-checkout>` 会把外部 AKA 的 Zephyr
+控制代码接入 `apps/zephyr/orangepi-shell`，通过 `aka run` 在后台启动，`aka status`
+查询状态。`--aka-library` 仍支持提供 C ABI 的预编译实现；源码与库选项互斥。
+已有 AKA checkout 不会被切换或修改。构建、UART6 overlay、板端目录与 StarryOS
+联调步骤见 [统一 shell 文档](../../apps/zephyr/orangepi-shell/README.md)。
+
+AKA 运行包自动准备入口为 `orangepi-aka-package.sh`，底层感知编译使用 `orangepi-aka-perception.sh`；`orangepi-aka-rootfs.sh` 向现有客户机 ext4 安装运行包并检查 JPEG 等间接依赖。正式 rootfs 仍为 `IMAGES/rootfs/rootfs-aarch64-orangepi-jammy.img`，Zephyr 仍输出到 `IMAGES/orangepi/zephyr`，板端 `/guest/ivc-test` 仅用于临时验证。详见统一 Zephyr shell README。
+
+
+Orange Pi 普通 IVC 板卡验证统一使用 TGOSKits 的
+`apps/axvisor/normal/board-orangepi-5-plus/ivc`：一次启动 Linux、StarryOS、Zephyr shell，分别校验三条链路的五条请求与回复。Linux 两条链路逐轮往返，Zephyr–StarryOS 沿用原 demo 的批量发送顺序。
+`ivc-roundtrip` 在本仓库编译并加入 Linux initramfs 和 StarryOS 既有客户机 ext4。
+它的公开入口为 `publish KEY REQUEST_PREFIX REPLY_PREFIX` 或
+`subscribe VM KEY REQUEST_PREFIX REPLY_PREFIX`；key、对端和消息前缀由测例明确指定，失败返回非零。
+正式板卡配置和启动命令见 TGOSKits 该目录的 README。
+
+### AKA 客户机文件系统与构建验证
+
+香橙派构建图在 rootfs 前自动生成 `IMAGES/orangepi/aka` 运行包，可用 `ORANGEPI_AKA_PACKAGE` 指定已有包；显式提供的包内校准参数按原样复制。`orangepi-aka-rootfs.sh` 用于已有独立 ext4 的验证副本，
+只在临时镜像完成注入、架构、动态加载器和递归库校验后发布新输出；失败不留下正式镜像。
+校验同时覆盖 AKA 明确使用的动态运行库，不仅检查 `DT_NEEDED`。
+
+Starry 发布按本次 config/target/debug 选择产物，不从旧目标目录猜测文件。Cargo 解析
+出的锁文件保留，manifest 的 `source_lock_sha256` 记录实际依赖锁；构建产生的工作区
+变化仍由 `source_dirty` 标记。
+
+定向验证入口：
+
+```sh
+bash scripts/tests/platform/orangepi-rootfs-flow.sh
+python3 scripts/tests/rootfs/rootfs-graph.py
+bash scripts/tests/build/starry-source-preparation.sh
+bash scripts/tests/platform/starry-release-smoke.sh
+AARCH64_CC=/path/to/aarch64-linux-musl-gcc bash scripts/tests/apps/orangepi-aka-rootfs.sh
+```
+
+
+### Orange Pi 默认 AKA
+
+`./build.sh platform orangepi-5-plus all` 默认将 AKA 感知运行包安装到客户机 ext4 的 `/opt/aka`，并在统一 Zephyr shell 中构建 AKA 控制端；启动后用 `aka run` 主动运行控制逻辑。
+
+默认 AKA 源码位于 `${BUILD_DIR}/aka-rk3588`，不存在时从 `https://github.com/bullhh/aka-rk3588.git` 下载并检出 `dual` 分支。平台构建图使用 `build/workspaces/orangepi-5-plus/aka-rk3588`。`all` 在 IVC 构建完成后自动生成 `IMAGES/orangepi/aka`，再构建 rootfs；新环境无需手动复制运行包。
+
+感知程序从 AKA 和 IVC SDK 源码交叉编译，RKNN 模型和运行库来自 AKA 仓库。libuvc、libusb、JPEG 和 libudev 等依赖从 Ubuntu 官方 arm64 仓库下载，版本、地址和 SHA256 固定在 `scripts/apps/aka-runtime.lock.json`，下载包保存在构建缓存中。生成的 `package-manifest.json` 记录源码 commit、工作区状态、编译器、依赖来源、配置路径和每个文件的 SHA256。
+
+默认使用 AKA 源码中的 `config/lekiwi_calibration.json` 和 `config/lekiwi_pick_config.txt`，它们是仓库提供的配置；部署到具体机器人前应通过 `ORANGEPI_AKA_CONFIG_DIR` 指定该机器已校准的配置目录。也可通过 `ORANGEPI_AKA_PACKAGE` 指定已有完整运行包，此时只校验和安装，不重新生成。单独生成默认运行包：
+
+```sh
+./build.sh platform orangepi-5-plus aka
+```
+
+可通过 `ORANGEPI_AKA_SOURCE_DIR`（或 `--aka-dir`）覆盖控制源码，通过 `ORANGEPI_AKA_PACKAGE` 覆盖感知运行包。关闭默认 AKA：
+
+```sh
+ORANGEPI_WITH_AKA=0 ./build.sh platform orangepi-5-plus all
+```
+
+此开关影响本次构建；此前已有镜像需重新构建 rootfs 才会移除 `/opt/aka`。

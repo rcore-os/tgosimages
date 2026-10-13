@@ -73,6 +73,29 @@
 | `scripts/rootfs/alpine.sh` | 下载 Alpine minirootfs 并生成 ext4 镜像 | `rootfs-<arch>-alpine.img` |
 | `scripts/rootfs/debian.sh` | 基于 Docker + debootstrap 生成 Debian rootfs 镜像 | `rootfs-<arch>-debian.img` |
 
+
+### Orange Pi 默认 AKA
+
+`./build.sh platform orangepi-5-plus all` 默认将 AKA 感知运行包安装到客户机 ext4 的 `/opt/aka`，并在统一 Zephyr shell 中构建 AKA 控制端；启动后用 `aka run` 主动运行控制逻辑。
+
+默认 AKA 源码位于 `${BUILD_DIR}/aka-rk3588`，不存在时从 `https://github.com/bullhh/aka-rk3588.git` 下载并检出 `dual` 分支。平台构建图使用 `build/workspaces/orangepi-5-plus/aka-rk3588`。`all` 在 IVC 构建完成后自动生成 `IMAGES/orangepi/aka`，再构建 rootfs；新环境无需手动复制运行包。
+
+感知程序从 AKA 和 IVC SDK 源码交叉编译，RKNN 模型和运行库来自 AKA 仓库。libuvc、libusb、JPEG 和 libudev 等依赖从 Ubuntu 官方 arm64 仓库下载，版本、地址和 SHA256 固定在 `scripts/apps/aka-runtime.lock.json`，下载包保存在构建缓存中。生成的 `package-manifest.json` 记录源码 commit、工作区状态、编译器、依赖来源、配置路径和每个文件的 SHA256。
+
+默认使用 AKA 源码中的 `config/lekiwi_calibration.json` 和 `config/lekiwi_pick_config.txt`，它们是仓库提供的配置；部署到具体机器人前应通过 `ORANGEPI_AKA_CONFIG_DIR` 指定该机器已校准的配置目录。也可通过 `ORANGEPI_AKA_PACKAGE` 指定已有完整运行包，此时只校验和安装，不重新生成。单独生成默认运行包：
+
+```sh
+./build.sh platform orangepi-5-plus aka
+```
+
+可通过 `ORANGEPI_AKA_SOURCE_DIR`（或 `--aka-dir`）覆盖控制源码，通过 `ORANGEPI_AKA_PACKAGE` 覆盖感知运行包。关闭默认 AKA：
+
+```sh
+ORANGEPI_WITH_AKA=0 ./build.sh platform orangepi-5-plus all
+```
+
+此开关影响本次构建；此前已有镜像需重新构建 rootfs 才会移除 `/opt/aka`。
+
 ## 支持的目标
 
 ### 平台 OS 目标
@@ -250,7 +273,7 @@ QEMU AArch64 Alpine 的 `qemu_ivc_inject_nested_payloads()` 还会将匹配客�
 
 在 `platform` 任务图中，每个测例插件是独立叶子节点。插件完成后分别合并 outer/guest overlay，再构建 rootfs 和平台镜像；因此不同架构、平台及测例可以共享全局并发预算，失败只阻断依赖该测例的镜像链。
 
-每份嵌套 ext4 与外层 ext4 默认各保留 256 MiB 空闲空间，`--guest-free-size` 对每份 guest 分别生效。外层文件系统会根据全部 guest 文件、平台载荷、元数据和 `--outer-free-size` 自动扩容，因此原始镜像大小近似随 `ROOTFS_GUEST_COUNT` 线性增长。嵌套镜像以未压缩原始文件
+每份嵌套 ext4 默认保留 1 GiB 空闲空间，外层 ext4 默认保留 256 MiB 空闲空间，`--guest-free-size` 对每份 guest 分别生效。外层文件系统会根据全部 guest 文件、平台载荷、元数据和 `--outer-free-size` 自动扩容，因此原始镜像大小近似随 `ROOTFS_GUEST_COUNT` 线性增长。嵌套镜像以未压缩原始文件
 嵌入，因此外层原始镜像可能明显变大；发布阶段的 xz 压缩包仍可能小得多，
 但不保证固定压缩大小阈值。BusyBox ext4 同样参与组合。旧有 initramfs
 继续保留平台文件注入，但不包含客户机测试插件和嵌套 rootfs。
@@ -380,7 +403,7 @@ scripts/tests/rootfs/rootfs-builder-options.sh --integration
 | `IMAGES/<platform>/linux` | 某硬件平台的 Linux 产物 |
 | `IMAGES/<platform>/arceos` | 某硬件平台的 ArceOS 产物 |
 | `IMAGES/orangepi/starry/orangepi-5-plus` | 可放入客户机根文件系统 `/guest/starry/orangepi-5-plus` 的 StarryOS 内核 |
-| `IMAGES/orangepi-5-plus-starry` | 独立 StarryOS 发布包的暂存目录（镜像、manifest 和 SHA256） |
+| `IMAGES/orangepi/starry` | StarryOS 镜像、manifest 和 SHA256 |
 | `IMAGES/rootfs/rootfs-aarch64-orangepi-jammy.img` | 包含三个 benchmark 的 Orange Pi Jammy 客户机 rootfs |
 | `IMAGES/rootfs/orangepi-5-plus.img` | 带同源嵌套客户机 rootfs 的可烧写 Ubuntu Jammy minimal 镜像 |
 
@@ -392,7 +415,7 @@ Orange Pi 命令分别发布各自的产物。只构建内核和 DTB：
 ./build.sh platform orangepi-5-plus linux
 ```
 
-只构建包含三个测例的 Jammy 客户机 rootfs：
+构建包含三个 benchmark 和 IVC 工具的 Jammy 客户机 rootfs（自动准备 Linux 和 IVC 依赖）：
 
 ```bash
 ./build.sh platform orangepi-5-plus rootfs
@@ -419,7 +442,7 @@ Orange Pi 命令分别发布各自的产物。只构建内核和 DTB：
 ```
 
 客户机 ext4 从固定 Orange Pi Jammy rootfs 归档生成，并在最终镜像组合前注入三个
-静态链接的 AArch64 测例。客户机和外层文件系统默认各保留 256 MiB 可写空间。
+静态链接的 AArch64 测例。每份客户机文件系统默认保留 1 GiB 可写空间，外层文件系统仍保留 256 MiB；外层总大小会随嵌套客户机镜像的增大而增加。
 构建需要 `lz4`、`mke2fs`、`sfdisk`、`python3`、`debugfs`、
 `dumpe2fs`、`e2fsck` 和 `resize2fs`，但镜像组合不需要 loop mount。构建只打包
 测例，不会自动执行 benchmark。验证命令：
@@ -439,7 +462,7 @@ bash scripts/tests/platform/orangepi-nested-content.sh \
 
 构建脚本默认使用 tgoskits `dev` 分支中的
 `os/StarryOS/configs/board/orangepi-5-plus.toml`，并应用一个启用上游
-`ax-driver/virtio-blk` feature 的本地配置补丁。驱动实现由 tgoskits 提供，
+`ax-driver/virtio-blk` 和 `ax-driver/virtio-net` feature 的本地配置补丁，供客户机使用虚拟磁盘和虚拟网卡。驱动实现由 tgoskits 提供，
 本仓库不再维护驱动代码补丁。生成的 `manifest.toml` 会记录实际构建的基础提交。
 需要复现或验证指定提交时可显式覆盖：
 
@@ -450,12 +473,12 @@ bash scripts/tests/platform/orangepi-nested-content.sh \
 构建完成后：
 
 - 客户机加载文件：`IMAGES/orangepi/starry/orangepi-5-plus`
-- 独立发布暂存目录：`IMAGES/orangepi-5-plus-starry/`
+- StarryOS 镜像和发布元数据：`IMAGES/orangepi/starry/`
 - 发布归档：执行 `./build.sh release pack` 后得到
-  `release/orangepi-5-plus-starry.tar.xz`
+  `release/orangepi.tar.xz`
 - 清理产物：`./build.sh platform orangepi-5-plus starry clean`
 
-发布包可由镜像注册表识别为 `orangepi-5-plus-starry`（`aarch64`）。本地验证脚本：
+发布包可由镜像注册表识别为 `orangepi`（`aarch64`）。本地验证脚本：
 
 ```bash
 scripts/tests/platform/starry-release-smoke.sh

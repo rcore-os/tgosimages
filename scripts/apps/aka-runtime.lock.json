@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "distribution": "Ubuntu 22.04 (jammy)",
+  "architecture": "arm64",
+  "source": "https://ports.ubuntu.com/ubuntu-ports/",
+  "packages": [
+    {
+      "name": "libc6",
+      "version": "2.35-0ubuntu3.15",
+      "architecture": "arm64",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/g/glibc/libc6_2.35-0ubuntu3.15_arm64.deb",
+      "sha256": "dd88cc85dcfbac19c0c9b606676b7b1b87f851d75afa5c830fc5ba1293a30833"
+    },
+    {
+      "name": "libjpeg-turbo8",
+      "version": "2.1.2-0ubuntu1",
+      "architecture": "arm64",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/libj/libjpeg-turbo/libjpeg-turbo8_2.1.2-0ubuntu1_arm64.deb",
+      "sha256": "1c47447261097e6a2105f4ae6f0bf2c7b1e8c6b8209c8ea40286c69c20f43818"
+    },
+    {
+      "name": "libturbojpeg",
+      "version": "2.1.2-0ubuntu1",
+      "architecture": "arm64",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/universe/libj/libjpeg-turbo/libturbojpeg_2.1.2-0ubuntu1_arm64.deb",
+      "sha256": "70ffb7d3849b196d69492ec85499b04fb0a36b8e8dbbaec817ddcb20bfcbd1e4"
+    },
+    {
+      "name": "libudev1",
+      "version": "249.11-0ubuntu3.22",
+      "architecture": "arm64",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/s/systemd/libudev1_249.11-0ubuntu3.22_arm64.deb",
+      "sha256": "ec814eee0c7a398e031ece85d07c0108c16f609fb033d7b77700e9106ce86130"
+    },
+    {
+      "name": "libusb-1.0-0",
+      "version": "2:1.0.25-1ubuntu2",
+      "architecture": "arm64",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/libu/libusb-1.0/libusb-1.0-0_1.0.25-1ubuntu2_arm64.deb",
+      "sha256": "bb0303850b6a03173ff0a4dbda011b52dbdd55a0b29958e981ae568398bb1ba1"
+    },
+    {
+      "name": "libusb-1.0-0-dev",
+      "version": "2:1.0.25-1ubuntu2",
+      "architecture": "arm64",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/libu/libusb-1.0/libusb-1.0-0-dev_1.0.25-1ubuntu2_arm64.deb",
+      "sha256": "1bc6da96bf72e101a9a1e9260e9d1b48adc83641bbec54b2899565bcdb5a8a20"
+    },
+    {
+      "name": "libuvc-dev",
+      "version": "0.0.6-1.1",
+      "architecture": "arm64",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/universe/libu/libuvc/libuvc-dev_0.0.6-1.1_arm64.deb",
+      "sha256": "b21884362754ea991ddd471c4a64a509f7277684a613e45c7983225e14593fde"
+    },
+    {
+      "name": "libuvc0",
+      "version": "0.0.6-1.1",
+      "architecture": "arm64",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/universe/libu/libuvc/libuvc0_0.0.6-1.1_arm64.deb",
+      "sha256": "0212a07138a40b32c00959757a471ed99b7744b284d9b61b22c359417b07b08e"
+    }
+  ]
+}

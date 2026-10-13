@@ -47,7 +47,7 @@ mkfs_usage() {
     printf '  --guest <dir>                 Guest directory to copy into rootfs /guest\n'
     printf '  --outer-tests <list>          Tests installed in the outer image (default: none)\n'
     printf '  --guest-tests <list>          Tests installed identically in all guest images (default from rootfs-test-plugins)\n'
-    printf '  --guest-free-size <size>      Free space reserved in each guest image (default: 256M)\n'
+    printf '  --guest-free-size <size>      Free space reserved in each guest image (default: 1G)\n'
     printf '  --outer-free-size <size>      Free space reserved in outer image (default: 256M)\n'
     printf '\n'
     printf 'Environment Variables:\n'

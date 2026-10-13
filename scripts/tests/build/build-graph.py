@@ -25,6 +25,44 @@ ROOT = Path(__file__).resolve().parents[3]
 LIB = ROOT / 'scripts/lib/python'
 
 
+class SignalGroupTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('signal_graph_test', LIB / 'build-graph.py')
+        self.scheduler = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.scheduler)
+
+    def test_owned_group_does_not_use_sudo(self):
+        with mock.patch.object(self.scheduler.os, 'killpg') as killpg, \
+             mock.patch.object(self.scheduler.subprocess, 'run') as run:
+            self.scheduler.signal_process_group(12345, signal.SIGTERM)
+            killpg.assert_called_once_with(12345, signal.SIGTERM)
+            run.assert_not_called()
+
+    def test_privileged_group_uses_bounded_noninteractive_cleanup(self):
+        for signum in (signal.SIGTERM, signal.SIGKILL):
+            with self.subTest(signum=signum), \
+                 mock.patch.object(self.scheduler.os, 'killpg', side_effect=PermissionError('denied')), \
+                 mock.patch.object(self.scheduler.subprocess, 'run') as run:
+                self.scheduler.signal_process_group(12345, signum)
+                args, kwargs = run.call_args
+                self.assertEqual(args[0], ['sudo', '-n', '--', '/bin/kill', '-s',
+                                          signal.Signals(signum).name, '--', '-12345'])
+                self.assertEqual(kwargs['timeout'], 3)
+                self.assertEqual(kwargs['stdin'], subprocess.DEVNULL)
+                self.assertTrue(kwargs['check'])
+
+    def test_failed_cleanup_preserves_visible_permission_error(self):
+        failures = (FileNotFoundError('sudo missing'),
+                    subprocess.CalledProcessError(1, ['sudo']),
+                    subprocess.TimeoutExpired(['sudo'], 3))
+        for failure in failures:
+            with self.subTest(failure=failure), \
+                 mock.patch.object(self.scheduler.os, 'killpg', side_effect=PermissionError('denied')), \
+                 mock.patch.object(self.scheduler.subprocess, 'run', side_effect=failure):
+                with self.assertRaisesRegex(PermissionError, 'sudo cleanup failed'):
+                    self.scheduler.signal_process_group(12345, signal.SIGTERM)
+
+
 class GraphTests(unittest.TestCase):
     def test_ready_affinity_prefers_active_group_but_ages_out(self):
         ready = [dict(id='qemu-riscv64.other', deps=[]),

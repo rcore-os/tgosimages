@@ -217,10 +217,13 @@ printf '{name}-%s\\n' "$scope" >"$output/{name}-$scope"
             work = Path(temporary)
             declaration = json.loads((ROOT / 'scripts/lib/platform-tasks.json').read_text())[
                 'orangepi-5-plus']
+            aka_package = work / 'aka-package'
+            aka_package.mkdir()
             with mock.patch.dict(os.environ, {
                     'BUILD_WORKSPACE_ROOT': str(work / 'workspaces'),
                     'BUILD_CACHE_DIR': str(work / 'cache'),
                     'ORANGEPI_GUEST_ROOTFS': str(work / 'images/rootfs-aarch64-orangepi-jammy.img'),
+                    'ORANGEPI_AKA_PACKAGE': str(aka_package),
             }, clear=False):
                 graph = platform_graph.board_graph('orangepi-5-plus', declaration,
                     ['rootfs', '--outer-tests', 'none', '--guest-tests', 'none'])
@@ -234,10 +237,15 @@ printf '{name}-%s\\n' "$scope" >"$output/{name}-$scope"
             self.assertEqual(base['phase'], 'prepare')
             self.assertEqual(base['env']['ORANGEPI_GUEST_ROOTFS'], str(prepared))
             self.assertEqual(uboot_deb['deps'], [linux['id']])
-            self.assertEqual(base['deps'], [uboot_deb['id']])
+            self.assertEqual(base['deps'], [uboot_deb['id'], tasks['orangepi-5-plus.ivc']['id'], tasks['orangepi-5-plus.aka']['id']])
             mutable_inputs = [base['cache_args'][index + 1]
                               for index, value in enumerate(base['cache_args'])
                               if value == '--mutable-input']
+            cached_inputs = [base['cache_args'][index + 1]
+                             for index, value in enumerate(base['cache_args'])
+                             if value == '--input']
+            self.assertIn(str(ROOT / 'IMAGES/orangepi/ivc'), cached_inputs)
+            self.assertIn(str(aka_package), cached_inputs)
             self.assertEqual(mutable_inputs, [
                 str(work / 'workspaces/orangepi-5-plus/orangepi/output/debs'),
                 str(work / 'workspaces/orangepi-5-plus/orangepi/external/cache/rootfs'),
@@ -250,13 +258,69 @@ printf '{name}-%s\\n' "$scope" >"$output/{name}-$scope"
                     'BUILD_WORKSPACE_ROOT': str(work / 'workspaces'),
                     'BUILD_CACHE_DIR': str(work / 'cache'),
                     'ORANGEPI_GUEST_ROOTFS': str(work / 'images/rootfs-aarch64-orangepi-jammy.img'),
+                    'ORANGEPI_AKA_PACKAGE': str(aka_package),
             }, clear=False):
                 graph = platform_graph.board_graph('orangepi-5-plus', declaration,
-                    ['all', '--outer-tests', 'none', '--guest-tests', 'none'])
+                    ['all', '--outer-tests', 'none', '--guest-tests', 'none',
+                     '--ivc-sdk-dir', str(work / 'sdk'), '--ivc-build-dir', str(work / 'objects'),
+                     '--aka-dir', str(work / 'aka')])
             tasks = {task['id']: task for task in graph['tasks']}
+            for step in ('linux', 'starry', 'rootfs.base', 'finalize_linux_image'):
+                self.assertNotIn('--ivc-sdk-dir', tasks[f'orangepi-5-plus.{step}']['command'])
+                self.assertNotIn('--aka-dir', tasks[f'orangepi-5-plus.{step}']['command'])
+            self.assertIn('--ivc-sdk-dir', tasks['orangepi-5-plus.ivc']['command'])
+            self.assertIn('--ivc-build-dir', tasks['orangepi-5-plus.ivc']['command'])
+            self.assertIn('--aka-dir', tasks['orangepi-5-plus.zephyr']['command'])
+            self.assertNotIn('--aka-dir', tasks['orangepi-5-plus.ivc']['command'])
+            self.assertIn('--aka-dir', tasks['orangepi-5-plus.aka']['command'])
+            self.assertEqual(tasks['orangepi-5-plus.aka']['deps'], ['orangepi-5-plus.ivc'])
             final = tasks['orangepi-5-plus.finalize_linux_image']
             self.assertEqual(final['phase'], 'compose')
             self.assertIn('--output', final['cache_args'])
+
+    def test_orangepi_missing_aka_package_fails_fast_with_guidance(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            declaration = json.loads((ROOT / 'scripts/lib/platform-tasks.json').read_text())[
+                'orangepi-5-plus']
+            missing = work / 'aka-missing'
+            environment = {
+                'BUILD_WORKSPACE_ROOT': str(work / 'workspaces'),
+                'BUILD_CACHE_DIR': str(work / 'cache'),
+                'ORANGEPI_GUEST_ROOTFS': str(work / 'images/rootfs-aarch64-orangepi-jammy.img'),
+                'ORANGEPI_AKA_PACKAGE': str(missing),
+            }
+            with mock.patch.dict(os.environ, environment, clear=False):
+                with self.assertRaisesRegex(ValueError, 'AKA guest payload package not found'):
+                    platform_graph.board_graph('orangepi-5-plus', declaration,
+                        ['rootfs', '--outer-tests', 'none', '--guest-tests', 'none'])
+            with mock.patch.dict(os.environ, {**environment, 'ORANGEPI_WITH_AKA': '0'}, clear=False):
+                graph = platform_graph.board_graph('orangepi-5-plus', declaration,
+                    ['rootfs', '--outer-tests', 'none', '--guest-tests', 'none'])
+            base = next(task for task in graph['tasks'] if task['id'] == 'orangepi-5-plus.rootfs.base')
+            cached_inputs = [base['cache_args'][index + 1]
+                             for index, value in enumerate(base['cache_args'])
+                             if value == '--input']
+            self.assertNotIn(str(missing), cached_inputs)
+            self.assertNotIn(str(ROOT / 'IMAGES/orangepi/aka'), cached_inputs)
+
+    def test_orangepi_default_aka_is_generated_before_cached_rootfs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            declaration = json.loads((ROOT / 'scripts/lib/platform-tasks.json').read_text())['orangepi-5-plus']
+            with mock.patch.dict(os.environ, {'BUILD_WORKSPACE_ROOT': str(work / 'workspaces'),
+                                              'ORANGEPI_WITH_AKA': '1'}, clear=False):
+                with mock.patch.object(platform_graph, 'ROOT', work / 'repo'):
+                    saved = os.environ.pop('ORANGEPI_AKA_PACKAGE', None)
+                    try:
+                        graph = platform_graph.board_graph('orangepi-5-plus', declaration, ['rootfs'])
+                    finally:
+                        if saved is not None:
+                            os.environ['ORANGEPI_AKA_PACKAGE'] = saved
+            tasks = {task['id']: task for task in graph['tasks']}
+            self.assertIn('orangepi-5-plus.aka', tasks['orangepi-5-plus.rootfs.base']['deps'])
+            self.assertEqual(tasks['orangepi-5-plus.aka']['deps'], ['orangepi-5-plus.ivc'])
+            self.assertNotIn('cache_args', tasks['orangepi-5-plus.aka'])
 
 
 if __name__ == '__main__':

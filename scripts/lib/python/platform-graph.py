@@ -22,6 +22,37 @@ rootfs_graph = importlib.util.module_from_spec(rootfs_spec)
 rootfs_spec.loader.exec_module(rootfs_graph)
 
 
+def component_options(name, component, options):
+    """Route Orange Pi app options only to the components that accept them."""
+    if name != 'orangepi-5-plus':
+        return options
+    owners = {
+        '--ivc-sdk-dir': {'ivc', 'zephyr', 'aka'},
+        '--ivc-sdk-ref': {'ivc', 'zephyr', 'aka'},
+        '--ivc-sdk-repo-url': {'ivc', 'zephyr', 'aka'},
+        '--ivc-build-dir': {'ivc'},
+        '--aka-dir': {'zephyr', 'aka'},
+        '--aka-library': {'zephyr'},
+        '--aka-include-dir': {'zephyr'},
+        '--zephyr-shell-app': {'zephyr'},
+    }
+    result = []
+    index = 0
+    while index < len(options):
+        option = options[index]
+        if option in owners:
+            if index + 1 == len(options):
+                raise ValueError(f'{option} needs a value')
+            if component in owners[option]:
+                result.extend(options[index:index + 2])
+            index += 2
+        else:
+            if component != 'aka':
+                result.append(option)
+            index += 1
+    return result
+
+
 def board_graph(name, declaration, args):
     action, *options = args or ['all']
     components = declaration['components']
@@ -84,7 +115,8 @@ def board_graph(name, declaration, args):
                                 'ORANGEPI_ROOTFS_TYPE', 'ROOTFS_GUEST_COUNT'],
             }
         graph['tasks'].append(phase_task(f'{name}.{step}', phase,
-            ['bash', str(SHELL_LIB / 'platform-node.sh'), name, step, *options],
+            ['bash', str(SHELL_LIB / 'platform-node.sh'), name, step,
+             *component_options(name, step, options)],
             deps=[f'{name}.{dep}' for dep in dependencies.get(step, [])], env=env,
             resources=declaration.get('resources', {}).get(step, []), cache=cache))
     if name == 'orangepi-5-plus' and action != 'clean' and os.environ.get('ROOTFS_GRAPH_DISABLE') != '1':
@@ -97,21 +129,37 @@ def board_graph(name, declaration, args):
             prepared_image = workspace / f'rootfs-bases/{rootfs_type}.img'
             base_env = dict(rootfs_task['env'], ROOTFS_GRAPH_BASE_ONLY='1',
                             ORANGEPI_GUEST_ROOTFS=str(prepared_image))
+            payload_inputs = [os.environ.get('ORANGEPI_IVC_PACKAGE', str(ROOT / 'IMAGES/orangepi/ivc')),
+                              str(ROOT / 'IMAGES/orangepi/linux')]
+            with_aka = os.environ.get('ORANGEPI_WITH_AKA', '1')
+            if with_aka not in ('0', '1'):
+                raise ValueError('ORANGEPI_WITH_AKA must be 0 or 1')
+            if with_aka == '1':
+                aka_package = Path(os.environ.get('ORANGEPI_AKA_PACKAGE') or ROOT / 'IMAGES/orangepi/aka')
+                if os.environ.get('ORANGEPI_AKA_PACKAGE') and not aka_package.is_dir():
+                    raise ValueError(
+                        f'AKA guest payload package not found: {aka_package}. Provision it first '
+                        '(see scripts/apps/README.md "Orange Pi 默认 AKA"), point ORANGEPI_AKA_PACKAGE '
+                        'at an existing package, or disable with ORANGEPI_WITH_AKA=0')
+                payload_inputs.append(str(aka_package))
             base_task = phase_task(f'{name}.rootfs.base', 'prepare', rootfs_task['command'],
                 deps=rootfs_task['deps'], env=base_env, resources=rootfs_task['resources'], cache={
                     'inputs': [str(ROOT / 'scripts/platform/orangepi-5-plus.sh'),
                                str(SHELL_LIB / 'rootfs-compose.sh'), str(SHELL_LIB / 'rootfs.sh'),
-                               str(SHELL_LIB / 'utils.sh')],
+                               str(SHELL_LIB / 'utils.sh'),
+                               str(SHELL_LIB / 'ivc-user-apps.sh'),
+                               str(SHELL_LIB / 'aka-rootfs.sh')] + payload_inputs,
                     'mutable_inputs': [str(workspace / 'orangepi/output/debs'),
                                        str(workspace / 'orangepi/external/cache/rootfs')],
                     'outputs': [str(prepared_image)],
                     'environment': ['ORANGEPI_GUEST_FREE_SIZE', 'ORANGEPI_ROOTFS_TYPE',
+                                    'ORANGEPI_IVC_PACKAGE', 'ORANGEPI_AKA_PACKAGE', 'ORANGEPI_WITH_AKA',
                                     'ROOTFS_GUEST_COUNT'],
                     'patches': [str(ROOT / 'patches/orangepi')],
                 })
             rootfs_task = phase_task(f'{name}.rootfs', 'compose',
                 ['bash', str(SHELL_LIB / 'rootfs-guest-compose-node.sh'), str(prepared_image), '',
-                 os.environ.get('ORANGEPI_GUEST_FREE_SIZE', '256M'), guest_image],
+                 os.environ.get('ORANGEPI_GUEST_FREE_SIZE', '1G'), guest_image],
                 deps=[base_task['id']], env=env)
             expanded = rootfs_graph.expand(rootfs_task, f'{name}.rootfs.{rootfs_type}',
                 'aarch64', rootfs_type, options,

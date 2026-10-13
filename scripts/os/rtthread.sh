@@ -12,6 +12,8 @@ source "${SCRIPT_DIR}/../lib/utils.sh"
 # Default values
 RTTHREAD_REPO_URL="${RTTHREAD_REPO_URL:-https://github.com/RT-Thread/rt-thread.git}"
 RTTHREAD_REF="${RTTHREAD_REF:-94df46c5fd9a381bd70a521257c7943952054013}"
+RTTHREAD_SOURCE_PROVIDED=0
+[[ -z ${RTTHREAD_SRC_DIR:-} ]] || RTTHREAD_SOURCE_PROVIDED=1
 RTTHREAD_SRC_DIR="${RTTHREAD_SRC_DIR:-${BUILD_DIR}/rtthread}"
 RTTHREAD_PATCH_DIR="${RTTHREAD_PATCH_DIR:-${ROOT_DIR}/patches/rtthread}"
 
@@ -65,6 +67,7 @@ rtthread_parse_args() {
                 ;;
             --src-dir)
                 RTTHREAD_SRC_DIR="$2"
+                RTTHREAD_SOURCE_PROVIDED=1
                 shift 2
                 ;;
             --patch-dir)
@@ -108,10 +111,15 @@ rtthread_build() {
 
 rtthread() {
     if [[ "${RTTHREAD_ARGS}" != *"-c"* ]]; then
-        info "Cloning RT-Thread source repository $RTTHREAD_REPO_URL -> $RTTHREAD_SRC_DIR"
-        clone_repository "$RTTHREAD_REPO_URL" "$RTTHREAD_SRC_DIR"
-
-        prepare_patched_source "$RTTHREAD_SRC_DIR" "$RTTHREAD_REF" "$RTTHREAD_PATCH_DIR"
+        if [[ $RTTHREAD_SOURCE_PROVIDED == 1 && -e $RTTHREAD_SRC_DIR/.git ]]; then
+            info "Using provided source without updating or cleaning: $RTTHREAD_SRC_DIR"
+        else
+            local policy=reset
+            [[ $RTTHREAD_SOURCE_PROVIDED == 0 ]] || policy=preserve
+            info "Cloning RT-Thread source repository $RTTHREAD_REPO_URL -> $RTTHREAD_SRC_DIR"
+            clone_repository "$RTTHREAD_REPO_URL" "$RTTHREAD_SRC_DIR"
+            prepare_patched_source "$RTTHREAD_SRC_DIR" "$RTTHREAD_REF" "$RTTHREAD_PATCH_DIR" "$policy"
+        fi
     fi
 
     rtthread_build

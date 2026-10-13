@@ -87,7 +87,7 @@ rootfs_builder_load_test_options() {
     outer_free_value=${!outer_free_var-}
     [[ -n $outer_value ]] || outer_value=$("$ROOTFS_TEST_BUILD" defaults --rootfs "$rootfs_type" --scope outer) || return 1
     [[ -n $guest_value ]] || guest_value=$("$ROOTFS_TEST_BUILD" defaults --rootfs "$rootfs_type" --scope guest) || return 1
-    [[ -n $guest_free_value ]] || guest_free_value=256M
+    [[ -n $guest_free_value ]] || guest_free_value=1G
     [[ -n $outer_free_value ]] || outer_free_value=256M
     printf -v "$outer_var" '%s' "$outer_value"
     printf -v "$guest_var" '%s' "$guest_value"
@@ -699,6 +699,11 @@ _rootfs_finish_outer_in_place() (
     overlay_snapshot=$(mktemp -d "${image_dir}/.overlay-snapshot.XXXXXX") || return 1
     cp -a --reflink=auto -- "$guest_source/." "$guest_snapshot/" || return 1
     cp -a --reflink=auto -- "$overlay_source/." "$overlay_snapshot/" || return 1
+    # cp -a can preserve nanosecond atimes on directory entries. These private
+    # snapshots are the strict validation boundary, so normalize them here as
+    # well as at the public staging boundary.
+    rootfs_normalize_tree_seconds "$guest_snapshot" || return 1
+    rootfs_normalize_tree_seconds "$overlay_snapshot" || return 1
     _rootfs_validate_payload_tree "$guest_snapshot" || return 1
     _rootfs_validate_payload_tree "$overlay_snapshot" || return 1
     _rootfs_validate_guest_overlay_merge "$guest_snapshot" "$overlay_snapshot" || return 1

@@ -21,7 +21,18 @@ UBOOT_SCRIPT="${SCRIPT_DIR}/../tools/build-u-boot-orangepi5.sh"
 ORANGEPI_UBOOT_WORKDIR="${ORANGEPI_UBOOT_WORKDIR:-${BUILD_DIR}/orangepi-u-boot}"
 ORANGEPI_ROOTFS_TYPE="${ORANGEPI_ROOTFS_TYPE:-orangepi-jammy}"
 ORANGEPI_GUEST_TESTS="${ORANGEPI_GUEST_TESTS:-cyclictest,lmbench,iozone}"
-ORANGEPI_GUEST_FREE_SIZE="${ORANGEPI_GUEST_FREE_SIZE:-256M}"
+ORANGEPI_AKA_PACKAGE_PROVIDED=0
+[[ -z ${ORANGEPI_AKA_PACKAGE:-} ]] || ORANGEPI_AKA_PACKAGE_PROVIDED=1
+ORANGEPI_WITH_AKA="${ORANGEPI_WITH_AKA:-1}"
+case "$ORANGEPI_WITH_AKA" in
+    1) ORANGEPI_AKA_PACKAGE="${ORANGEPI_AKA_PACKAGE:-${PLATFORM_IMAGES_DIR}/aka}" ;;
+    0) ORANGEPI_AKA_PACKAGE="" ;;
+    *) printf 'ORANGEPI_WITH_AKA must be 0 or 1\n' >&2; return 2 2>/dev/null || exit 2 ;;
+esac
+ORANGEPI_AKA_SOURCE_PROVIDED=0
+[[ -z ${ORANGEPI_AKA_SOURCE_DIR:-${AKA_RK3588_SOURCE_DIR:-${AKA_RK3588_DIR:-}}} ]] || ORANGEPI_AKA_SOURCE_PROVIDED=1
+ORANGEPI_AKA_SOURCE_DIR="${ORANGEPI_AKA_SOURCE_DIR:-${AKA_RK3588_SOURCE_DIR:-${AKA_RK3588_DIR:-${BUILD_DIR}/aka-rk3588}}}"
+ORANGEPI_GUEST_FREE_SIZE="${ORANGEPI_GUEST_FREE_SIZE:-1G}"
 ORANGEPI_OUTER_FREE_SIZE="${ORANGEPI_OUTER_FREE_SIZE:-256M}"
 ORANGEPI_BASE_IMAGE="${ORANGEPI_BASE_IMAGE:-${BUILD_DIR}/orangepi-rootfs/orangepi-5-plus-base.img}"
 ORANGEPI_GUEST_ROOTFS="${ORANGEPI_GUEST_ROOTFS:-${PLATFORM_ROOTFS_DIR}/rootfs-aarch64-${ORANGEPI_ROOTFS_TYPE}.img}"
@@ -229,6 +240,49 @@ with tarfile.open(fileobj=sys.stdin.buffer, mode="r|") as archive:
     done <"$manifest"
 }
 
+# The guest archive is a userspace base, without the kernel package installed
+# by the native board-image stage. Keep modules paired with the published Image.
+orangepi_stage_linux_modules() {
+    local package=$1 overlay=$2 release source
+    [[ -s $package/kernel.release ]] || {
+        warn "Orange Pi kernel module manifest is missing: $package/kernel.release"
+        return 1
+    }
+    read -r release <"$package/kernel.release" || return 1
+    [[ $release =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || return 1
+    source="$package/lib/modules/$release"
+    [[ -d $source && -s $source/modules.alias.bin && -s $source/modules.dep.bin ]] || {
+        warn "Orange Pi kernel modules or indexes are missing for $release"
+        return 1
+    }
+    # The Jammy base uses /lib -> usr/lib. Write the canonical directory so
+    # image injection does not try to replace that existing symlink.
+    mkdir -p "$overlay/usr/lib/modules/$release" || return 1
+    cp -a -- "$source/." "$overlay/usr/lib/modules/$release/" || return 1
+}
+
+orangepi_publish_linux_modules() (
+    local kernel=$1 output=$2 release work modules
+    [[ -s $kernel/include/config/kernel.release ]] || return 1
+    read -r release <"$kernel/include/config/kernel.release" || return 1
+    [[ $release =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || return 1
+    mkdir -p "$output/lib/modules" || return 1
+    work=$(mktemp -d "$output/.kernel-modules.XXXXXX") || return 1
+    trap 'rm -rf -- "$work"' EXIT
+    # modules_install copies the modules from this exact completed kernel
+    # build; it does not use the build host's installed modules.
+    make -s -C "$kernel" ARCH=arm64 INSTALL_MOD_PATH="$work" \
+        DEPMOD=true modules_install || return 1
+    modules="$work/lib/modules/$release"
+    [[ -d $modules ]] || return 1
+    rm -f -- "$modules/build" "$modules/source"
+    depmod -b "$work" "$release" || return 1
+    [[ -s $modules/modules.alias.bin && -s $modules/modules.dep.bin ]] || return 1
+    rm -rf -- "$output/lib/modules/$release" || return 1
+    mv -- "$modules" "$output/lib/modules/$release" || return 1
+    printf '%s\n' "$release" >"$output/kernel.release"
+)
+
 orangepi_build_guest_rootfs() (
     local archive=$1 output=$2 work publish_stage tree image overlay_parent outer_overlay guest_overlay
     local reserve pending_bytes pending_inodes lock_fd output_base publish=
@@ -248,9 +302,21 @@ orangepi_build_guest_rootfs() (
     overlay_parent="$work/overlays"
     mkdir -p "$tree" "$overlay_parent"
     local guest_tests=$ORANGEPI_GUEST_TESTS
+    if [[ -n "$ORANGEPI_AKA_PACKAGE" ]]; then
+        for item in bin/tennis-perception lib/librknnrt.so config/lekiwi_calibration.json config/lekiwi_pick_config.txt models/tennis.rknn run_dual_pick_ci_once.sh; do
+            [[ -f "$ORANGEPI_AKA_PACKAGE/$item" ]] || { warn "missing AKA guest payload: $item"; return 1; }
+        done
+    fi
     [[ ${ROOTFS_GRAPH_BASE_ONLY:-0} != 1 ]] || guest_tests=none
     rootfs_builder_prepare_test_overlays aarch64 "$ORANGEPI_ROOTFS_TYPE" none \
         "$guest_tests" "$overlay_parent" outer_overlay guest_overlay || return 1
+    orangepi_stage_linux_modules "$PLATFORM_IMAGES_DIR/linux" "$guest_overlay" || return 1
+    source "$ROOT_DIR/scripts/lib/ivc-user-apps.sh"
+    stage_ivc_user_apps "${ORANGEPI_IVC_PACKAGE:-${PLATFORM_IMAGES_DIR}/ivc}" "$guest_overlay" || return 1
+    if [[ -n "$ORANGEPI_AKA_PACKAGE" ]]; then
+        mkdir -p "$guest_overlay/opt/aka"
+        cp -a -- "$ORANGEPI_AKA_PACKAGE/." "$guest_overlay/opt/aka/" || return 1
+    fi
     mkdir -p "$guest_overlay/etc/systemd/system/serial-getty@ttyS0.service.d"
     cat >"$guest_overlay/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf" <<'EOF'
 [Service]
@@ -280,6 +346,10 @@ EOF
     read -r pending_bytes pending_inodes < <(rootfs_overlay_capacity_stats "$guest_overlay") || return 1
     _rootfs_resize_for_capacity_in_place "$image" "$pending_bytes" "$reserve" "$pending_inodes" || return 1
     _rootfs_inject_tree_via_debugfs "$image" "$guest_overlay" || return 1
+    if [[ -n "$ORANGEPI_AKA_PACKAGE" ]]; then
+        source "$ROOT_DIR/scripts/lib/aka-rootfs.sh"
+        aka_validate_guest_image "$image" || return 1
+    fi
     _rootfs_compact_in_place "$image" "$reserve" || return 1
     _rootfs_check_clean "$image" || return 1
     touch -r "$archive" "$image"
@@ -351,6 +421,20 @@ finalize_linux_image() (
         cp -a --reflink=auto -- "$PLATFORM_IMAGES_DIR/$component/." \
             "$platform_stage/$component/" || return 1
     done
+    # Keep IVC tools available in the Orange Pi host rootfs as well as in the
+    # payload tree used to populate the StarryOS guest.
+    if [[ -d "$platform_stage/ivc/usr/bin" ]]; then
+        mkdir -p "$platform_stage/usr/bin"
+        for ivc_program in ivc-demo ivc-starry-bench ivc-roundtrip; do
+            if [[ -f "$platform_stage/ivc/usr/bin/$ivc_program" ]]; then
+                cp -a -- "$platform_stage/ivc/usr/bin/$ivc_program" \
+                    "$platform_stage/usr/bin/$ivc_program"
+            fi
+        done
+    fi
+    # The host payload is assembled after component copies. Normalize the
+    # private staging tree before the strict ext4 composer validates it.
+    rootfs_normalize_tree_seconds "$platform_stage"
     output="${PLATFORM_ROOTFS_DIR}/orangepi-5-plus.img"
     rootfs_compose_disk_guest "$ORANGEPI_BASE_IMAGE" "$platform_stage" "$ORANGEPI_GUEST_ROOTFS" \
         aarch64 "$ORANGEPI_ROOTFS_TYPE" "$ORANGEPI_GUEST_FREE_SIZE" \
@@ -372,7 +456,8 @@ usage() {
     printf '  arceos                            Build only the ArceOS system\n'
     printf '  starry                            Build only the StarryOS guest image\n'
     printf '  zephyr                            Build only the Zephyr guest image\n'
-    printf '  ivc                               Build AXIVC Starry/Zephyr demo and benchmark payloads\n'
+    printf '  ivc                               Build AXIVC userspace tools and the Linux driver\n'
+    printf '  aka                               Build the complete AKA perception runtime package\n'
     printf '  freertos                          Build only the FreeRTOS guest image\n'
     printf '  help, -h, --help                  Display this help information\n'
     printf '  clean                             Clean build output artifacts\n'
@@ -424,6 +509,8 @@ linux() {
         "$linux_images_dir/orangepi-5-plus"
     copy_required "$LINUX_SRC_DIR/kernel/orange-pi-6.1-rk35xx/arch/arm64/boot/dts/rockchip/rk3588-orangepi-5-plus.dtb" \
         "$linux_images_dir/orangepi-5-plus.dtb"
+    orangepi_publish_linux_modules "$LINUX_SRC_DIR/kernel/orange-pi-6.1-rk35xx" \
+        "$linux_images_dir" || return 1
     if [[ -f $chosen_overlay_dts ]]; then
         orangepi_compile_chosen_overlay "$chosen_overlay_dts" "$chosen_overlay_dtbo"
         fdtoverlay -i "$linux_images_dir/orangepi-5-plus.dtb" \
@@ -504,19 +591,28 @@ orangepi_clean_final_image() (
 )
 
 arceos() {
-    local arceos_images_dir="${PLATFORM_IMAGES_DIR}/arceos"
+    local arceos_images_dir="$PLATFORM_IMAGES_DIR/arceos"
+    local config="apps/axvisor/normal/board-orangepi-5-plus/virtio-net-peer/arceos-guest-build.toml"
 
-    if [[ "$@" != *"clean"* ]]; then
-        info "Building ArceOS using common arceos.sh script"
+    if ! orangepi_linux_is_clean "$@"; then
+        info "Building Orange Pi ArceOS VirtIO network peer"
     else
-        info "Cleaning ArceOS using common arceos.sh script"
+        info "Cleaning Orange Pi ArceOS build artifacts"
     fi
-    bash "${SCRIPT_DIR}/../os/arceos.sh" aarch64-dyn --images-dir "${arceos_images_dir}" --image-name orangepi-5-plus "$@"
+    # Runtime MAC identity lets all guests share one image. Keep caller-specific
+    # identities and target directories out of the published platform artifact.
+    env -u CARGO_TARGET_DIR -u AXVIRTIO_VM_TAG -u AXVIRTIO_LOCAL_IP \
+        AXVIRTIO_IDENTITY_FROM_MAC=1 \
+        AXVIRTIO_HEARTBEAT_PERIOD_MS=8000 \
+        AXVIRTIO_CONNECT_START_DELAY_MS=15000 \
+        bash "$SCRIPT_DIR/../os/arceos.sh" aarch64-dyn \
+        --package arceos-virtio-net-peer --config "$config" \
+        --images-dir "$arceos_images_dir" --image-name orangepi-5-plus "$@"
 }
 
 starry() {
     local starry_images_dir="${PLATFORM_IMAGES_DIR}/starry"
-    local starry_release_images_dir="${ROOT_DIR}/IMAGES/orangepi-5-plus-starry"
+    local starry_release_images_dir="${PLATFORM_IMAGES_DIR}/starry"
 
     if [[ "$@" != *"clean"* ]]; then
         info "Building StarryOS using common starry.sh script"
@@ -535,12 +631,50 @@ starry() {
 zephyr() {
     local zephyr_images_dir="${PLATFORM_IMAGES_DIR}/zephyr"
 
-    if [[ "$@" != *"clean"* ]]; then
-        info "Building Zephyr using common zephyr.sh script"
-        bash "${SCRIPT_DIR}/../os/zephyr.sh" orangepi-5-plus --images-dir "${zephyr_images_dir}" "$@"
+    if ! orangepi_linux_is_clean "$@"; then
+        info "Building Orange Pi unified Zephyr shell"
+        local aka_source="$ORANGEPI_AKA_SOURCE_DIR"
+        local aka_library="${AKA_RK3588_LIBRARY:-}"
+        local explicit_source=$ORANGEPI_AKA_SOURCE_PROVIDED index
+        [[ $aka_source == "$BUILD_DIR/aka-rk3588" ]] || explicit_source=1
+        local -a arguments=("$@") aka_args=()
+        for ((index = 0; index < ${#arguments[@]}; index++)); do
+            case "${arguments[index]}" in
+            --aka-dir|--aka-library)
+                ((index + 1 < ${#arguments[@]})) || { warn "${arguments[index]} needs a path"; return 2; }
+                if [[ ${arguments[index]} == --aka-dir ]]; then
+                    aka_source=${arguments[index+1]}
+                    explicit_source=1
+                else
+                    aka_library=${arguments[index+1]}
+                fi
+                ((index += 1))
+                ;;
+            esac
+        done
+        if [[ $ORANGEPI_WITH_AKA == 1 && -z $aka_library ]]; then
+            if ((explicit_source)) && [[ ! -e $aka_source ]]; then
+                warn "AKA source not found: $aka_source"
+                return 1
+            fi
+            build_prepare_checkout "$aka_source" \
+                "${AKA_RK3588_REPO_URL:-https://github.com/bullhh/aka-rk3588.git}" \
+                "${AKA_RK3588_REF:-dual}" "$explicit_source" || return $?
+            [[ -f "$aka_source/zephyr/orangepi_robot_control/CMakeLists.txt" ]] || {
+                warn "AKA controller source not found: $aka_source"
+                return 1
+            }
+            aka_args+=(--aka-dir "$aka_source")
+        fi
+        ZEPHYR_IMAGES_DIR="${zephyr_images_dir}" \
+            ZEPHYR_SHELL_IMAGE_NAME="orangepi-5-plus" \
+            bash "${SCRIPT_DIR}/../apps/ivc-rk3588.sh" --shell-only "${aka_args[@]}" "$@"
     else
-        info "Cleaning Zephyr using common zephyr.sh script"
-        bash "${SCRIPT_DIR}/../os/zephyr.sh" orangepi-5-plus clean --images-dir "${zephyr_images_dir}"
+        info "Cleaning Orange Pi unified Zephyr shell"
+        rm -rf -- "${BUILD_DIR}/objects/zephyr/orangepi-5-plus-orangepi-shell"
+        rm -f -- "${zephyr_images_dir}/orangepi-5-plus" \
+            "${zephyr_images_dir}/orangepi-5-plus.elf" \
+            "${zephyr_images_dir}/orangepi-5-plus.dtb"
     fi
 }
 
@@ -556,9 +690,48 @@ freertos() {
     fi
 }
 
+aka() {
+    [[ $ORANGEPI_WITH_AKA == 1 ]] || return 0
+    if orangepi_linux_is_clean "$@"; then
+        [[ $ORANGEPI_AKA_PACKAGE_PROVIDED == 1 ]] || rm -rf -- "$ORANGEPI_AKA_PACKAGE"
+        return 0
+    fi
+    ORANGEPI_AKA_PACKAGE="$ORANGEPI_AKA_PACKAGE" \
+        ORANGEPI_AKA_PACKAGE_PROVIDED="$ORANGEPI_AKA_PACKAGE_PROVIDED" \
+        bash "$ROOT_DIR/scripts/apps/orangepi-aka-package.sh" "$@"
+}
+
 ivc() {
-    info "Building AXIVC Starry/Zephyr demo and benchmark payloads"
-    bash "${SCRIPT_DIR}/../apps/ivc-rk3588.sh" "$@"
+    info "Building AXIVC userspace tools and the Linux driver"
+    if orangepi_linux_is_clean "$@"; then
+        rm -rf "${PLATFORM_IMAGES_DIR}/ivc"
+        return 0
+    fi
+    local sdk_dir="${IVC_SDK_DIR:-${BUILD_DIR}/ivc-sdk-source}"
+    local object_dir="${IVC_BUILD_DIR:-${BUILD_DIR}/ivc-sdk}"
+    local -a arguments=("$@")
+    local index
+    for ((index = 0; index < ${#arguments[@]}; index++)); do
+        case "${arguments[index]}" in
+        --ivc-sdk-dir|--ivc-build-dir)
+            ((index + 1 < ${#arguments[@]})) || { warn "${arguments[index]} needs a path"; return 2; }
+            if [[ ${arguments[index]} == --ivc-sdk-dir ]]; then
+                sdk_dir=${arguments[index+1]}
+            else
+                object_dir=${arguments[index+1]}
+            fi
+            ((index += 1))
+            ;;
+        esac
+    done
+    sdk_dir=$(realpath -m -- "$sdk_dir") || return 1
+    object_dir=$(realpath -m -- "$object_dir") || return 1
+    # Kernel images belong to their own graph nodes; this node stages tools only.
+    bash "${SCRIPT_DIR}/../apps/ivc-rk3588.sh" --skip-starry-image --skip-zephyr "$@" || return $?
+    IVC_SDK_DIR="$sdk_dir" IVC_BUILD_DIR="$object_dir" \
+        IVC_LINUX_OUT="${PLATFORM_IMAGES_DIR}/linux" \
+        LINUX_KDIR="${LINUX_SRC_DIR}/kernel/orange-pi-6.1-rk35xx" \
+        bash "${SCRIPT_DIR}/ivc-linux.sh" || return $?
 }
 
 all() {
@@ -567,6 +740,8 @@ all() {
     # Linux and rootfs share one upstream checkout, so keep those stages
     # sequential. The remaining stages use independent source/work trees.
     linux "$@" || status=1
+    ivc "$@" || status=1
+    aka || status=1
     rootfs "$@" || status=1
     local parallel_status restore_errexit=0
     [[ $- != *e* ]] || restore_errexit=1
@@ -576,10 +751,9 @@ all() {
     if ((restore_errexit)); then set -e; fi
     if ((parallel_status != 0)); then
         status=1
-        warn "Some Orange Pi platform targets failed; continuing with AXIVC payload build"
+        warn "Some Orange Pi platform targets failed; the final image will not be published"
     fi
 
-    ivc "$@" || status=1
     if ((status == 0)); then
         orangepi_build_base_image || status=1
     fi
@@ -643,6 +817,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         freertos)
             freertos "$@"
             ;;
+        aka)
+            aka "$@"
+            ;;
         ivc)
             ivc "$@"
             ;;
@@ -650,7 +827,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             all "$@"
             ;;
         clean)
-            run_parallel_functions "clean" linux uboot rootfs orangepi_clean_final_image arceos starry zephyr freertos -- clean
+            run_parallel_functions "clean" linux uboot rootfs orangepi_clean_final_image arceos starry zephyr freertos aka -- clean
             ;;
         *)
             die "Unknown command: $cmd" >&2
