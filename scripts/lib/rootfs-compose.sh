@@ -505,7 +505,9 @@ rootfs_validate_payload_tree() (
         atime_raw=$(stat -c %x -- "$path") || return 1
         mtime_raw=$(stat -c %y -- "$path") || return 1
         timestamps=("$mtime_raw")
-        [[ ! -L $path && -d $path ]] || timestamps+=("$atime_raw")
+        # Traversal/readlink can advance directory/symlink atime between
+        # validations. Their mtime and regular-file timestamps remain strict.
+        if [[ ! -L $path && ! -d $path ]]; then timestamps+=("$atime_raw"); fi
         for timestamp_text in "${timestamps[@]}"; do
             [[ $timestamp_text =~ \.([0-9]{9}) ]] || return 1
             fraction=${BASH_REMATCH[1]}

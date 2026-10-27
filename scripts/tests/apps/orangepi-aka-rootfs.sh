@@ -3,7 +3,7 @@ set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd -P)
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
-compiler=${AARCH64_CC:-aarch64-linux-musl-gcc}
+compiler=${AARCH64_CC:-$(command -v aarch64-linux-gnu-gcc || command -v aarch64-linux-musl-gcc || true)}
 command -v "$compiler" >/dev/null || { echo "Need AArch64 cross compiler: $compiler" >&2; exit 1; }
 case "$("$compiler" -dumpmachine)" in aarch64*) ;; *) exit 1 ;; esac
 tree="$work/tree" package="$work/package"

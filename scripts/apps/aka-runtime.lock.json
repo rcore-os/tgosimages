@@ -5,6 +5,34 @@
   "source": "https://ports.ubuntu.com/ubuntu-ports/",
   "packages": [
     {
+      "name": "libgcc-s1",
+      "version": "12.3.0-1ubuntu1~22.04.3",
+      "architecture": "arm64",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/g/gcc-12/libgcc-s1_12.3.0-1ubuntu1~22.04.3_arm64.deb",
+      "sha256": "46626e1af6b159061e055f843654ee1f0f1e65fa280331ed47ee76ba1b1f6045"
+    },
+    {
+      "name": "libstdc++6",
+      "version": "12.3.0-1ubuntu1~22.04.3",
+      "architecture": "arm64",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/g/gcc-12/libstdc++6_12.3.0-1ubuntu1~22.04.3_arm64.deb",
+      "sha256": "59d244119e6129c7e9c0897491c0e210e925d15881b2dedcf8965ceb4fbf1aa3"
+    },
+    {
+      "name": "libc6-dev",
+      "version": "2.35-0ubuntu3.15",
+      "architecture": "arm64",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/g/glibc/libc6-dev_2.35-0ubuntu3.15_arm64.deb",
+      "sha256": "e1da77e87451ca8f41b2757fe274bca357fd5f7498afe47c05360681d0727bae"
+    },
+    {
+      "name": "linux-libc-dev",
+      "version": "5.15.0-198.208",
+      "architecture": "arm64",
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/l/linux/linux-libc-dev_5.15.0-198.208_arm64.deb",
+      "sha256": "50c0842a1c9ca658fca7e327a0b1d69ef0a630b83b18a170204a6c226764b2f3"
+    },
+    {
       "name": "libc6",
       "version": "2.35-0ubuntu3.15",
       "architecture": "arm64",
@@ -27,10 +55,10 @@
     },
     {
       "name": "libudev1",
-      "version": "249.11-0ubuntu3.22",
+      "version": "249.11-0ubuntu3.23",
       "architecture": "arm64",
-      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/s/systemd/libudev1_249.11-0ubuntu3.22_arm64.deb",
-      "sha256": "ec814eee0c7a398e031ece85d07c0108c16f609fb033d7b77700e9106ce86130"
+      "url": "https://ports.ubuntu.com/ubuntu-ports/pool/main/s/systemd/libudev1_249.11-0ubuntu3.23_arm64.deb",
+      "sha256": "23f6d546ce43012ddc5b24bf9428fd74be20e161f90058287af612f590e82731"
     },
     {
       "name": "libusb-1.0-0",

@@ -265,7 +265,7 @@ printf '{name}-%s\\n' "$scope" >"$output/{name}-$scope"
                      '--ivc-sdk-dir', str(work / 'sdk'), '--ivc-build-dir', str(work / 'objects'),
                      '--aka-dir', str(work / 'aka')])
             tasks = {task['id']: task for task in graph['tasks']}
-            for step in ('linux', 'starry', 'rootfs.base', 'finalize_linux_image'):
+            for step in ('linux', 'starry', 'axvisor', 'rootfs.base', 'finalize_linux_image'):
                 self.assertNotIn('--ivc-sdk-dir', tasks[f'orangepi-5-plus.{step}']['command'])
                 self.assertNotIn('--aka-dir', tasks[f'orangepi-5-plus.{step}']['command'])
             self.assertIn('--ivc-sdk-dir', tasks['orangepi-5-plus.ivc']['command'])
@@ -277,6 +277,13 @@ printf '{name}-%s\\n' "$scope" >"$output/{name}-$scope"
             final = tasks['orangepi-5-plus.finalize_linux_image']
             self.assertEqual(final['phase'], 'compose')
             self.assertIn('--output', final['cache_args'])
+            self.assertIn(str(ROOT / 'IMAGES/orangepi/axvisor'), final['cache_args'])
+            self.assertIn(str(ROOT / 'scripts/lib/python/linux-runtime.py'), base['cache_args'])
+            self.assertIn(str(aka_package), final['cache_args'])
+            self.assertIn(str(ROOT / 'scripts/lib/python/orangepi-boot.py'), final['cache_args'])
+            self.assertIn(str(ROOT / 'scripts/lib/rootfs.sh'), final['cache_args'])
+            self.assertIn('orangepi-5-plus.axvisor', tasks['orangepi-5-plus.orangepi_build_base_image']['deps'])
+            self.assertEqual(tasks['orangepi-5-plus.axvisor']['command'][-1], 'axvisor')
 
     def test_orangepi_missing_aka_package_fails_fast_with_guidance(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -405,13 +405,14 @@ orangepi_select_built_image() {
 }
 
 finalize_linux_image() (
-    local output platform_stage component
-    local -a components=(linux u-boot arceos starry zephyr freertos ivc)
+    local output platform_stage boot_stage= component
+    local -a components=(linux u-boot arceos starry zephyr freertos ivc axvisor)
     [[ -f $ORANGEPI_BASE_IMAGE ]] || die "Orange Pi base image not found: ${ORANGEPI_BASE_IMAGE}"
     [[ -f $ORANGEPI_GUEST_ROOTFS ]] || die "Orange Pi guest rootfs not found: ${ORANGEPI_GUEST_ROOTFS}"
     mkdir -p "$PLATFORM_ROOTFS_DIR" "${BUILD_DIR}/orangepi-rootfs"
     platform_stage=$(mktemp -d "${BUILD_DIR}/orangepi-rootfs/platform.XXXXXX") || return 1
-    trap 'rm -rf -- "$platform_stage"' EXIT
+    trap 'rm -rf -- "$platform_stage"; [[ -z $boot_stage ]] || rm -rf -- "$boot_stage"' EXIT
+    boot_stage=$(mktemp -d "${BUILD_DIR}/orangepi-rootfs/boot.XXXXXX") || return 1
     for component in "${components[@]}"; do
         [[ -d $PLATFORM_IMAGES_DIR/$component ]] || {
             warn "Orange Pi all payload is missing: ${PLATFORM_IMAGES_DIR}/${component}"
@@ -421,6 +422,25 @@ finalize_linux_image() (
         cp -a --reflink=auto -- "$PLATFORM_IMAGES_DIR/$component/." \
             "$platform_stage/$component/" || return 1
     done
+    if [[ $ORANGEPI_WITH_AKA == 1 ]]; then
+        python3 "$ROOT_DIR/scripts/lib/python/aka-package.py" validate \
+            "$ORANGEPI_AKA_PACKAGE" --with-single || return 1
+        mkdir -p "$platform_stage/aka"
+        cp -a --reflink=auto -- "$ORANGEPI_AKA_PACKAGE/." "$platform_stage/aka/" || return 1
+    fi
+    [[ -s $platform_stage/axvisor/AxVisor.bin ]] || {
+        warn "AxVisor boot image is missing: $PLATFORM_IMAGES_DIR/axvisor/AxVisor.bin"
+        return 1
+    }
+    # The host binary belongs beside the Linux kernel in the FAT boot
+    # partition. Keep shared guest configurations in the ext4 root filesystem.
+    (
+        cd -- "$platform_stage/axvisor" || exit 1
+        sha256sum AxVisor.bin >BOOT_SHA256SUMS || exit 1
+        mv -- AxVisor.bin "$boot_stage/AxVisor.bin" || exit 1
+        find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | \
+            xargs -0 sha256sum >SHA256SUMS
+    ) || return 1
     # Keep IVC tools available in the Orange Pi host rootfs as well as in the
     # payload tree used to populate the StarryOS guest.
     if [[ -d "$platform_stage/ivc/usr/bin" ]]; then
@@ -438,7 +458,7 @@ finalize_linux_image() (
     output="${PLATFORM_ROOTFS_DIR}/orangepi-5-plus.img"
     rootfs_compose_disk_guest "$ORANGEPI_BASE_IMAGE" "$platform_stage" "$ORANGEPI_GUEST_ROOTFS" \
         aarch64 "$ORANGEPI_ROOTFS_TYPE" "$ORANGEPI_GUEST_FREE_SIZE" \
-        "$ORANGEPI_OUTER_FREE_SIZE" "$output" prebuilt
+        "$ORANGEPI_OUTER_FREE_SIZE" "$output" prebuilt "$boot_stage/AxVisor.bin"
 )
 
 # Output help information
@@ -454,6 +474,7 @@ usage() {
     printf '  uboot                             Build only U-Boot\n'
     printf '  rootfs                            Build the benchmark guest rootfs\n'
     printf '  arceos                            Build only the ArceOS system\n'
+    printf '  axvisor                           Build AxVisor and package shared BallPick guest configs\n'
     printf '  starry                            Build only the StarryOS guest image\n'
     printf '  zephyr                            Build only the Zephyr guest image\n'
     printf '  ivc                               Build AXIVC userspace tools and the Linux driver\n'
@@ -590,9 +611,19 @@ orangepi_clean_final_image() (
     trap - EXIT
 )
 
+axvisor() {
+    if orangepi_linux_is_clean "$@"; then
+        AXVISOR_IMAGES_DIR="$PLATFORM_IMAGES_DIR/axvisor" \
+            bash "$ROOT_DIR/scripts/os/axvisor.sh" clean
+    else
+        AXVISOR_IMAGES_DIR="$PLATFORM_IMAGES_DIR/axvisor" \
+            bash "$ROOT_DIR/scripts/os/axvisor.sh" orangepi-5-plus "$@"
+    fi
+}
+
 arceos() {
     local arceos_images_dir="$PLATFORM_IMAGES_DIR/arceos"
-    local config="apps/axvisor/normal/board-orangepi-5-plus/virtio-net-peer/arceos-guest-build.toml"
+    local config="apps/axvisor/normal/board-ballpick-robot/virtio-net-peer/configs/arceos-guest-build.toml"
 
     if ! orangepi_linux_is_clean "$@"; then
         info "Building Orange Pi ArceOS VirtIO network peer"
@@ -746,7 +777,7 @@ all() {
     local parallel_status restore_errexit=0
     [[ $- != *e* ]] || restore_errexit=1
     set +e
-    run_parallel_functions "all" uboot arceos starry zephyr freertos -- "$@"
+    run_parallel_functions "all" uboot arceos starry zephyr freertos axvisor -- "$@"
     parallel_status=$?
     if ((restore_errexit)); then set -e; fi
     if ((parallel_status != 0)); then
@@ -808,6 +839,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         arceos)
             arceos "$@"
             ;;
+        axvisor)
+            axvisor "$@"
+            ;;
         starry)
             starry "$@"
             ;;
@@ -827,7 +861,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             all "$@"
             ;;
         clean)
-            run_parallel_functions "clean" linux uboot rootfs orangepi_clean_final_image arceos starry zephyr freertos aka -- clean
+            run_parallel_functions "clean" linux uboot rootfs orangepi_clean_final_image arceos starry zephyr freertos axvisor aka -- clean
             ;;
         *)
             die "Unknown command: $cmd" >&2

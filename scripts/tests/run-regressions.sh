@@ -9,6 +9,10 @@ python_tests=(
     scripts/tests/build/qemu-parallel.py
     scripts/tests/build/build-review-regressions.py
     scripts/tests/rootfs/rootfs-graph.py
+    scripts/tests/platform/orangepi-axvisor.py
+    scripts/tests/platform/orangepi-axvisor-payloads.py
+    scripts/tests/platform/orangepi-boot.py
+    scripts/tests/apps/aka-package.py
 )
 
 shell_tests=(
@@ -22,6 +26,8 @@ shell_tests=(
     scripts/tests/rootfs/rootfs-builder-options.sh
     scripts/tests/rootfs/rootfs-nested-content-test.sh
     scripts/tests/platform/orangepi-rootfs-flow.sh
+    scripts/tests/platform/orangepi-axvisor-boot.sh
+    scripts/tests/apps/orangepi-aka-rootfs.sh
     scripts/tests/platform/starry-release-smoke.sh
 )
 

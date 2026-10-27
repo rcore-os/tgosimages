@@ -171,7 +171,7 @@ sudo apt install \
   gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
   bc fakeroot coreutils cpio gzip rsync file \
   debootstrap binfmt-support debian-archive-keyring eatmydata \
-  e2fsprogs util-linux fdisk docker.io \
+  e2fsprogs util-linux fdisk mtools dosfstools u-boot-tools docker.io \
   python3 python3-venv curl git openssh-client libmpc-dev libgmp-dev \
   lz4 chrpath gawk texinfo diffstat expect cmake \
   clang libclang-dev libudev-dev
@@ -439,6 +439,7 @@ Artifacts are collected under `IMAGES/`. Common locations include:
 | `IMAGES/orangepi/arceos/orangepi-5-plus` | ArceOS VirtIO network peer for `/guest/arceos/orangepi-5-plus` |
 | `IMAGES/orangepi/starry/orangepi-5-plus` | StarryOS kernel for `/guest/starry/orangepi-5-plus` |
 | `IMAGES/orangepi/starry` | StarryOS image, manifest, and SHA256 |
+| `IMAGES/orangepi/axvisor` | Shared AxVisor image, BallPick guest configurations, and checksums |
 | `IMAGES/rootfs/rootfs-aarch64-orangepi-jammy.img` | Orange Pi Jammy guest rootfs with the three benchmarks |
 | `IMAGES/rootfs/orangepi-5-plus.img` | Flashable Ubuntu Jammy minimal image with a same-origin nested guest rootfs |
 
@@ -462,7 +463,7 @@ Build every Orange Pi payload and the final flashable image with:
 ./build.sh platform orangepi-5-plus all
 ```
 
-`all` builds Linux, U-Boot, ArceOS, StarryOS, Zephyr, FreeRTOS, the AXIVC payloads,
+`all` builds Linux, U-Boot, ArceOS, StarryOS, Zephyr, FreeRTOS, AxVisor, the AXIVC payloads,
 and the benchmark guest rootfs before publishing `IMAGES/rootfs/orangepi-5-plus.img`.
 Individual build commands do not publish that image. The final Ubuntu Jammy minimal
 root filesystem contains all platform payloads under `/guest` and the nested rootfs:
@@ -476,11 +477,91 @@ root filesystem contains all platform payloads under `/guest` and the nested roo
     └── iozone/
 ```
 
+The AxVisor host is installed as **`AxVisor.bin` in the root of the FAT boot
+partition containing the Linux kernel**, beside `Image`. When mounted at `/boot`,
+its path is `/boot/AxVisor.bin`. The default `boot.scr` loads `AxVisor.bin`. The
+builder selects the ext4 root partition number; U-Boot queries its current
+PARTUUID on the boot device at each startup using `part uuid` and sets
+`root=PARTUUID=<partition UUID>`, avoiding stale identities after installation.
+Startup reuses the original device tree and omits Linux's `uInitrd`. AxVisor does not accept Linux's
+`root=UUID=<filesystem UUID>` selector; partition and filesystem UUIDs differ.
+The Linux kernel and initrd are retained, with Linux startup saved as `boot-linux.scr`
+and `boot-linux.cmd`. This script also resolves the root PARTUUID at boot rather
+than retaining the base image's old identity. Load and execute `boot-linux.scr`
+manually in U-Boot to start Linux. The AxVisor ELF remains at `/guest/axvisor/orangepi-5-plus.elf` in the root
+filesystem. TOML configurations and READMEs
+from `apps/axvisor/normal/board-ballpick-robot` retain their directory structure
+under `/guest/axvisor/board-ballpick-robot/`. Shared guest definitions are installed
+once, and existing guest kernel, DTB, and rootfs paths are preserved. Build this
+host and configuration package independently with:
+
+```bash
+./build.sh platform orangepi-5-plus axvisor
+```
+
+The default reuses TGOSKits `dev`'s `os/axvisor/configs/board/orangepi-5-plus.toml`
+with `vm_configs = []`. Guest definitions are loaded from disk manually.
+
+By default only the AxVisor console starts; no guest is created or started.
+Startup `VM pool entry` messages report candidate configurations. Duplicate IDs
+across scenarios and missing specialized images are scan issues, not guest
+startup. `vm list` shows created guests; `vm pool` shows candidates. For example:
+
+```text
+vm create /guest/axvisor/board-ballpick-robot/triple-vm-test/configs/linux.toml
+vm start 1
+```
+
+Choose configurations for one scenario at a time; VM IDs, devices, and writable
+guest disks can overlap. `AXVISOR_REPO_URL`, `AXVISOR_REF`, and `AXVISOR_CONFIG`
+override the source and host build configuration. `AXVISOR_SRC_DIR` selects an
+existing checkout within the platform workspace and preserves its revision and
+local changes. The host and configurations come from the same checkout;
+`manifest.json` records provenance, configuration references, and source
+dependencies. `SHA256SUMS` in `IMAGES/orangepi/axvisor` covers the build output,
+including `AxVisor.bin`. In the final rootfs, `SHA256SUMS` covers the files in
+that directory and `BOOT_SHA256SUMS` verifies `AxVisor.bin` from the boot partition.
+The AxVisor node also prebuilds the ArceOS Shell under
+`/guest/axvisor/guests/arceos-vm-shell.bin`, a separate UVC-enabled robot-flow
+StarryOS under `/guest/axvisor/guests/starry-robot-single.bin`, and the complete
+TGOSKits YOLOv8 image runtime under `/guest/axvisor/npu/rknn-yolov8-image`.
+The Shell configuration is adapted to its installed kernel; the single-robot
+configuration is `/guest/axvisor/robot-single/guest.toml`. Complete-image composition
+adapts physical MMC root selectors to the actual GPT root partition label, or to
+the detected partition number when no usable label exists. Check the root device
+when deploying a configuration package separately; no fixed partition number is assumed.
+
+The 64 generated network configurations are installed as
+`/guest/axvisor/board-ballpick-robot/virtio-net-peer/vcpus/generated/vm1.toml`
+through `vm64.toml`; all reuse `/guest/arceos/orangepi-5-plus`. Source configs stay
+unchanged, and the manifest records deployed paths, source hashes and scenario
+references. Start guests manually using explicit configuration paths.
+
+The AKA build produces both `tennis` and `tennis-perception`. The complete package
+is available at outer `/guest/aka`, in addition to nested `/opt/aka`. In the
+single StarryOS guest, run `/guest/aka/single/run_lekiwi_full.sh`, or use
+`run_robot_ci_once.sh 28` for the bounded check. Relative links share libraries,
+models and calibration. Complete-image package overrides must include
+`bin/tennis` and `single/`; the dual-only rootfs entry still accepts legacy
+perception packages. No robot program runs automatically at boot.
+
+GNU/Linux applications use the selected target sysroot, independently of the
+build host OS. ABI checks compare required versions with the target libraries;
+AKA rootfs composition also checks dependencies inside the actual guest image.
+The default Jammy image uses the matching locked development/runtime inputs in
+`scripts/apps/aka-runtime.lock.json`. Override target compilers and sysroots with
+`ORANGEPI_YOLO_CC/CXX/SYSROOT` or `ORANGEPI_AKA_CC/CXX/SYSROOT` when appropriate;
+changing target systems requires matching inputs.
+
+Task-switch remains on TGOSKits' dedicated `axvm task_switch` kernel-test entry.
+Its host vCPU FIFO policy is part of the measurement contract, so ordinary
+`vm create`/`vm start` is not an equivalent benchmark and never starts it at boot.
+
 The guest ext4 is built from the pinned Orange Pi Jammy rootfs archive and receives
 the three statically linked AArch64 workloads before final image composition. The
 nested filesystems reserve 1 GiB each by default; the outer filesystem retains a 256 MiB reserve. Its total size still grows to contain the larger nested guest images. The build requires
 `lz4`, `mke2fs`, `sfdisk`, `python3`, `debugfs`, `dumpe2fs`, `e2fsck`, and
-`resize2fs`, but does not require loop mounts for image composition. It packages the
+`resize2fs`, `mcopy`, `mdir`, `fsck.vfat`, `dumpimage`, and `mkimage`, but does not require loop mounts for image composition. It packages the
 workloads without running them. Validate a completed image with:
 
 ```bash

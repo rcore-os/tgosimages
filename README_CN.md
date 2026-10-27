@@ -78,6 +78,13 @@
 
 `./build.sh platform orangepi-5-plus all` 默认将 AKA 感知运行包安装到客户机 ext4 的 `/opt/aka`，并在统一 Zephyr shell 中构建 AKA 控制端；启动后用 `aka run` 主动运行控制逻辑。
 
+同一次 AKA 构建也生成完整的 `tennis` 程序和单客户机启动脚本。完整包另放在外层
+`/guest/aka`，单客户机 StarryOS 中进入 `/guest/aka/single` 后执行
+`./run_lekiwi_full.sh`；有限检查使用 `./run_robot_ci_once.sh 28`。`single` 通过相对链接
+复用包内的程序、运行库、模型和配置，程序不会随上电自动运行。
+通过 `ORANGEPI_AKA_PACKAGE` 提供完整镜像的外部运行包时，也须包含 `bin/tennis` 和
+`single/`；仅支持感知的旧包仍可用于独立的双客户机 rootfs 组合入口。
+
 默认 AKA 源码位于 `${BUILD_DIR}/aka-rk3588`，不存在时从 `https://github.com/bullhh/aka-rk3588.git` 下载并检出 `dual` 分支。平台构建图使用 `build/workspaces/orangepi-5-plus/aka-rk3588`。`all` 在 IVC 构建完成后自动生成 `IMAGES/orangepi/aka`，再构建 rootfs；新环境无需手动复制运行包。
 
 感知程序从 AKA 和 IVC SDK 源码交叉编译，RKNN 模型和运行库来自 AKA 仓库。libuvc、libusb、JPEG 和 libudev 等依赖从 Ubuntu 官方 arm64 仓库下载，版本、地址和 SHA256 固定在 `scripts/apps/aka-runtime.lock.json`，下载包保存在构建缓存中。生成的 `package-manifest.json` 记录源码 commit、工作区状态、编译器、依赖来源、配置路径和每个文件的 SHA256。
@@ -165,7 +172,7 @@ sudo apt install \
   gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
   bc fakeroot coreutils cpio gzip rsync file \
   debootstrap binfmt-support debian-archive-keyring eatmydata \
-  e2fsprogs util-linux fdisk docker.io \
+  e2fsprogs util-linux fdisk mtools dosfstools u-boot-tools docker.io \
   python3 python3-venv curl git openssh-client libmpc-dev libgmp-dev \
   lz4 chrpath gawk texinfo diffstat expect cmake \
   clang libclang-dev libudev-dev
@@ -404,6 +411,7 @@ scripts/tests/rootfs/rootfs-builder-options.sh --integration
 | `IMAGES/<platform>/arceos` | 某硬件平台的 ArceOS 产物 |
 | `IMAGES/orangepi/starry/orangepi-5-plus` | 可放入客户机根文件系统 `/guest/starry/orangepi-5-plus` 的 StarryOS 内核 |
 | `IMAGES/orangepi/starry` | StarryOS 镜像、manifest 和 SHA256 |
+| `IMAGES/orangepi/axvisor` | 共用 AxVisor 镜像、BallPick 客户机配置及校验清单 |
 | `IMAGES/rootfs/rootfs-aarch64-orangepi-jammy.img` | 包含三个 benchmark 的 Orange Pi Jammy 客户机 rootfs |
 | `IMAGES/rootfs/orangepi-5-plus.img` | 带同源嵌套客户机 rootfs 的可烧写 Ubuntu Jammy minimal 镜像 |
 
@@ -427,7 +435,7 @@ Orange Pi 命令分别发布各自的产物。只构建内核和 DTB：
 ./build.sh platform orangepi-5-plus all
 ```
 
-`all` 会先构建 Linux、U-Boot、ArceOS、StarryOS、Zephyr、FreeRTOS、AXIVC
+`all` 会先构建 Linux、U-Boot、ArceOS、StarryOS、Zephyr、FreeRTOS、AxVisor、AXIVC
 载荷和 benchmark 客户机 rootfs，再发布 `IMAGES/rootfs/orangepi-5-plus.img`。
 各单项构建命令不会发布该镜像。最终 Ubuntu Jammy minimal 根文件系统会在
 `/guest` 下包含全部平台载荷以及嵌套 rootfs：
@@ -441,10 +449,76 @@ Orange Pi 命令分别发布各自的产物。只构建内核和 DTB：
     └── iozone/
 ```
 
+AxVisor 本体以 `AxVisor.bin` 写入存放 Linux 内核的 **FAT 启动分区根目录**，
+与 `Image` 并存；该分区挂载在 `/boot` 时，路径为 `/boot/AxVisor.bin`。
+默认 `boot.scr` 加载 `AxVisor.bin`。构建时确定 ext4 根分区的编号，每次启动时
+通过 U-Boot `part uuid` 查询当前启动设备上该分区的 PARTUUID，生成
+`root=PARTUUID=<分区 UUID>`；安装后分区 UUID 改变也不会沿用旧值。
+启动继续复用原有设备树，不加载 Linux 的 `uInitrd`。
+AxVisor 不支持 Linux 常用的 `root=UUID=<文件系统 UUID>`，这两个 UUID 不能混用。
+Linux 内核和 initrd 仍保留；Linux 启动脚本保存为 `boot-linux.scr` 和
+`boot-linux.cmd`，同样在启动时查询根分区 PARTUUID，避免沿用基础镜像中的旧标识。
+需要启动 Linux 时可在 U-Boot 中手动加载并执行 `boot-linux.scr`。
+配套 ELF 保存在根文件系统的 `/guest/axvisor/orangepi-5-plus.elf`。
+`apps/axvisor/normal/board-ballpick-robot` 中的 TOML
+配置和 README 按原目录结构安装到 `/guest/axvisor/board-ballpick-robot/`；
+多个测试引用的同一份客户机配置只安装一次，已有客户机内核、DTB、根盘路径保持不变。
+单独构建本体和配置包使用：
+
+```bash
+./build.sh platform orangepi-5-plus axvisor
+```
+
+默认复用 TGOSKits `dev` 中的 `os/axvisor/configs/board/orangepi-5-plus.toml`，
+其 `vm_configs = []`，客户机从磁盘配置手动创建。
+
+默认仅进入 AxVisor 控制台，不创建或启动客户机。启动日志中的 `VM pool entry`
+表示候选配置扫描结果；跨场景重复 VM ID 和缺少专用镜像的提示不会启动任何客户机。
+`vm list` 查看已创建的客户机，`vm pool` 查看候选配置。例如在 AxVisor shell 中执行：
+
+```text
+vm create /guest/axvisor/board-ballpick-robot/triple-vm-test/configs/linux.toml
+vm start 1
+```
+
+按场景选择配置，避免同时创建占用相同 VM ID、设备或可写根盘的客户机。
+`AXVISOR_REPO_URL`、`AXVISOR_REF` 和 `AXVISOR_CONFIG` 可覆盖源码和宿主构建配置；
+`AXVISOR_SRC_DIR` 可指定平台工作区内已有 checkout，构建保留其当前版本和本地修改。
+镜像和配置来自同一 checkout，版本、配置索引及源码依赖记录在 `manifest.json`，
+构建输出 `IMAGES/orangepi/axvisor/AxVisor.bin` 与配置包由 `SHA256SUMS` 校验。
+最终 rootfs 的 `SHA256SUMS` 校验本目录文件，`BOOT_SHA256SUMS` 用于在启动分区中
+校验 `AxVisor.bin`。AxVisor 构建节点同时提前构建并安装以下载荷：
+
+| 板端路径 | 用途 |
+| --- | --- |
+| `/guest/axvisor/guests/arceos-vm-shell.bin` | ArceOS Shell 专用客户机 |
+| `/guest/axvisor/guests/starry-robot-single.bin` | 启用 UVC 的 robot-flow StarryOS，独立于通用内核 |
+| `/guest/axvisor/robot-single/guest.toml` | 单客户机配置；完整镜像组合时适配实际物理根分区 |
+| `/guest/axvisor/board-ballpick-robot/virtio-net-peer/vcpus/generated/vm1.toml`～`vm64.toml` | 64 实例网络配置，全部复用 `/guest/arceos/orangepi-5-plus` |
+| `/guest/axvisor/npu/rknn-yolov8-image/` | TGOSKits `linux-guest-checks/rknn-yolov8-image` 的完整安装包 |
+
+ArceOS Shell 的原客户机配置会改用已安装的 BIN 路径，其余资源参数保持原值。
+组合完整镜像时，接管物理 MMC 根盘的客户机配置优先使用实际 GPT 根分区的 PARTLABEL；
+没有可用分区标签时按实际分区号调整原 MMC 路径。单独复制配置包使用时仍须核对根设备，
+不假定根分区一定为第二或第三分区。
+`manifest.json` 记录原配置摘要、运行路径及生成配置索引，TGOSKits 源配置不改写。
+Linux NPU 客户机中进入 `/guest/axvisor/npu/rknn-yolov8-image`，执行
+`./yolov8_demo.sh` 即可运行图片推理。上述程序仍需对应设备、驱动和权限；构建不运行板端测试。
+
+构建主机的系统与镜像目标系统分别处理。GNU/Linux 应用使用目标 sysroot 的头文件和库，
+ABI 检查读取所选目标库实际提供的版本；AKA 根盘组合还核验客户机镜像内的依赖。
+当前默认 Jammy 镜像使用 `scripts/apps/aka-runtime.lock.json` 锁定的配套开发及运行依赖。
+可用 `ORANGEPI_YOLO_CC/CXX/SYSROOT` 或 `ORANGEPI_AKA_CC/CXX/SYSROOT` 指定目标工具链
+和 sysroot；更换目标系统时须配套更换这些输入，不能将构建主机库当作目标库。
+
+`task-switch` 继续使用 TGOSKits 的专用 `axvm task_switch` 内核测试入口。其宿主 vCPU
+FIFO 策略属于测量条件；普通 `vm create`/`vm start` 不等效，完整镜像不会自动启动该测量。
+
 客户机 ext4 从固定 Orange Pi Jammy rootfs 归档生成，并在最终镜像组合前注入三个
 静态链接的 AArch64 测例。每份客户机文件系统默认保留 1 GiB 可写空间，外层文件系统仍保留 256 MiB；外层总大小会随嵌套客户机镜像的增大而增加。
 构建需要 `lz4`、`mke2fs`、`sfdisk`、`python3`、`debugfs`、
-`dumpe2fs`、`e2fsck` 和 `resize2fs`，但镜像组合不需要 loop mount。构建只打包
+`dumpe2fs`、`e2fsck`、`resize2fs`、`mcopy`、`mdir`、`fsck.vfat`、`dumpimage` 和 `mkimage`，
+但镜像组合不需要 loop mount。构建只打包
 测例，不会自动执行 benchmark。验证命令：
 
 ```bash

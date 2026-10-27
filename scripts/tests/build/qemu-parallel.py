@@ -56,7 +56,8 @@ fixture_component() {
 linux() {
     touch "$PROBE_ROOT/board.started"
     if [[ ${PROBE_HOLD:-0} == 1 ]]; then
-        printf '%s' "$$" >"$BUILD_WORK_DIR/worker.pid"
+        printf '%s' "$$" >"$BUILD_WORK_DIR/worker.pid.tmp"
+        mv "$BUILD_WORK_DIR/worker.pid.tmp" "$BUILD_WORK_DIR/worker.pid"
         sleep 30
     fi
     if [[ ${PROBE_GLOBAL_BARRIER:-0} == 1 && $BUILD_WORKSPACE_NAME == phytiumpi ]]; then
@@ -72,6 +73,14 @@ linux() {
     fixture_component linux
 }
 arceos() { touch "$BUILD_WORK_DIR/arceos.done"; fixture_component arceos; }
+axvisor() {
+    [[ ${PROBE_AXVISOR_FAIL:-0} != 1 ]] || return 37
+    touch "$BUILD_WORK_DIR/axvisor.done"
+    fixture_component axvisor
+    mkdir -p "$ROOT_DIR/IMAGES/orangepi/axvisor/board-ballpick-robot/shared"
+    [[ -f "$ROOT_DIR/IMAGES/orangepi/axvisor/board-ballpick-robot/shared/linux.toml" ]] ||
+        printf guest-config >"$ROOT_DIR/IMAGES/orangepi/axvisor/board-ballpick-robot/shared/linux.toml"
+}
 rtthread() { :; }
 zephyr() { touch "$BUILD_WORK_DIR/zephyr.done"; fixture_component zephyr; }
 freertos() { touch "$BUILD_WORK_DIR/freertos.done"; fixture_component freertos; }
@@ -93,13 +102,13 @@ rootfs() {
 }
 starry() { touch "$BUILD_WORK_DIR/starry.done"; fixture_component starry; }
 ivc() {
-    test -f "$BUILD_WORK_DIR/starry.done"
-    test -f "$BUILD_WORK_DIR/zephyr.done"
+    test -f "$BUILD_WORK_DIR/linux.done"
     touch "$BUILD_WORK_DIR/ivc.done"
     fixture_component ivc
 }
+aka() { test -f "$BUILD_WORK_DIR/ivc.done"; touch "$BUILD_WORK_DIR/aka.done"; }
 orangepi_build_base_image() {
-    for component in linux rootfs uboot arceos starry zephyr freertos ivc; do
+    for component in linux rootfs uboot arceos starry zephyr freertos ivc axvisor; do
         test -f "$BUILD_WORK_DIR/$component.done"
     done
     touch "$BUILD_WORK_DIR/base.done"
@@ -307,6 +316,25 @@ qemu_rootfs_inject_platform_dir() { touch "$PROBE_ROOT/$ARCH.composed"; }
         result = run(['bash', str(self.repo / 'build.sh'), 'platform', 'phytiumpi', 'arceos'], env=self.env)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((self.repo / 'build/workspaces/phytiumpi/linux.done').exists())
+
+    def test_axvisor_failure_prevents_orangepi_publication(self):
+        result = self.invoke('orangepi-5-plus', PROBE_AXVISOR_FAIL='1')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('FAILED orangepi-5-plus.axvisor: status=37', result.stdout)
+        self.assertFalse((self.work / 'orangepi.composed').exists())
+
+    def test_axvisor_configuration_change_invalidates_composition(self):
+        result = self.invoke('orangepi-5-plus')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        config = self.repo / 'IMAGES/orangepi/axvisor/board-ballpick-robot/shared/linux.toml'
+        config.write_text('changed guest-config')
+        result = self.invoke('orangepi-5-plus')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('HIT orangepi-5-plus.finalize_linux_image', result.stdout)
+        (config.parent / 'README.md').write_text('updated configuration instructions')
+        result = self.invoke('orangepi-5-plus')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('HIT orangepi-5-plus.finalize_linux_image', result.stdout)
 
     def test_same_outputs_are_serialized_and_reused_across_workspace_roots(self):
         processes = [subprocess.Popen(['bash', str(self.repo / 'build.sh'), 'platform', 'qemu-aarch64', 'all'],

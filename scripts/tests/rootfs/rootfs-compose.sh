@@ -615,6 +615,40 @@ run_ok 'hardlink relationships are preserved' test "$inode_a" = "$inode_b"
 link_stat=$(debugfs -R 'stat "/link with space"' "$metadata_image" 2>/dev/null)
 run_ok 'symlink target with spaces is preserved' test "$link_stat" != "${link_stat/Fast link dest: \"target with space\"/}"
 
+test_repeated_symlink_validation_and_injection() (
+    local source="$work/aka-symlink-source" image="$work/aka-symlinks.img" link
+    mkdir -p "$source/aka/bin" "$source/aka/single/build"
+    printf tennis >"$source/aka/bin/tennis"
+    link="$source/aka/single/build/tennis"
+    ln -s ../../bin/tennis "$link"
+    normalize_tree_seconds "$source"
+    # readlink/lookup may advance only the symlink's atime to nanoseconds.
+    # Set it explicitly so the test also covers noatime-mounted workspaces.
+    touch -h -a -d '@1700000001.123456789' "$link"
+    rootfs_validate_payload_tree "$source" || return 1
+    readlink "$link" >/dev/null || return 1
+    rootfs_validate_payload_tree "$source" || return 1
+    make_ext4 "$image" || return 1
+    local atime_hex
+    atime_hex=$(printf '%x' "$(stat -c %X "$link")")
+    _rootfs_inject_tree_via_debugfs "$image" "$source" || return 1
+    local metadata
+    metadata=$(debugfs -R 'stat /aka/single/build/tennis' "$image" 2>/dev/null)
+    [[ $metadata == *'Fast link dest: "../../bin/tennis"'* ]] || return 1
+    [[ $metadata == *"atime: 0x$atime_hex:00000000"* ]] || return 1
+    [[ $(debugfs_cat "$image" /aka/bin/tennis) == tennis ]] || return 1
+    # Modified payload timestamps still require whole-second representation.
+    touch -h -m -d '@1700000002.123456789' "$link"
+    if rootfs_validate_payload_tree "$source"; then return 1; fi
+    if _rootfs_inject_tree_via_debugfs "$image" "$source"; then return 1; fi
+    touch -h -m -d '@1700000000' "$link"
+    touch -a -d '@1700000002.123456789' "$source/aka/bin/tennis"
+    if rootfs_validate_payload_tree "$source"; then return 1; fi
+    if _rootfs_inject_tree_via_debugfs "$image" "$source"; then return 1; fi
+)
+run_ok 'AKA symlinks survive repeated validation and ext4 injection after read-induced atime changes' \
+    test_repeated_symlink_validation_and_injection
+
 test_skipped_metadata_batch() {
     local image="$work/skipped-metadata.img"
     make_ext4 "$image" || return 1

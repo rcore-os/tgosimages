@@ -47,7 +47,7 @@ def component_options(name, component, options):
                 result.extend(options[index:index + 2])
             index += 2
         else:
-            if component != 'aka':
+            if component not in ('aka', 'axvisor') or (component == 'axvisor' and option == '--debug'):
                 result.append(option)
             index += 1
     return result
@@ -65,7 +65,7 @@ def board_graph(name, declaration, args):
     if workspace.resolve() != workspace:
         raise ValueError(f'Workspace must not be a symlink: {workspace}')
     for key in ('ARCEOS_SRC_DIR', 'FREERTOS_SRC_DIR', 'FREERTOS_KERNEL_SRC_DIR', 'ZEPHYR_SRC_DIR',
-                'STARRY_SRC_DIR', 'RTTHREAD_SRC_DIR', 'BUSYBOX_SRC_DIR', 'TGOSKITS_SRC_DIR',
+                'STARRY_SRC_DIR', 'AXVISOR_SRC_DIR', 'RTTHREAD_SRC_DIR', 'BUSYBOX_SRC_DIR', 'TGOSKITS_SRC_DIR',
                 'ROOTFS_TEST_BUILD_ROOT', 'ORANGEPI_UBOOT_WORKDIR', 'ORANGEPI_BASE_IMAGE', 'IVC_BUILD_DIR'):
         if os.environ.get(key) and workspace not in Path(os.environ[key]).resolve().parents:
             raise ValueError(f'Mutable path escapes workspace {name}: {key}')
@@ -107,13 +107,21 @@ def board_graph(name, declaration, args):
             cache = {
                 'inputs': [base_image, guest_image,
                            *[str(platform_images / component) for component in
-                             ('linux', 'u-boot', 'arceos', 'starry', 'zephyr', 'freertos', 'ivc')],
+                             ('linux', 'u-boot', 'arceos', 'starry', 'zephyr', 'freertos', 'ivc', 'axvisor')],
                            str(ROOT / 'scripts/platform/orangepi-5-plus.sh'),
-                           str(SHELL_LIB / 'rootfs-disk.sh'), str(SHELL_LIB / 'rootfs-compose.sh')],
+                           str(SHELL_LIB / 'python/orangepi-boot.py'),
+                           str(SHELL_LIB / 'python/axvisor-payloads.py'),
+                           str(SHELL_LIB / 'rootfs-disk.sh'), str(SHELL_LIB / 'rootfs-compose.sh'),
+                           str(SHELL_LIB / 'rootfs.sh')],
                 'outputs': [str(ROOT / 'IMAGES/rootfs/orangepi-5-plus.img')],
                 'environment': ['ORANGEPI_GUEST_FREE_SIZE', 'ORANGEPI_OUTER_FREE_SIZE',
-                                'ORANGEPI_ROOTFS_TYPE', 'ROOTFS_GUEST_COUNT'],
+                                'ORANGEPI_ROOTFS_TYPE', 'ROOTFS_GUEST_COUNT',
+                                'ORANGEPI_AKA_PACKAGE', 'ORANGEPI_WITH_AKA'],
             }
+            if os.environ.get('ORANGEPI_WITH_AKA', '1') == '1':
+                cache['inputs'].extend([
+                    os.environ.get('ORANGEPI_AKA_PACKAGE') or str(platform_images / 'aka'),
+                    str(SHELL_LIB / 'python/aka-package.py')])
         graph['tasks'].append(phase_task(f'{name}.{step}', phase,
             ['bash', str(SHELL_LIB / 'platform-node.sh'), name, step,
              *component_options(name, step, options)],
@@ -148,6 +156,8 @@ def board_graph(name, declaration, args):
                                str(SHELL_LIB / 'rootfs-compose.sh'), str(SHELL_LIB / 'rootfs.sh'),
                                str(SHELL_LIB / 'utils.sh'),
                                str(SHELL_LIB / 'ivc-user-apps.sh'),
+                               str(SHELL_LIB / 'python/linux-runtime.py'),
+                               str(SHELL_LIB / 'python/aka-package.py'),
                                str(SHELL_LIB / 'aka-rootfs.sh')] + payload_inputs,
                     'mutable_inputs': [str(workspace / 'orangepi/output/debs'),
                                        str(workspace / 'orangepi/external/cache/rootfs')],

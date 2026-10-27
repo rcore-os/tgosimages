@@ -6,6 +6,8 @@ if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
 fi
 
 _rootfs_disk_lib_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+ROOTFS_DISK_BOOT_HELPER="${_rootfs_disk_lib_dir}/python/orangepi-boot.py"
+ROOTFS_AXVISOR_PAYLOAD_HELPER="${_rootfs_disk_lib_dir}/python/axvisor-payloads.py"
 if ! declare -F _rootfs_detect_fs_type >/dev/null; then
     # shellcheck source=rootfs.sh
     source "${_rootfs_disk_lib_dir}/rootfs.sh"
@@ -106,7 +108,9 @@ _rootfs_disk_restore_tree_atimes() (
             rel=${path#"$source/"}
             reference="$snapshot/$rel"
         fi
-        [[ -e $reference || -L $reference ]] || return 1
+        # Do not follow a snapshot symlink before copying its atime back:
+        # lookup would replace the preserved timestamp with the current time.
+        [[ -L $reference || -e $reference ]] || return 1
         if [[ -L $path ]]; then
             touch -h -a -r "$reference" "$path" || return 1
         else
@@ -390,15 +394,93 @@ rootfs_disk_replace_partition() (
     trap - EXIT INT TERM
 )
 
+# Select the non-ESP FAT filesystem that actually contains the Linux kernel.
+# Do not rely on partition numbers: an EFI system partition may also be FAT.
+rootfs_disk_find_boot_partition() (
+    local disk=$1 rows partno start size type label probe= entries entry kernel found= fs_type disk_sectors
+    _rootfs_disk_require_tools blkid mdir mktemp rm stat || return 1
+    rows=$(_rootfs_disk_partition_rows "$disk") || return 1
+    disk_sectors=$(($(stat -c %s -- "$disk") / 512)) || return 1
+    probe=$(mktemp -d "${TMPDIR:-/tmp}/rootfs-boot-probe.XXXXXX") || return 1
+    trap 'rm -rf -- "$probe"' EXIT
+    while IFS=$'\t' read -r partno start size type label; do
+        case ${type,,} in c12a7328-f81f-11d2-ba4b-00a0c93ec93b|ef|0xef) continue ;; esac
+        start=$(_rootfs_disk_uint "$start") || return 1
+        size=$(_rootfs_disk_uint "$size") || return 1
+        ((size > 0 && start <= disk_sectors && size <= disk_sectors - start)) || return 1
+        # Probe in place so a multi-gigabyte ext4 root is never extracted just
+        # to discover that it is not the boot filesystem.
+        fs_type=$(blkid -p -O "$((start * 512))" -S "$((size * 512))" \
+            -s TYPE -o value "$disk" 2>/dev/null) || continue
+        [[ $fs_type == vfat ]] || continue
+        rm -f -- "$probe/partition.img"
+        rootfs_disk_extract_partition "$disk" "$start" "$size" "$probe/partition.img" || return 1
+        entries=$(mdir -b -i "$probe/partition.img" ::/) || return 1
+        kernel=0
+        while IFS= read -r entry; do
+            case ${entry##*/} in Image|Image.gz|vmlinuz|vmlinuz-*|zImage|uImage) kernel=1 ;; esac
+        done <<<"$entries"
+        ((kernel)) || continue
+        [[ -z $found ]] || { _rootfs_disk_error 'ambiguous Linux FAT boot partition'; return 1; }
+        found="$partno $start $size $label"
+    done <<<"$rows"
+    [[ -n $found ]] || { _rootfs_disk_error 'no Linux FAT boot partition containing a kernel found'; return 1; }
+    printf '%s\n' "$found"
+)
+
+# The caller owns a private, unpublished disk. Verify the modified FAT image
+# and the copied bytes before writing its fixed-size partition back.
+_rootfs_disk_configure_axvisor_boot() {
+    local boot=$1 work=$2 root_partition=$3 file
+    if mdir -i "$boot" ::/boot-linux.scr >/dev/null 2>&1; then
+        mcopy -i "$boot" ::/boot-linux.scr "$work/boot-linux.scr" || return 1
+    else
+        mcopy -i "$boot" ::/boot.scr "$work/boot-linux.scr" || return 1
+    fi
+    dumpimage -T script -p 0 -o "$work/boot.payload" "$work/boot-linux.scr" >/dev/null || return 1
+    python3 "$ROOTFS_DISK_BOOT_HELPER" "$work/boot.payload" "$work/boot-linux.cmd" "$work/boot.cmd" \
+        --root-partition "$root_partition" || return 1
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-0} mkimage -C none -A arm -T script \
+        -n 'Orange Pi AxVisor default' -d "$work/boot.cmd" "$work/boot.scr" >/dev/null || return 1
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-0} mkimage -C none -A arm -T script \
+        -n 'Orange Pi Linux' -d "$work/boot-linux.cmd" "$work/boot-linux.scr" >/dev/null || return 1
+    for file in boot-linux.scr boot-linux.cmd boot.cmd boot.scr; do
+        mcopy -o -i "$boot" "$work/$file" "::/$file" || return 1
+        mcopy -i "$boot" "::/$file" "$work/readback-$file" || return 1
+        cmp -- "$work/$file" "$work/readback-$file" || return 1
+    done
+}
+
+_rootfs_disk_install_boot_file() (
+    local disk=$1 payload=$2 name=$3 root_partition=$4 partno start size label work= boot_info
+    _rootfs_disk_require_tools cmp dumpimage fsck.vfat mcopy mkimage mktemp python3 rm || return 1
+    [[ -f $payload && ! -L $payload && -s $payload ]] || return 1
+    [[ $name =~ ^[A-Za-z0-9_.-]+$ && $name != . && $name != .. ]] || return 1
+    boot_info=$(rootfs_disk_find_boot_partition "$disk") || return 1
+    read -r partno start size label <<<"$boot_info" || return 1
+    work=$(mktemp -d "${TMPDIR:-/tmp}/rootfs-boot-install.XXXXXX") || return 1
+    trap 'rm -rf -- "$work"' EXIT
+    rootfs_disk_extract_partition "$disk" "$start" "$size" "$work/boot.img" || return 1
+    fsck.vfat -n "$work/boot.img" >/dev/null || return 1
+    mcopy -o -i "$work/boot.img" "$payload" "::/$name" || return 1
+    mcopy -i "$work/boot.img" "::/$name" "$work/readback" || return 1
+    cmp -- "$payload" "$work/readback" || return 1
+    _rootfs_disk_configure_axvisor_boot "$work/boot.img" "$work" "$root_partition" || return 1
+    fsck.vfat -n "$work/boot.img" >/dev/null || return 1
+    [[ $(stat -c %s -- "$work/boot.img") == "$((size * 512))" ]] || return 1
+    dd if="$work/boot.img" of="$disk" bs=512 seek="$start" conv=notrunc,fsync status=none
+)
+
 rootfs_compose_disk_guest() (
     local LC_ALL=C
     export LC_ALL
     local base=$1 platform_source=$2 guest_input=$3 arch=$4 rootfs_type=$5
     local guest_free_value=$6 outer_free_value=$7 output=$8
     local guest_mode=${9:-overlay}
+    local boot_image=${10:-} boot_snapshot=
     local output_dir output_base work_dir= guest_free outer_free nested_name root_info guest_count
     local capacity_stats nested_bytes nested_inodes guest_image_bytes
-    local partno start size label guest_bytes guest_inodes base_lock output_lock actual_guest_free
+    local partno start size label root_label guest_bytes guest_inodes base_lock output_lock actual_guest_free
     local lock_fd1 lock_fd2 stage=validate-inputs status
     local base_snapshot= platform_snapshot= guest_overlay= guest_image= outer_partition=
     local nested_stage= empty_overlay= outer_disk= validation_partition=
@@ -429,6 +511,12 @@ rootfs_compose_disk_guest() (
 
     _rootfs_disk_require_tools basename cp dd debugfs df dirname dumpe2fs e2fsck find \
         flock mkdir mktemp mv python3 realpath resize2fs rm sfdisk stat touch truncate || return 1
+    if [[ -n $boot_image ]]; then
+        _rootfs_disk_require_tools cmp dumpimage fsck.vfat mcopy mdir mkimage || return 1
+        [[ -f $boot_image && ! -L $boot_image && -s $boot_image ]] || {
+            _rootfs_disk_error "AxVisor boot image not found: $boot_image"; return 1;
+        }
+    fi
     [[ -f $base && ! -L $base ]] || { _rootfs_disk_error "base disk not found: $base"; return 1; }
     [[ -d $platform_source ]] || {
         _rootfs_disk_error 'platform input must be a directory'
@@ -469,6 +557,11 @@ rootfs_compose_disk_guest() (
     base_snapshot=$(mktemp "${work_dir}/${output_base}.base.XXXXXX") || return 1
     platform_snapshot=$(mktemp -d "${work_dir}/${output_base}.platform.XXXXXX") || return 1
     cp --preserve=all --reflink=auto --sparse=always -- "$base" "$base_snapshot" || return 1
+    if [[ -n $boot_image ]]; then
+        boot_snapshot="$work_dir/AxVisor.bin"
+        cp --preserve=all -- "$boot_image" "$boot_snapshot" || return 1
+        touch -a -r "$boot_snapshot" "$boot_image" || return 1
+    fi
     cp -a --reflink=auto -- "$platform_source/." "$platform_snapshot/" || return 1
     touch -a -r "$base_snapshot" "$base" || return 1
     _rootfs_disk_restore_tree_atimes "$platform_source" "$platform_snapshot" || return 1
@@ -494,6 +587,15 @@ rootfs_compose_disk_guest() (
     stage=find-root-partition
     root_info=$(rootfs_disk_find_root_partition "$base_snapshot") || return 1
     read -r partno start size label <<<"$root_info"
+    if [[ -f $platform_snapshot/axvisor/robot-single/guest.toml ]]; then
+        root_label=
+        if [[ $label == gpt ]]; then
+            root_label=$(sfdisk --part-label "$base_snapshot" "$partno") || return 1
+        fi
+        python3 "$ROOTFS_AXVISOR_PAYLOAD_HELPER" \
+            --physical-root-config "$platform_snapshot/axvisor/robot-single/guest.toml" \
+            --root-partition "$partno" --root-label "$root_label" || return 1
+    fi
     nested_name="rootfs-${arch}-${rootfs_type}.img"
     empty_overlay=$(mktemp -d "${work_dir}/${output_base}.empty.XXXXXX") || return 1
     _rootfs_validate_protected_outer_path "$platform_snapshot" "$empty_overlay" "$nested_name" || return 1
@@ -543,6 +645,11 @@ rootfs_compose_disk_guest() (
     outer_disk=$(mktemp "${work_dir}/${output_base}.disk.XXXXXX") || return 1
     cp --preserve=all --reflink=auto --sparse=always -- "$base_snapshot" "$outer_disk" || return 1
     rootfs_disk_replace_partition "$outer_disk" "$partno" "$start" "$size" "$outer_partition" || return 1
+
+    if [[ -n $boot_snapshot ]]; then
+        stage=install-axvisor-boot-image
+        _rootfs_disk_install_boot_file "$outer_disk" "$boot_snapshot" AxVisor.bin "$partno" || return 1
+    fi
 
     stage=validate-output
     root_info=$(rootfs_disk_find_root_partition "$outer_disk") || return 1

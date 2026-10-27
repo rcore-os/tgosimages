@@ -320,12 +320,19 @@ mkdir -p "$platform_stage/linux" "$platform_stage/platform" "$platform_stage/arc
 printf kernel >"$platform_stage/linux/orangepi-5-plus"
 printf outer >"$platform_stage/platform/outer-only"
 printf arceos >"$platform_stage/arceos/orangepi-5-plus"
+mkdir -p "$platform_stage/aka/bin" "$platform_stage/aka/lib" "$platform_stage/aka/single/build"
+printf tennis >"$platform_stage/aka/bin/tennis"
+printf library >"$platform_stage/aka/lib/shared.so"
+ln -s ../../bin/tennis "$platform_stage/aka/single/build/tennis"
+ln -s ../lib "$platform_stage/aka/single/lib"
 dd if=/dev/zero of="$platform_stage/platform/large-payload" bs=1M count=20 status=none
 printf cyclic >"$guest_overlay/guest-tests/cyclictest/cyclictest"
 printf lmbench >"$guest_overlay/guest-tests/lmbench/bin/Linux/lat_syscall"
 printf iozone >"$guest_overlay/guest-tests/iozone/iozone"
 normalize_tree_seconds "$platform_stage"
 normalize_tree_seconds "$guest_overlay"
+touch -h -a -d '@1700000001.123456789' "$platform_stage/aka/single/build/tennis"
+aka_link_timestamps=$(stat -c '%x|%y' "$platform_stage/aka/single/build/tennis")
 touch -d '2026-09-17 05:08:24.622733865 +0000' \
     "$platform_stage/arceos/orangepi-5-plus" "$platform_stage/arceos"
 fractional_arceos_timestamp=$(stat -c '%x|%y' "$platform_stage/arceos/orangepi-5-plus")
@@ -341,9 +348,16 @@ assert_eq 1700000100 "$(stat -c %Y "$compose_base")" \
 assert_eq "$fractional_arceos_timestamp" \
     "$(stat -c '%x|%y' "$platform_stage/arceos/orangepi-5-plus")" \
     'composition leaves fractional platform source timestamps unchanged'
+assert_eq "$aka_link_timestamps" \
+    "$(stat -c '%x|%y' "$platform_stage/aka/single/build/tennis")" \
+    'composition leaves source symlink timestamps unchanged'
 
 read -r composed_part composed_start composed_size _ < <(rootfs_disk_find_root_partition "$composed")
 rootfs_disk_extract_partition "$composed" "$composed_start" "$composed_size" "$work/composed-outer.img"
+aka_link_metadata=$(debugfs -R 'stat /guest/aka/single/build/tennis' "$work/composed-outer.img" 2>/dev/null)
+[[ $aka_link_metadata == *'Fast link dest: "../../bin/tennis"'* ]] || fail 'AKA executable link changed'
+aka_lib_metadata=$(debugfs -R 'stat /guest/aka/single/lib' "$work/composed-outer.img" 2>/dev/null)
+[[ $aka_lib_metadata == *'Fast link dest: "../lib"'* ]] || fail 'AKA shared library link changed'
 assert_eq 0755 "$(image_mode "$work/composed-outer.img" /guest)" \
     'outer guest directory must be traversable by ordinary users'
 assert_eq 0644 "$(image_mode "$work/composed-outer.img" /guest/rootfs-aarch64-orangepi-jammy-0.img)" \

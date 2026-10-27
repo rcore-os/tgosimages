@@ -10,12 +10,16 @@ aka_validate_guest_image() (
     stage=$(mktemp -d "$(dirname -- "$image")/.aka-deps.XXXXXX")
     trap 'rm -rf -- "$stage"' EXIT
     local -a queue=(/opt/aka/bin/tennis-perception)
+    if rootfs_ext4_resolve_file "$image" /opt/aka/bin/tennis >/dev/null 2>&1; then
+        queue+=(/opt/aka/bin/tennis)
+    fi
     # These libraries can be selected dynamically, so DT_NEEDED alone is not
     # enough to prove the complete AKA runtime has the correct architecture.
     for name in librknnrt.so libuvc.so.0 libusb-1.0.so.0 libturbojpeg.so.0 libjpeg.so.8 libudev.so.1; do
         queue+=("/opt/aka/lib/$name")
     done
     declare -A checked=()
+    local -a binaries=()
     while ((${#queue[@]})); do
         guest=${queue[0]}; queue=("${queue[@]:1}")
         resolved=$(rootfs_ext4_resolve_file "$image" "$guest") || {
@@ -27,6 +31,7 @@ aka_validate_guest_image() (
         mkdir -p -- "$(dirname -- "$elf")"
         _rootfs_run_tool 0 debugfs -R "dump $(_rootfs_debugfs_quote "$resolved") $(_rootfs_debugfs_quote "$elf")" "$image" >/dev/null
         [[ -s $elf ]] || { printf 'Cannot extract guest ELF: %s\n' "$guest" >&2; exit 1; }
+        binaries+=("$elf")
         readelf -h "$elf" | awk '/Machine:/ { if ($2 == "AArch64") found=1 } END { exit !found }' || {
             printf 'Expected AArch64 ELF: %s\n' "$guest" >&2; exit 1;
         }
@@ -55,5 +60,7 @@ aka_validate_guest_image() (
             queue+=("$found")
         done < <(sed -n 's/.*Shared library: \[\(.*\)\].*/\1/p' <<<"$dynamic")
     done
+    python3 "$lib_dir/python/linux-runtime.py" --sysroot "$stage" \
+        --library-dir /opt/aka/lib "${binaries[@]}"
     echo AKA_GUEST_DEPENDENCIES_READY
 )

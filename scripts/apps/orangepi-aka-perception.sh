@@ -2,10 +2,10 @@
 set -euo pipefail
 ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 usage() {
-    echo "Usage: orangepi-aka-perception.sh --aka-dir DIR --ivc-sdk-dir DIR --runtime-dir DIR --include-dir DIR --cc PATH --cxx PATH --build-dir DIR --output-dir DIR [--config-dir DIR]"
+    echo "Usage: orangepi-aka-perception.sh --aka-dir DIR --ivc-sdk-dir DIR --runtime-dir DIR --include-dir DIR --cc PATH --cxx PATH --build-dir DIR --output-dir DIR [--config-dir DIR] [--sysroot DIR]"
     echo "Cross-build with real target libraries; never use the AKA unresolved-symbol stubs."
 }
-aka=""; sdk=""; runtime=""; includes=""; cc=""; cxx=""; build=""; output=""; config=""
+aka=""; sdk=""; runtime=""; includes=""; cc=""; cxx=""; build=""; output=""; config=""; sysroot=""
 while [[ $# -gt 0 ]]; do
     [[ $# -ge 2 || "$1" == --help || "$1" == -h ]] || { usage >&2; exit 2; }
     case "$1" in
@@ -18,6 +18,7 @@ while [[ $# -gt 0 ]]; do
         --build-dir) build=$2 ;;
         --output-dir) output=$2 ;;
         --config-dir) config=$2 ;;
+        --sysroot) sysroot=$2 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
@@ -63,24 +64,55 @@ done
 # NATIVE_BUILD selects the real-library CMake branch; compilers still target AArch64.
 export PKG_CONFIG_LIBDIR="$build/pkgconfig"
 export PKG_CONFIG_PATH=""
+extra=()
+target_flags='-ffunction-sections -fdata-sections'
+c_flags=$target_flags
+cxx_flags=$target_flags
+link_flags="-Wl,--gc-sections -Wl,-rpath-link,$runtime"
+if [[ -n $sysroot ]]; then
+    sysroot=$(realpath -e -- "$sysroot")
+    extra+=("-DCMAKE_SYSROOT=$sysroot")
+    # Preserve the compiler's C++ wrappers before the selected SDK's C
+    # headers, without falling back to another toolchain's libc headers.
+    sdk_flags=$(python3 "$ROOT_DIR/scripts/lib/python/aka-package.py" header-flags \
+        --cc "$cc" --cxx "$cxx" --sysroot "$sysroot")
+    mapfile -t sdk_flags <<< "$sdk_flags"
+    c_flags+=" ${sdk_flags[0]}"
+    cxx_flags+=" ${sdk_flags[1]}"
+    link_flags+=" -B$sysroot/usr/lib/aarch64-linux-gnu -L$sysroot/usr/lib/aarch64-linux-gnu -L$sysroot/lib/aarch64-linux-gnu"
+    link_flags+=" -Wl,-rpath-link,$sysroot/usr/lib/aarch64-linux-gnu -Wl,-rpath-link,$sysroot/lib/aarch64-linux-gnu"
+fi
+# The full upstream tennis target uses std::lround without including <cmath>.
+# Supply that standard header without editing a caller-provided AKA checkout.
 cmake -S "$aka" -B "$build" -DNATIVE_BUILD=ON -DBUILD_TESTING=OFF -DDISABLE_RGA=ON -DCMAKE_BUILD_TYPE=Release \
     -DIVC_SDK_DIR="$sdk" -DCMAKE_C_COMPILER="$cc" -DCMAKE_CXX_COMPILER="$cxx" \
     -DCMAKE_C_COMPILER_LAUNCHER="$build/target-compiler-launcher.py" \
     -DCMAKE_CXX_COMPILER_LAUNCHER="$build/target-compiler-launcher.py" \
-    -DCMAKE_C_FLAGS="-ffunction-sections -fdata-sections" \
-    -DCMAKE_CXX_FLAGS="-ffunction-sections -fdata-sections" \
-    -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc -Wl,--gc-sections -Wl,-rpath-link,$runtime"
-cmake --build "$build" --target tennis-perception -j"${JOBS:-4}"
+    -DCMAKE_C_FLAGS="$c_flags" -DCMAKE_CXX_FLAGS="$cxx_flags -include cmath" \
+    -DCMAKE_EXE_LINKER_FLAGS="$link_flags" "${extra[@]}"
+cmake --build "$build" --target tennis tennis-perception -j"${JOBS:-4}"
 # The broken stub build encoded calls to address zero instead of a dynamic UVC symbol.
 readelf --dyn-syms --wide "$build/tennis-perception" | awk '
     $4 == "FUNC" && $7 == "UND" && $8 ~ /^uvc_init(@.*)?$/ { found=1 }
     END { exit !found }
 ' || { echo "uvc_init must bind to the real dynamic library" >&2; exit 1; }
 cmake --install "$build" --component dual-runtime --prefix "$stage"
+cmake --install "$build" --component Unspecified --prefix "$stage"
+mkdir -p "$stage/single/build"
+ln -s ../../bin/tennis "$stage/single/build/tennis"
+for name in lib models config; do ln -s "../$name" "$stage/single/$name"; done
+python3 "$ROOT_DIR/scripts/lib/python/aka-package.py" install-launchers --aka "$aka" --single "$stage/single"
 for lib in libuvc.so.0 libusb-1.0.so.0 libturbojpeg.so.0 libjpeg.so.8 libudev.so.1; do
     cp -L -- "$runtime/$lib" "$stage/lib/$lib"
 done
+for lib in libstdc++.so.6 libgcc_s.so.1; do
+    [[ ! -f $runtime/$lib ]] || cp -L -- "$runtime/$lib" "$stage/lib/$lib"
+done
 cp -- "$config/lekiwi_calibration.json" "$config/lekiwi_pick_config.txt" "$stage/config/"
+if [[ -n $sysroot ]]; then
+    python3 "$ROOT_DIR/scripts/lib/python/linux-runtime.py" --sysroot "$sysroot" \
+        "$stage/bin/tennis" "$stage/bin/tennis-perception"
+fi
 if [[ -d $runtime/licenses ]]; then cp -a -- "$runtime/licenses" "$stage/"; fi
 python3 "$ROOT_DIR/scripts/lib/python/aka-package.py" manifest \
     --package "$stage" --aka "$aka" --sdk "$sdk" --compiler "$cc" --runtime "$runtime" --config "$config"

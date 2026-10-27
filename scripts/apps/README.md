@@ -22,6 +22,22 @@ Orange Pi 三客户机基础功能检查统一使用 `apps/zephyr/orangepi-shell
 本目录脚本不复制业务源码，也不负责修改 TGOSKits、部署镜像、启动 AxVisor 或运行板端
 程序。
 
+Orange Pi 的 AKA 包现在同时构建 `tennis` 与 `tennis-perception`。完整镜像在外层
+`/guest/aka` 保存该包；单客户机使用 `/guest/aka/single/run_lekiwi_full.sh`，该目录通过
+相对链接复用包内库、模型、配置和 `bin/tennis`。双客户机继续使用独立根盘的 `/opt/aka`。
+外部完整包须通过 `aka-package.py validate --with-single` 检查，标定配置通过
+`ORANGEPI_AKA_CONFIG_DIR` 提供。
+
+应用编译环境由目标系统决定。默认 Jammy 的 libc 开发文件、Linux 头文件及运行库均有
+版本和 SHA256 锁定；`ORANGEPI_AKA_SYSROOT` 可指定其他配套目标 sysroot，不能用构建
+主机的库代替。已有依赖目录覆盖仍通过 `ORANGEPI_AKA_RUNTIME_DIR/INCLUDE_DIR` 提供。
+完整包与 rootfs 组合过程分别检查 AArch64 架构、目标 ABI 和镜像内动态依赖。
+
+YOLOv8 图片运行包由 AxVisor 构建节点复用 TGOSKits 中的
+`apps/axvisor/normal/board-ballpick-robot/linux-guest-checks/rknn-yolov8-image/CMakeLists.txt`
+交叉编译并安装；不复制测试实现。编译器和目标 sysroot 可通过
+`ORANGEPI_YOLO_CC/CXX/SYSROOT` 指定。
+
 ---
 
 ## 1. 仓库职责和结构

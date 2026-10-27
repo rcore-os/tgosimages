@@ -323,10 +323,10 @@ _rootfs_inject_tree_via_debugfs() (
         captured_gid[$rel]=$gid
         captured_atime[$rel]=${atime_raw%%.*}
         captured_mtime[$rel]=${mtime_raw%%.*}
-        # Traversing a directory to inventory its children can itself update
-        # directory atime under relatime. Directory mtime and all file/symlink
-        # timestamps remain immutable and are checked exactly.
-        if [[ ! -L "$path" && -d "$path" ]]; then
+        # Traversal and readlink can advance directory/symlink atime under
+        # relatime. Quantize their captured atime for debugfs; mtime and
+        # regular-file timestamps still require exact whole seconds.
+        if [[ -L "$path" || -d "$path" ]]; then
             timestamp_text=$mtime_raw
         else
             timestamp_text="$atime_raw $mtime_raw"

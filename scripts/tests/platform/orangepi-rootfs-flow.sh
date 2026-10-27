@@ -238,23 +238,73 @@ guest-rootfs:$fixture_archive:$ORANGEPI_GUEST_ROOTFS" \
     "$(cat "$call_log")" 'rootfs stage calls'
 
 # Finalization consumes the explicit all payload set and nothing else.
-for component in u-boot arceos starry zephyr freertos ivc unrelated; do
+for component in u-boot arceos starry zephyr freertos ivc axvisor unrelated; do
     mkdir -p "$PLATFORM_IMAGES_DIR/$component"
     printf payload >"$PLATFORM_IMAGES_DIR/$component/payload"
 done
+mkdir -p "$PLATFORM_IMAGES_DIR/axvisor/board-ballpick-robot/shared"
+printf axvisor >"$PLATFORM_IMAGES_DIR/axvisor/AxVisor.bin"
+printf config >"$PLATFORM_IMAGES_DIR/axvisor/board-ballpick-robot/shared/linux.toml"
 printf uboot >"$PLATFORM_IMAGES_DIR/u-boot/u-boot-orangepi5-spi.bin"
 printf base >"$ORANGEPI_BASE_IMAGE"
 rootfs_compose_disk_guest() {
     local component
-    for component in linux u-boot arceos starry zephyr freertos ivc; do
+    for component in linux u-boot arceos starry zephyr freertos ivc axvisor; do
         [[ -d $2/$component ]] || return 1
     done
+    [[ ! -e $2/axvisor/AxVisor.bin ]] || return 1
+    # A newly published component must not change the binary already selected
+    # for this image or make its boot checksum disagree with its contents.
+    printf newer-build >"$PLATFORM_IMAGES_DIR/axvisor/AxVisor.bin"
+    [[ $(cat "${10}") == axvisor ]] || return 1
+    [[ -s $2/axvisor/BOOT_SHA256SUMS ]] || return 1
+    local boot_sum
+    boot_sum=$(sha256sum "${10}")
+    [[ $(cut -d' ' -f1 "$2/axvisor/BOOT_SHA256SUMS") == "${boot_sum%% *}" ]] || return 1
+    (cd "$2/axvisor" && sha256sum -c SHA256SUMS >/dev/null) || return 1
+    [[ $(cat "$2/axvisor/board-ballpick-robot/shared/linux.toml") == config ]] || return 1
     [[ ! -e $2/unrelated ]] || return 1
+    if [[ $ORANGEPI_WITH_AKA == 1 ]]; then
+        [[ -f $2/aka/single/build/tennis && -f $2/aka/single/models/tennis.rknn ]] || return 1
+    fi
     cp "$1" "$8"
 }
 : >"$call_log"
 run_ok 'finalization stages every all payload and excludes unrelated content' \
     finalize_linux_image
+
+test_complete_robot_staging() (
+    ORANGEPI_WITH_AKA=1
+    ORANGEPI_AKA_PACKAGE="$work/complete-aka"
+    python3 - "$repo_root" "$ORANGEPI_AKA_PACKAGE" <<'PY'
+import importlib.util
+from pathlib import Path
+import sys
+spec = importlib.util.spec_from_file_location('aka', Path(sys.argv[1]) / 'scripts/lib/python/aka-package.py')
+aka = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(aka)
+root = Path(sys.argv[2])
+header = bytearray(20)
+header[:6] = b'\x7fELF\x02\x01'
+header[18:20] = (183).to_bytes(2, 'little')
+for name in (*aka.REQUIRED_FILES, 'bin/tennis', 'single/run_lekiwi_full.sh', 'single/run_robot_ci_once.sh'):
+    path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(header if name.startswith(('bin/', 'lib/')) else b'{}')
+(root / 'single/build').mkdir()
+(root / 'single/build/tennis').symlink_to('../../bin/tennis')
+for name in ('lib', 'models', 'config'):
+    (root / 'single' / name).symlink_to('../' + name)
+PY
+    printf axvisor >"$PLATFORM_IMAGES_DIR/axvisor/AxVisor.bin"
+    finalize_linux_image || return 1
+    local previous
+    previous=$(sha256sum "$PLATFORM_ROOTFS_DIR/orangepi-5-plus.img")
+    rm -- "$ORANGEPI_AKA_PACKAGE/bin/tennis"
+    if finalize_linux_image; then return 1; fi
+    [[ $(sha256sum "$PLATFORM_ROOTFS_DIR/orangepi-5-plus.img") == "$previous" ]]
+)
+run_ok 'complete image installs the shared single robot runtime and preserves output on missing input' test_complete_robot_staging
 
 legacy_output="$PLATFORM_ROOTFS_DIR/orangepi-5-plus.img"
 legacy_temp_lock="$PLATFORM_ROOTFS_DIR/.orangepi-5-plus.img.disk.legacy.lock"
@@ -273,7 +323,7 @@ ivc() { printf 'ivc\n' >>"$call_log"; }
 orangepi_build_base_image() { printf 'base-image\n' >>"$call_log"; }
 finalize_linux_image() { printf 'finalize\n' >>"$call_log"; }
 run_ok 'all builds every payload before publishing the final image' all
-assert_eq $'linux\nivc\nrootfs\nparallel:all uboot arceos starry zephyr freertos --\nbase-image\nfinalize' \
+assert_eq $'linux\nivc\nrootfs\nparallel:all uboot arceos starry zephyr freertos axvisor --\nbase-image\nfinalize' \
     "$(cat "$call_log")" 'all build/finalize ordering'
 
 run_fail 'the removed img subcommand is rejected' \
